@@ -1,6 +1,5 @@
 import torch
 
-from candor.reference import first_token_logprobs
 from candor.residuals import last_token_residuals
 
 SHORT = [1, 5, 9, 14]
@@ -25,9 +24,3 @@ def test_matches_hidden_states_before_the_final_norm(tiny_llama):
         hidden = tiny_llama(torch.tensor([LONG]), output_hidden_states=True).hidden_states
     for index in range(len(hidden) - 1):
         torch.testing.assert_close(residuals[index], hidden[index][0, -1])
-
-
-def test_left_padding_does_not_change_logprobs(tiny_llama):
-    alone = first_token_logprobs(tiny_llama, [SHORT], pad_id=0)
-    padded = first_token_logprobs(tiny_llama, [LONG, SHORT], pad_id=0)[1:]
-    torch.testing.assert_close(padded, alone, atol=1e-5, rtol=1e-4)

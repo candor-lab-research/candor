@@ -1,9 +1,12 @@
 import json
+from types import SimpleNamespace
 
+import pytest
 import torch
 from safetensors.torch import save_file
 
-from candor.source import read_json, tensor_shapes
+from candor import source
+from candor.source import is_local, read_json, sizes, tensor_shapes
 
 
 def test_shapes_follow_the_index_and_skip_other_weight_files(tmp_path):
@@ -14,5 +17,42 @@ def test_shapes_follow_the_index_and_skip_other_weight_files(tmp_path):
     assert tensor_shapes(str(tmp_path)) == {"a.weight": [2, 3]}
 
 
+def test_hub_shapes_are_read_at_the_pinned_commit(monkeypatch):
+    asked = []
+
+    def metadata(model, revision):
+        asked.append((model, revision))
+        tensors = {"a.weight": SimpleNamespace(shape=[4, 2])}
+        return SimpleNamespace(files_metadata={"model.safetensors": SimpleNamespace(tensors=tensors)})
+
+    monkeypatch.setattr(source, "get_safetensors_metadata", metadata)
+    assert tensor_shapes("org/model", "abc123") == {"a.weight": [4, 2]}
+    assert asked == [("org/model", "abc123")]
+
+
 def test_read_json_returns_none_for_a_missing_file(tmp_path):
     assert read_json(str(tmp_path), "tokenizer_config.json") is None
+
+
+def test_only_a_full_path_is_a_local_folder(tmp_path, monkeypatch):
+    (tmp_path / "org" / "model").mkdir(parents=True)
+    monkeypatch.chdir(tmp_path)
+    monkeypatch.setenv("HOME", str(tmp_path))
+    assert not is_local("org/model")
+    assert is_local(str(tmp_path / "org" / "model"))
+    assert is_local("~/org/model")
+    assert is_local(str(tmp_path / "gone"))
+
+
+@pytest.mark.parametrize(
+    ("config", "found"),
+    [
+        ({"hidden_size": 64, "num_hidden_layers": 2}, (64, 2)),
+        ({"text_config": {"hidden_size": 64, "num_hidden_layers": 2}}, (64, 2)),
+        ({"text_config": {}, "hidden_size": 64, "num_hidden_layers": 2}, None),
+        ({"n_embd": 64, "n_layer": 2}, None),
+        ({"hidden_size": "64", "num_hidden_layers": 2}, None),
+    ],
+)
+def test_sizes_come_from_the_language_models_own_settings(config, found):
+    assert sizes(config) == found

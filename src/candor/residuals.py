@@ -1,10 +1,57 @@
-"""Read the residual stream with PyTorch."""
+"""Read the residual stream with PyTorch, on the fastest device here."""
 
+import gc
+import os
+from pathlib import Path
 from typing import cast
 
 import torch
 from torch import Tensor, nn
-from transformers import PreTrainedModel
+from transformers import AutoTokenizer, PreTrainedModel
+
+
+def device_and_dtype() -> tuple[str, torch.dtype]:
+    """The fastest device here, with the dtype that loads reliably on it (float16 on Apple GPUs)."""
+    if torch.cuda.is_available():
+        return "cuda", torch.bfloat16
+    if torch.backends.mps.is_available():
+        return "mps", torch.float16
+    return "cpu", torch.float32
+
+
+def protect_memory() -> None:
+    """Defaults that stop PyTorch on an Apple GPU taking more memory than the machine has, which
+    freezes it, and a loader deadlock on Metal. Must run before the first model is loaded."""
+    os.environ.setdefault("PYTORCH_MPS_HIGH_WATERMARK_RATIO", "0.7")
+    os.environ.setdefault("PYTORCH_MPS_LOW_WATERMARK_RATIO", "0.6")
+    os.environ.setdefault("HF_DEACTIVATE_ASYNC_LOAD", "1")
+
+
+def memory_budget(device: str) -> int | None:
+    """The bytes a model may take on the device: on an Apple GPU, the share protect_memory allows;
+    on CUDA, what is free now. None on the CPU."""
+    if device == "mps":
+        ratio = float(os.environ["PYTORCH_MPS_HIGH_WATERMARK_RATIO"])
+        return int(torch.mps.recommended_max_memory() * ratio)
+    if device == "cuda":
+        return torch.cuda.mem_get_info()[0]
+    return None
+
+
+def free_memory(device: str) -> None:
+    gc.collect()
+    if device == "mps":
+        torch.mps.empty_cache()
+    elif device == "cuda":
+        torch.cuda.empty_cache()
+
+
+def pad_token_id_for(model_folder: Path, trust_remote_code: bool) -> int:
+    tokenizer = AutoTokenizer.from_pretrained(model_folder, trust_remote_code=trust_remote_code)
+    pad = tokenizer.pad_token_id if tokenizer.pad_token_id is not None else tokenizer.eos_token_id
+    if not isinstance(pad, int):
+        raise ValueError("the tokenizer has neither a pad token nor a single end-of-sequence token")
+    return pad
 
 
 def left_pad(batch: list[list[int]], pad_id: int) -> tuple[Tensor, Tensor]:
@@ -24,7 +71,8 @@ def last_token_residuals(
     """Residuals at each prompt's last token, shape (prompts, layers + 1, hidden), float32 on the CPU.
 
     Index 0 is the embedding output and index i + 1 the output of layer i, before any final norm.
-    They are read with forward hooks rather than output_hidden_states, which some remote code breaks.
+    They are read with forward hooks rather than output_hidden_states, which some remote code breaks
+    (K2-Horizon's returns none).
     """
     decoder = model.get_decoder()
     modules = [decoder.get_input_embeddings(), *cast(nn.ModuleList, decoder.layers)]

@@ -6,6 +6,7 @@ candor release can't change an existing run. Each field's description is also th
 written above it in the file.
 """
 
+import json
 import os
 import re
 import shutil
@@ -18,6 +19,7 @@ from pydantic import (
     BaseModel,
     ConfigDict,
     Field,
+    StrictBool,
     StrictInt,
     ValidationError,
     field_validator,
@@ -25,7 +27,17 @@ from pydantic import (
 )
 
 FILE = "candor.toml"
-QUANTIZATIONS = {"Q4_K_M", "Q4_K_S", "Q5_K_M", "Q5_K_S", "Q6_K", "Q8_0", "F16", "BF16"}
+# Each GGUF type a run can deploy, with its bits per weight.
+QUANTIZATIONS = {
+    "Q4_K_S": 4.6,
+    "Q4_K_M": 4.9,
+    "Q5_K_S": 5.5,
+    "Q5_K_M": 5.7,
+    "Q6_K": 6.6,
+    "Q8_0": 8.5,
+    "F16": 16,
+    "BF16": 16,
+}
 KV_CACHE_TYPES = {"f32", "f16", "bf16", "q8_0", "q5_1", "q5_0", "q4_1", "q4_0", "iq4_nl"}
 RUN_NAME = re.compile(r"[A-Za-z0-9][A-Za-z0-9._-]*")
 
@@ -39,11 +51,17 @@ class Section(BaseModel):
 
 
 class Model(Section):
-    source: Text = Field(description="The model to edit: a Hugging Face id or a local folder.")
+    source: Text = Field(description="The model to edit: a Hugging Face id, or a local folder's full path.")
     revision: Text | None = Field(
         default=None,
         description="The Hugging Face commit the model was checked at, so later steps use exactly those "
         "weights and that chat template. Not set for a local folder.",
+    )
+    trust_remote_code: StrictBool = Field(
+        default=False,
+        description="Whether transformers may load the model with the Python files it ships, which runs "
+        "the model author's code on this machine, at the pinned revision. init turns it on only when "
+        "transformers has no code of its own for the model; read those files first.",
     )
     date: Text | None = Field(
         default=None,
@@ -82,6 +100,8 @@ class PromptSet(Section):
     dataset: Text
     split: Text
     column: Text = "text"
+    # The dataset's Hugging Face commit, pinned by init so a rebuild reads the same prompts.
+    revision: Text | None = None
 
 
 class Prompts(Section):
@@ -106,8 +126,9 @@ class Prompts(Section):
 class Edit(Section):
     row_norm: str = Field(
         default="pre",
-        description='How the edit treats each weight row\'s length: "none" removes the direction as is; '
-        '"pre" computes the edit on rows of length 1 and scales them back, as heretic does on the Mac.',
+        description='How the edit treats each weight row\'s length: "none" edits the weights as they are; '
+        '"pre" computes the edit on rows scaled to length 1, then scales them back, as heretic does on '
+        "the Mac.",
     )
 
     @field_validator("row_norm")
@@ -140,9 +161,11 @@ class Search(Section):
         default=0, ge=0, lt=2**32, description="Fixes the search's randomness, so a run can be repeated."
     )
     strength: Range = Field(
-        default=(0.8, 3.0),
-        description="Edit strength at the peak layer. 1 removes the direction; above 1 pushes past it, "
-        "which stubborn and thinking models need.",
+        default=(0.8, 1.5),
+        description='Edit strength at the peak layer. With row_norm "none", 1 removes the direction from '
+        'what each edited weight writes, and above 1 pushes past it. With "pre", 1 removes it from what '
+        "the weights write with every row scaled to length 1; scaling the rows back leaves a part no "
+        "strength removes, larger the more the rows' lengths differ.",
     )
     peak_layer: Range = Field(
         default=(0.6, 1.0), description="Where the edit is strongest, as a fraction of the model's depth."
@@ -242,24 +265,13 @@ def load(folder: Path) -> RunConfig:
     return parse(text, str(path))
 
 
-def _string(value: str) -> str:
-    escapes = {'"': '\\"', "\\": "\\\\", "\b": "\\b", "\t": "\\t", "\n": "\\n", "\f": "\\f", "\r": "\\r"}
-    out = []
-    for char in value:
-        if char in escapes:
-            out.append(escapes[char])
-        elif ord(char) < 0x20 or ord(char) == 0x7F:
-            out.append(f"\\u{ord(char):04X}")
-        else:
-            out.append(char)
-    return '"' + "".join(out) + '"'
-
-
 def _value(value: Any) -> str:
     if isinstance(value, BaseModel):
-        return "{ " + ", ".join(f"{k} = {_value(v)}" for k, v in value.model_dump().items()) + " }"
+        pairs = [f"{k} = {_value(v)}" for k, v in value.model_dump().items() if v is not None]
+        return "{ " + ", ".join(pairs) + " }"
     if isinstance(value, str):
-        return _string(value)
+        # JSON's string escapes are all valid in TOML, which also forbids a raw DEL character.
+        return json.dumps(value, ensure_ascii=False).replace("\x7f", "\\u007f")
     if isinstance(value, bool):
         return "true" if value else "false"
     if isinstance(value, tuple | list):

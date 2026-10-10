@@ -1,7 +1,10 @@
 import json
+import math
 import os
 import shutil
-import threading
+import zlib
+from pathlib import Path
+from types import SimpleNamespace
 
 import gguf
 import pytest
@@ -9,27 +12,34 @@ import torch
 import torch.nn.functional as F
 from safetensors.torch import save_file
 
-from candor import config, run
+from candor import config, run, targets
 from candor.edit import RowNorm, rank_one
+from candor.engine import LlamaServer
 from candor.run import Run, RunError
 from candor.weights import ModelFiles
 
+from .custom_code import write_custom_code_model
 from .test_engine import LLAMA_SERVER
 from .test_targets import llama
 from .tiny_gguf import random_weights, write_model
 
 HIDDEN, LAYERS = 64, 2
+GGUF = {"gguf/model-BF16.gguf", "gguf/model-Q4_K_M.gguf"}
+ADAPTERS = {"adapters/per-layer", "adapters/layer-0", "adapters/layer-1"}
 
 
-@pytest.fixture
-def model(tmp_path):
-    folder = tmp_path / "model"
+def write_llama(folder: Path) -> Path:
     folder.mkdir()
     torch.manual_seed(7)
     save_file({name: torch.randn(shape) for name, shape in llama().items()}, folder / "model.safetensors")
     model_config = {"architectures": ["LlamaForCausalLM"], "hidden_size": HIDDEN, "num_hidden_layers": LAYERS}
     (folder / "config.json").write_text(json.dumps(model_config | {"max_position_embeddings": 256}))
     return folder
+
+
+@pytest.fixture
+def model(tmp_path):
+    return write_llama(tmp_path / "model")
 
 
 @pytest.fixture
@@ -61,11 +71,41 @@ def current(tmp_path, model, monkeypatch, directions_by_seed):
     return Run(folder, settings, report=messages.append), messages
 
 
+class Loaded(torch.nn.Module):
+    """Stands in for a model loaded by transformers when the residuals are faked."""
+
+
+def fake_residuals(monkeypatch) -> SimpleNamespace:
+    """Residuals fixed by the prompts they are read for. Returns how each model and tokenizer was loaded."""
+    loads = SimpleNamespace(models=[], tokenizers=[])
+
+    def residuals(model, prompts, pad_id):
+        generator = torch.Generator().manual_seed(zlib.crc32(json.dumps(prompts).encode()))
+        return torch.randn(len(prompts), LAYERS + 1, HIDDEN, generator=generator)
+
+    def load_model(folder, **kwargs):
+        loads.models.append(kwargs)
+        return Loaded()
+
+    def pad_token_id_for(folder, trust_remote_code):
+        loads.tokenizers.append(trust_remote_code)
+        return 0
+
+    monkeypatch.setattr(run.residuals, "last_token_residuals", residuals)
+    monkeypatch.setattr(run.residuals, "pad_token_id_for", pad_token_id_for)
+    monkeypatch.setattr("transformers.AutoModelForCausalLM.from_pretrained", load_model)
+    return loads
+
+
 def adapter_factors(path):
     tensors = {t.name: torch.from_numpy(t.data.copy()) for t in gguf.GGUFReader(path).tensors}
     a = next(v for k, v in tensors.items() if k.endswith("lora_a"))
     b = next(v for k, v in tensors.items() if k.endswith("lora_b"))
     return b, a
+
+
+def rebuilt(messages: list[str]) -> set[str]:
+    return {m.removeprefix("Rebuilding ").split(":")[0] for m in messages if m.startswith("Rebuilding ")}
 
 
 def test_one_adapter_per_target_for_each_direction_set(current):
@@ -128,9 +168,8 @@ def test_direction_sets_follow_the_settings_and_drop_old_ones(current):
     this.settings.search.direction_layer = (1.0, 1.0)
     made = this.adapters()
     assert sorted(made) == ["layer-1", "per-layer"]
-    assert sorted(p.name for p in this.path("adapters").iterdir()) == [
-        "layer-1", "layer-1.inputs.json", "per-layer", "per-layer.inputs.json",
-    ]  # fmt: skip
+    kept = ["layer-1", "layer-1.inputs.json", "per-layer", "per-layer.inputs.json"]
+    assert sorted(p.name for p in this.path("adapters").iterdir()) == kept
 
 
 def test_leftovers_from_a_crash_are_never_trusted(current):
@@ -153,21 +192,125 @@ def test_a_result_without_its_record_is_rebuilt(current):
     assert any("Rebuilding adapters/per-layer" in m for m in messages)
 
 
-def test_hidden_files_in_the_model_folder_change_nothing(current, model):
+def test_a_result_is_on_the_disk_before_its_record(current, monkeypatch):
     this, _ = current
+    events = []
+    sync, rename = run._sync, Path.rename
+
+    def recording_sync(path):
+        events.append(("sync", path.name))
+        sync(path)
+
+    def recording_rename(path, target):
+        events.append(("rename", path.name))
+        return rename(path, target)
+
+    monkeypatch.setattr(run, "_sync", recording_sync)
+    monkeypatch.setattr(Path, "rename", recording_rename)
+    this.adapters()
+    order = [
+        ("sync", "per-layer.building"),
+        ("rename", "per-layer.building"),
+        ("sync", "per-layer.inputs.json.building"),
+        ("rename", "per-layer.inputs.json.building"),
+    ]
+    assert [event for event in events if event in order] == order
+
+
+def test_the_fingerprint_covers_the_files_a_run_reads_and_nothing_else(current, model, tmp_path):
+    this, _ = current
+
+    def fingerprint():
+        del this.model_fingerprint
+        return this.model_fingerprint
+
     before = this.model_fingerprint
     (model / ".DS_Store").write_bytes(b"finder")
-    del this.model_fingerprint
-    assert this.model_fingerprint == before
-    os.utime(model / "config.json", ns=(1, 1))
-    del this.model_fingerprint
-    assert this.model_fingerprint != before
+    (model / "README.md").write_text("notes")
+    (model / "LICENSE").write_text("terms")
+    (model / "modeling_custom.py").write_text("code")
+    assert fingerprint() == before
+    moved = tmp_path / "elsewhere"
+    model.rename(moved)
+    this.settings.model.source = str(moved)
+    del this.model_folder
+    assert fingerprint() == before
+    this.settings.model.trust_remote_code = True
+    assert fingerprint() != before
+    this.settings.model.trust_remote_code = False
+    os.utime(moved / "config.json", ns=(1, 1))
+    assert fingerprint() != before
 
 
-def test_conversion_stops_early_without_enough_disk(current, monkeypatch):
-    monkeypatch.setattr(run.shutil, "disk_usage", lambda _: shutil._ntuple_diskusage(0, 0, 1000))
-    with pytest.raises(RunError, match="GB free"):
-        current[0].gguf()
+def test_a_missing_local_model_is_named(current, model):
+    this, _ = current
+    shutil.rmtree(model)
+    with pytest.raises(RunError, match=f"the model folder {model} is gone"):
+        this.gguf()
+
+
+def test_a_hub_id_is_never_read_from_a_folder_of_the_same_name(current, monkeypatch, tmp_path):
+    this, _ = current
+    (tmp_path / "org" / "model").mkdir(parents=True)
+    monkeypatch.chdir(tmp_path)
+    this.settings.model.source = "org/model"
+    this.settings.model.revision = "abc123"
+    calls = []
+
+    def download(repo, revision, allow_patterns, dry_run=False):
+        calls.append((repo, revision, dry_run))
+        return [] if dry_run else str(tmp_path / "snapshot")
+
+    monkeypatch.setattr(run, "snapshot_download", download)
+    assert this.model_folder == tmp_path / "snapshot"
+    assert calls == [("org/model", "abc123", True), ("org/model", "abc123", False)]
+
+
+@pytest.mark.parametrize(("trusted", "python"), [(False, False), (True, True)])
+def test_a_models_own_python_is_downloaded_only_when_trusted(current, monkeypatch, tmp_path, trusted, python):
+    this, _ = current
+    this.settings.model.source = "org/model"
+    this.settings.model.trust_remote_code = trusted
+    patterns = []
+
+    def download(repo, revision, allow_patterns, dry_run=False):
+        patterns.append(allow_patterns)
+        return [] if dry_run else str(tmp_path)
+
+    monkeypatch.setattr(run, "snapshot_download", download)
+    assert this.model_folder == tmp_path
+    assert all(("*.py" in p) == python for p in patterns)
+
+
+def test_a_download_that_would_not_fit_stops_before_it_starts(current, monkeypatch, tmp_path):
+    this, _ = current
+    this.settings.model.source = "org/model"
+    calls = []
+
+    def download(repo, revision, allow_patterns, dry_run=False):
+        calls.append(dry_run)
+        planned = [(3000, True), (5000, False), (None, True)]
+        if dry_run:
+            return [SimpleNamespace(file_size=size, will_download=new) for size, new in planned]
+        return str(tmp_path)
+
+    asked = []
+
+    def disk_usage(path):
+        asked.append(path)
+        return shutil._ntuple_diskusage(0, 0, free)
+
+    monkeypatch.setattr(run, "snapshot_download", download)
+    monkeypatch.setattr(run.constants, "HF_HUB_CACHE", str(tmp_path / "not" / "made" / "yet"))
+    monkeypatch.setattr(run.shutil, "disk_usage", disk_usage)
+    free = 2999
+    with pytest.raises(RunError, match="downloading the model needs"):
+        _ = this.model_folder
+    assert calls == [True]
+    assert asked == [tmp_path]
+    free = 3000
+    assert this.model_folder == tmp_path
+    assert calls == [True, True, False]
 
 
 @pytest.fixture
@@ -186,6 +329,37 @@ def fake_conversion(monkeypatch):
     monkeypatch.setattr(run.convert, "quantize", quantize)
     monkeypatch.setattr(run.convert, "check_targets", lambda *_: [])
     return calls
+
+
+WEIGHTS = sum(math.prod(shape) for shape in llama().values())
+
+
+@pytest.mark.parametrize(
+    ("first", "then", "bytes_per_weight"),
+    [
+        (None, "Q4_K_M", 2 + 4.9 / 8),
+        (None, "BF16", 2),
+        ("Q4_K_M", "Q8_0", 8.5 / 8),
+    ],
+)
+def test_conversion_needs_room_for_each_file_it_writes(
+    current, fake_conversion, monkeypatch, first, then, bytes_per_weight
+):
+    this, _ = current
+    if first:
+        this.settings.deployment.quantization = first
+        this.gguf()
+    this.settings.deployment.quantization = then
+    needed = 1.1 * WEIGHTS * bytes_per_weight
+    monkeypatch.setattr(
+        run.shutil, "disk_usage", lambda _: shutil._ntuple_diskusage(0, 0, math.floor(needed) - 1)
+    )
+    with pytest.raises(RunError, match="GB free"):
+        this.gguf()
+    monkeypatch.setattr(
+        run.shutil, "disk_usage", lambda _: shutil._ntuple_diskusage(0, 0, math.ceil(needed) + 1)
+    )
+    this.gguf()
 
 
 def test_gguf_is_converted_once_and_requantised_only_when_needed(current, fake_conversion):
@@ -214,43 +388,148 @@ def test_a_gguf_that_changed_a_target_stops_the_run_and_leaves_nothing(current, 
     assert sorted(p.name for p in this.path("gguf").iterdir()) == []
 
 
-def test_two_commands_cannot_use_one_run_at_once(current):
+def test_every_stage_runs_under_the_runs_lock(current, monkeypatch):
     this, _ = current
-    entered, release = threading.Event(), threading.Event()
+    seen = []
 
-    def hold():
-        with this.locked():
-            entered.set()
-            release.wait(5)
+    def adapters(self):
+        try:
+            with self.locked():
+                seen.append("unlocked")
+        except RunError as error:
+            seen.append(str(error))
+        raise KeyboardInterrupt
 
-    holder = threading.Thread(target=hold)
-    holder.start()
-    entered.wait(5)
-    try:
-        with pytest.raises(RunError, match="another candor command"), this.locked():
-            pass
-    finally:
-        release.set()
-        holder.join()
+    monkeypatch.setattr(Run, "adapters", adapters)
+    with pytest.raises(KeyboardInterrupt):
+        this.prepare()
+    assert seen == [f"another candor command is using {this.folder}"]
+    with this.locked():
+        pass
+
+
+def test_reading_residuals_must_fit_the_gpu_before_anything_is_converted(
+    current, fake_conversion, monkeypatch
+):
+    this, _ = current
+    needed = 2 * WEIGHTS * 1.1
+    monkeypatch.setattr(run.residuals, "device_and_dtype", lambda: ("mps", torch.float16))
+    monkeypatch.setattr(run.residuals, "memory_budget", lambda device: math.floor(needed) - 1)
+    with pytest.raises(RunError, match=r"needs about 0\.0 GB of GPU memory .* run it on a pod"):
+        this.prepare()
+    assert fake_conversion == []
+    monkeypatch.setattr(run.residuals, "memory_budget", lambda device: math.ceil(needed))
+    this.check_memory()
+
+
+def test_a_hub_models_memory_is_checked_without_downloading_it(current, monkeypatch):
+    this, _ = current
+    this.settings.model.source = "org/model"
+    this.settings.model.revision = "abc123"
+    asked = []
+
+    def shapes(model, revision=None):
+        asked.append((model, revision))
+        return {"w": [100_000, 10_000]}
+
+    monkeypatch.setattr(run.source, "tensor_shapes", shapes)
+    monkeypatch.setattr(run, "snapshot_download", lambda *_, **__: pytest.fail("downloaded"))
+    monkeypatch.setattr(run.residuals, "device_and_dtype", lambda: ("cuda", torch.bfloat16))
+    monkeypatch.setattr(run.residuals, "memory_budget", lambda device: 2_000_000)
+    with pytest.raises(RunError, match=r"needs about 2\.2 GB"):
+        this.check_memory()
+    assert asked == [("org/model", "abc123")]
+
+
+def test_a_gpu_torch_cannot_use_stops_the_run(current, monkeypatch):
+    this, _ = current
+    monkeypatch.setattr(run.residuals, "device_and_dtype", lambda: ("cpu", torch.float32))
+    monkeypatch.setattr(
+        run.shutil, "which", lambda name: "/usr/bin/nvidia-smi" if name == "nvidia-smi" else None
+    )
+    with pytest.raises(RunError, match="can't use this machine's NVIDIA GPU"):
+        this.check_memory()
+
+
+def test_the_kv_cache_type_reaches_llama_server(current, monkeypatch):
+    this, _ = current
+    monkeypatch.setattr(run.toolchain, "binaries", lambda: Path("/bin"))
+    this.settings.deployment.kv_cache = "q8_0"
+    assert this.server(Path("m.gguf")).extra == [
+        "--cache-type-k",
+        "q8_0",
+        "--cache-type-v",
+        "q8_0",
+        "-fa",
+        "on",
+    ]
+    this.settings.deployment.kv_cache = "f16"
+    assert this.server(Path("m.gguf")).extra == ["--cache-type-k", "f16", "--cache-type-v", "f16"]
 
 
 def test_overflowing_activations_stop_the_run(tmp_path, model, monkeypatch):
     this = Run(tmp_path, config.RunConfig(model=config.Model(source=str(model))), report=lambda _: None)
     monkeypatch.setattr(Run, "prompt_ids", lambda self: {"harmful": [[1]], "harmless": [[1]]})
-    this.inputs["prompts"] = "p"
+    fake_residuals(monkeypatch)
     monkeypatch.setattr(
         run.residuals, "last_token_residuals", lambda *_: torch.full((1, 3, HIDDEN), float("nan"))
     )
-    monkeypatch.setattr(run.reference, "pad_token_id_for", lambda _: 0)
-
-    class Loaded(torch.nn.Module):
-        def to(self, *_):
-            return self
-
-    monkeypatch.setattr("transformers.AutoModelForCausalLM.from_pretrained", lambda *_, **__: Loaded())
     with pytest.raises(RunError, match="overflowed"):
         this.directions()
     assert not this.path("directions.pt").exists()
+
+
+@pytest.mark.parametrize("trusted", [False, True])
+def test_the_model_is_loaded_straight_onto_the_device(tmp_path, model, monkeypatch, trusted):
+    settings = config.RunConfig(model=config.Model(source=str(model), trust_remote_code=trusted))
+    this = Run(tmp_path, settings, report=lambda _: None)
+    monkeypatch.setattr(Run, "prompt_ids", lambda self: {"harmful": [[1]], "harmless": [[2]]})
+    loads = fake_residuals(monkeypatch)
+    monkeypatch.setattr(run.residuals, "device_and_dtype", lambda: ("mps", torch.float16))
+    this.directions()
+    assert loads.models == [{"dtype": torch.float16, "device_map": "mps", "trust_remote_code": trusted}]
+    assert loads.tokenizers == [trusted]
+
+
+def test_a_model_with_its_own_code_is_read_only_when_trusted(tmp_path, monkeypatch):
+    folder = write_custom_code_model(tmp_path / "custom")
+    settings = config.RunConfig(model=config.Model(source=str(folder)))
+    this = Run(tmp_path, settings, report=lambda _: None)
+    monkeypatch.setattr(
+        Run, "prompt_ids", lambda self: {"harmful": [[1, 2, 3], [1, 4]], "harmless": [[1, 5]]}
+    )
+    with pytest.raises(ValueError, match="custom code"):
+        this.directions()
+    settings.model.trust_remote_code = True
+    found = this.directions()
+    assert found.shape == (LAYERS + 1, HIDDEN)
+    assert torch.isfinite(found).all()
+
+
+def test_directions_follow_the_prompts_they_read_and_nothing_else(tmp_path, model, monkeypatch):
+    this = Run(tmp_path, config.RunConfig(model=config.Model(source=str(model))), report=lambda _: None)
+    ids = {"harmful": [[1, 2]], "harmless": [[3, 4]], "harmful_test": [[5]], "harmless_test": [[6]]}
+    monkeypatch.setattr(Run, "prompt_ids", lambda self: ids)
+    loads = fake_residuals(monkeypatch)
+    this.directions()
+    ids["harmful_test"] = [[7, 8, 9]]
+    this.directions()
+    assert len(loads.models) == 1
+    ids["harmful"] = [[1, 2, 3]]
+    this.directions()
+    assert len(loads.models) == 2
+
+
+def test_new_directions_rebuild_the_adapters_built_from_them(tmp_path, model, monkeypatch):
+    messages = []
+    this = Run(tmp_path, config.RunConfig(model=config.Model(source=str(model))), report=messages.append)
+    ids = {"harmful": [[1, 2]], "harmless": [[3, 4]]}
+    monkeypatch.setattr(Run, "prompt_ids", lambda self: ids)
+    fake_residuals(monkeypatch)
+    this.adapters()
+    ids["harmful"] = [[1, 2, 3]]
+    this.adapters()
+    assert rebuilt(messages) == {"directions.pt"} | ADAPTERS
 
 
 TEMPLATE = (
@@ -271,7 +550,7 @@ def tiny_run(current, monkeypatch):
     this, messages = current
     monkeypatch.setenv("CANDOR_LLAMA_BIN", str(LLAMA_SERVER.parent))
     prompts = {"value": ["first prompt", "second"]}
-    monkeypatch.setattr(run.PromptSet, "load", lambda self: prompts["value"])
+    monkeypatch.setattr(run, "load_prompts", lambda spec: prompts["value"])
 
     def use(template: str):
         tiny = this.folder / "tiny.gguf"
@@ -289,9 +568,12 @@ def tiny_run(current, monkeypatch):
 def test_prompt_ids_take_the_pinned_date(tiny_run):
     this, _, use, _ = tiny_run
     use(TEMPLATE)
-    this.settings.model.date = config.today_in("%d %b %Y")
-    ids = this.prompt_ids()
-    assert {name: len(v) for name, v in ids.items()} == dict.fromkeys(run.PROMPT_SETS, 2)
+    this.settings.model.date = "01 Jan 2020"
+    first = this.prompt_ids()
+    this.settings.model.date = "28 Feb 2021"
+    second = this.prompt_ids()
+    assert {name: len(v) for name, v in second.items()} == dict.fromkeys(run.PROMPT_SETS, 2)
+    assert first["harmful"] != second["harmful"]
 
 
 def test_a_template_that_ignores_the_pinned_date_is_caught_even_today(tiny_run):
@@ -303,14 +585,14 @@ def test_a_template_that_ignores_the_pinned_date_is_caught_even_today(tiny_run):
     assert not this.path("prompts.json").exists()
 
 
-def test_a_changed_system_prompt_rebuilds_the_prompt_ids(tiny_run):
-    this, messages, use, _ = tiny_run
+def test_ids_that_disagree_with_the_chat_endpoint_stop_the_run(tiny_run, monkeypatch):
+    this, _, use, _ = tiny_run
     use(TEMPLATE)
-    before = this.prompt_ids()
-    this.settings.deployment.system_prompt = "Be brief."
-    after = this.prompt_ids()
-    assert any("Rebuilding prompts.json" in m for m in messages)
-    assert len(after["harmful"][0]) > len(before["harmful"][0])
+    real = LlamaServer.chat_prompt_length
+    monkeypatch.setattr(LlamaServer, "chat_prompt_length", lambda *args: real(*args) + 1)
+    with pytest.raises(RunError, match="don't match its chat endpoint"):
+        this.prompt_ids()
+    assert not this.path("prompts.json").exists()
 
 
 def test_prompts_too_long_for_the_model_are_named(tiny_run):
@@ -323,6 +605,19 @@ def test_prompts_too_long_for_the_model_are_named(tiny_run):
         this.prompt_ids()
 
 
+def test_prompts_are_read_at_their_pinned_commit(monkeypatch):
+    calls = []
+
+    def load_dataset(dataset, split, revision):
+        calls.append((dataset, split, revision))
+        return {"text": ["a", "b"]}
+
+    monkeypatch.setattr(run, "load_dataset", load_dataset)
+    spec = config.PromptSet(dataset="org/prompts", split="train[:2]", revision="abc123")
+    assert run.load_prompts(spec) == ["a", "b"]
+    assert calls == [("org/prompts", "train[:2]", "abc123")]
+
+
 def test_a_damaged_record_means_rebuild_not_crash(current):
     this, messages = current
     this.adapters()
@@ -331,16 +626,24 @@ def test_a_damaged_record_means_rebuild_not_crash(current):
     assert any("Rebuilding adapters/per-layer" in m for m in messages)
 
 
-def test_old_gguf_files_are_cleared_before_the_disk_check(current, fake_conversion):
+def test_old_gguf_files_are_cleared_before_the_disk_check(current, fake_conversion, monkeypatch):
     this, messages = current
     this.gguf()
     this.settings.deployment.quantization = "Q8_0"
     leftover = this.path("gguf", "model-BF16.gguf.building")
     leftover.write_bytes(b"half")
+
+    def disk_usage(_):
+        return shutil._ntuple_diskusage(0, 0, 0 if leftover.exists() else 10**12)
+
+    monkeypatch.setattr(run.shutil, "disk_usage", disk_usage)
     this.gguf()
     assert sorted(p.name for p in this.path("gguf").iterdir()) == [
-        "model-BF16.gguf", "model-BF16.gguf.inputs.json", "model-Q8_0.gguf", "model-Q8_0.gguf.inputs.json",
-    ]  # fmt: skip
+        "model-BF16.gguf",
+        "model-BF16.gguf.inputs.json",
+        "model-Q8_0.gguf",
+        "model-Q8_0.gguf.inputs.json",
+    ]
     assert any("Removing gguf/model-Q4_K_M.gguf" in m for m in messages)
 
 
@@ -351,33 +654,6 @@ def test_changing_only_the_quantisation_keeps_the_prompt_ids(current, fake_conve
     this.settings.deployment.quantization = "Q8_0"
     this.gguf()
     assert this.inputs["bf16"] == before
-
-
-def test_directions_follow_the_prompts_they_read_and_nothing_else(tmp_path, model, monkeypatch):
-    this = Run(tmp_path, config.RunConfig(model=config.Model(source=str(model))), report=lambda _: None)
-    ids = {"harmful": [[1, 2]], "harmless": [[3, 4]], "harmful_test": [[5]], "harmless_test": [[6]]}
-    monkeypatch.setattr(Run, "prompt_ids", lambda self: ids)
-    reads = []
-
-    def residuals(model, prompts, pad_id):
-        reads.append(len(prompts))
-        return torch.randn(len(prompts), LAYERS + 1, HIDDEN)
-
-    monkeypatch.setattr(run.residuals, "last_token_residuals", residuals)
-    monkeypatch.setattr(run.reference, "pad_token_id_for", lambda _: 0)
-
-    class Loaded(torch.nn.Module):
-        def to(self, *_):
-            return self
-
-    monkeypatch.setattr("transformers.AutoModelForCausalLM.from_pretrained", lambda *_, **__: Loaded())
-    this.directions()
-    ids["harmful_test"] = [[7, 8, 9]]
-    this.directions()
-    assert len(reads) == 2
-    ids["harmful"] = [[1, 2, 3]]
-    this.directions()
-    assert len(reads) == 4
 
 
 def test_lengths_count_answers_only_for_the_harmful_test_prompts(current):
@@ -404,22 +680,6 @@ def test_raising_the_answer_length_later_is_still_checked(tiny_run):
         this.prompt_ids()
 
 
-def test_the_checking_server_is_sized_from_the_checked_prompts(tiny_run, monkeypatch):
-    this, _, use, _ = tiny_run
-    use(TEMPLATE)
-    sizes = []
-    real = Run.server
-
-    def recording(self, model, adapters=(), context_per_slot=8192, parallel=4):
-        sizes.append((context_per_slot, parallel))
-        return real(self, model, adapters, context_per_slot, parallel)
-
-    monkeypatch.setattr(Run, "server", recording)
-    ids = this.prompt_ids()
-    sampled = max(len(p) for prompts in ids.values() for p in prompts[: run.CHECKED_PER_SET])
-    assert sizes[-1] == (sampled + 16, 1)
-
-
 @pytest.mark.skipif(not hasattr(run.fcntl, "F_FULLFSYNC"), reason="only macOS has F_FULLFSYNC")
 def test_results_are_fully_flushed_on_macos(tmp_path, monkeypatch):
     calls = []
@@ -433,3 +693,124 @@ def test_results_are_fully_flushed_on_macos(tmp_path, monkeypatch):
     (tmp_path / "result").write_text("x")
     run._sync(tmp_path / "result")
     assert calls.count(run.fcntl.F_FULLFSYNC) >= 2
+
+
+def fake_everything_but_the_stages(monkeypatch, tiny: Path) -> None:
+    """The converter copies a tiny random GGUF, and residuals are random but fixed by their prompts."""
+    monkeypatch.setenv("CANDOR_LLAMA_BIN", str(LLAMA_SERVER.parent))
+    monkeypatch.setattr(
+        run.convert, "to_bf16", lambda folder, destination, log: shutil.copy(tiny, destination)
+    )
+    monkeypatch.setattr(run.convert, "quantize", lambda bf16, destination, *_: shutil.copy(bf16, destination))
+    monkeypatch.setattr(run.convert, "check_targets", lambda *_: [])
+    monkeypatch.setattr(run, "load_prompts", lambda spec: ["first prompt", "second"])
+    fake_residuals(monkeypatch)
+
+
+def pinned(model: Path) -> config.RunConfig:
+    return config.RunConfig(model=config.Model(source=str(model), date="01 Jan 2020"))
+
+
+@pytest.fixture(scope="module")
+def prepared(tmp_path_factory):
+    """A model and a run carried through every stage, made once and copied by each test that uses it."""
+    if not LLAMA_SERVER.exists():
+        pytest.skip("no llama-server")
+    root = tmp_path_factory.mktemp("prepared")
+    write_model(root / "tiny.gguf", random_weights(), chat_template=TEMPLATE)
+    model = write_llama(root / "model")
+    (root / "run").mkdir()
+    with pytest.MonkeyPatch.context() as monkeypatch:
+        fake_everything_but_the_stages(monkeypatch, root / "tiny.gguf")
+        Run(root / "run", pinned(model), report=lambda _: None).prepare()
+    return root
+
+
+@pytest.fixture
+def pipeline(prepared, tmp_path, monkeypatch):
+    """A copy of the prepared run, and a way to prepare it again as a new candor command would."""
+    root = tmp_path / "copy"
+    shutil.copytree(prepared, root)
+    fake_everything_but_the_stages(monkeypatch, root / "tiny.gguf")
+    settings = pinned(root / "model")
+    messages = []
+
+    def again() -> list[str]:
+        """Prepare the run again and say what was rebuilt."""
+        messages.clear()
+        Run(root / "run", settings, report=messages.append).prepare()
+        return sorted(rebuilt(messages))
+
+    return settings, again
+
+
+def touch_the_weights(settings, monkeypatch):
+    os.utime(Path(settings.model.source) / "model.safetensors", ns=(1, 1))
+
+
+def rename_a_target(settings, monkeypatch):
+    original = targets.gguf_name
+    monkeypatch.setattr(run.targets, "gguf_name", lambda *args: f"{original(*args)}.renamed")
+
+
+@pytest.mark.parametrize(
+    ("change", "expected"),
+    [
+        (touch_the_weights, GGUF | {"prompts.json", "directions.pt"} | ADAPTERS),
+        (lambda s, m: m.setattr(run, "LLAMA_CPP_RELEASE", "b1"), GGUF | {"prompts.json"}),
+        (lambda s, m: setattr(s.model, "date", "28 Feb 2021"), {"prompts.json", "directions.pt"} | ADAPTERS),
+        (
+            lambda s, m: setattr(s.deployment, "system_prompt", "Be brief."),
+            {"prompts.json", "directions.pt"} | ADAPTERS,
+        ),
+        (lambda s, m: setattr(s.prompts.harmful, "revision", "abc123"), {"prompts.json"}),
+        (lambda s, m: setattr(s.model, "trust_remote_code", True), {"directions.pt"} | ADAPTERS),
+        (lambda s, m: setattr(s.edit, "row_norm", "none"), ADAPTERS),
+        (rename_a_target, ADAPTERS),
+    ],
+    ids=[
+        "model files",
+        "llama.cpp",
+        "date",
+        "system prompt",
+        "prompt commit",
+        "remote code",
+        "row norm",
+        "targets",
+    ],
+)
+def test_a_change_rebuilds_what_it_affects_and_nothing_else(pipeline, monkeypatch, change, expected):
+    settings, again = pipeline
+    assert again() == []
+    change(settings, monkeypatch)
+    assert again() == sorted(expected)
+
+
+@pytest.mark.parametrize(
+    ("stage", "expected"),
+    [
+        ("gguf", GGUF | {"prompts.json", "directions.pt"} | ADAPTERS),
+        ("prompts.json", {"prompts.json", "directions.pt"} | ADAPTERS),
+        ("directions.pt", {"directions.pt"} | ADAPTERS),
+        ("adapters", ADAPTERS),
+    ],
+)
+def test_a_new_version_of_a_stage_rebuilds_it_and_everything_after_it(pipeline, monkeypatch, stage, expected):
+    _, again = pipeline
+    monkeypatch.setitem(run.STAGES, stage, run.STAGES[stage] + 1)
+    assert again() == sorted(expected)
+
+
+def test_prepare_runs_each_stage_once(pipeline, monkeypatch):
+    _, again = pipeline
+    calls = []
+    for stage in ("gguf", "prompt_ids", "directions", "adapters"):
+        real = getattr(Run, stage)
+
+        def counted(self, real=real, stage=stage):
+            calls.append(stage)
+            return real(self)
+
+        monkeypatch.setattr(Run, stage, counted)
+    again()
+    assert calls == ["adapters", "directions", "prompt_ids", "gguf"]
