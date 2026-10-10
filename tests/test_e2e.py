@@ -1,13 +1,21 @@
 """End to end on a small real model with the real converter. Run with CANDOR_E2E=1 (downloads ~270 MB
 the first time, and sets up llama.cpp's converter)."""
 
+import json
 import os
 import socket
 from pathlib import Path
 
+import gguf
 import pytest
+import torch
 from huggingface_hub import snapshot_download
-from transformers import AutoTokenizer
+from transformers import (
+    AutoTokenizer,
+    LlamaConfig,
+    LlamaForCausalLM,
+    PreTrainedTokenizerFast,
+)
 
 from candor import convert, source, targets, toolchain
 from candor.engine import LlamaServer
@@ -41,12 +49,50 @@ def converted(tmp_path_factory):
 
 def test_every_edit_target_reaches_the_gguf_unchanged(converted):
     folder, bf16, _, _ = converted
+    assert converted_targets(folder, bf16) == []
+
+
+def converted_targets(folder: Path, model_gguf: Path) -> list[str]:
     config = source.read_config(str(folder))
-    layers = config["num_hidden_layers"]
-    found = targets.find_targets(source.tensor_shapes(str(folder)), config["hidden_size"], layers)
+    text = source.text_config(config)
+    layers = text["num_hidden_layers"]
+    found = targets.find_targets(source.tensor_shapes(str(folder)), text["hidden_size"], layers)
     arch = targets.gguf_architecture(config)
     assert found.ok and arch is not None
-    assert convert.check_targets(bf16, folder, found.writers, arch, layers) == []
+    return convert.check_targets(model_gguf, folder, found.writers, arch, layers)
+
+
+def test_a_model_whose_tokenizer_transformers_5_saved_converts_with_the_same_vocabulary(converted, tmp_path):
+    smol, smol_gguf, _, _ = converted
+    folder, out = tmp_path / "tiny", tmp_path / "out"
+    torch.manual_seed(0)
+    config = LlamaConfig(
+        vocab_size=49152, hidden_size=64, intermediate_size=128, num_hidden_layers=2, num_attention_heads=4
+    )
+    LlamaForCausalLM(config).bfloat16().save_pretrained(folder)
+    PreTrainedTokenizerFast.from_pretrained(smol).save_pretrained(folder)
+    saved = json.loads((folder / "tokenizer_config.json").read_text())
+    assert saved["tokenizer_class"] == "TokenizersBackend"
+    before = {path.name: path.read_bytes() for path in folder.iterdir()}
+    out.mkdir()
+
+    convert.to_bf16(folder, out / "model.gguf", out / "convert.log")
+
+    assert {path.name: path.read_bytes() for path in folder.iterdir()} == before
+    assert sorted(path.name for path in out.iterdir()) == ["convert.log", "model.gguf"]
+    assert converted_targets(folder, out / "model.gguf") == []
+    ours, reference = gguf.GGUFReader(out / "model.gguf").fields, gguf.GGUFReader(smol_gguf).fields
+    for key in (
+        "tokenizer.ggml.model",
+        "tokenizer.ggml.pre",
+        "tokenizer.ggml.tokens",
+        "tokenizer.ggml.token_type",
+        "tokenizer.ggml.merges",
+        "tokenizer.ggml.bos_token_id",
+        "tokenizer.ggml.eos_token_id",
+        "tokenizer.chat_template",
+    ):
+        assert ours[key].contents() == reference[key].contents(), key
 
 
 def test_chat_ids_match_real_chat_requests_and_transformers(converted):

@@ -1,3 +1,5 @@
+import json
+
 import gguf
 import numpy as np
 import pytest
@@ -9,6 +11,7 @@ from candor.convert import check_targets, float_type
 from candor.targets import find_targets, gguf_name
 
 from .test_targets import llama
+from .tiny_tokenizer import tokenizer
 
 HIDDEN = 64
 GGUF_TYPE = {torch.bfloat16: gguf.GGMLQuantizationType.BF16, torch.float16: gguf.GGMLQuantizationType.F16}
@@ -136,23 +139,65 @@ def test_models_convert_at_their_own_float_type(tmp_path, dtypes, expected):
 
 @pytest.fixture
 def converter_calls(monkeypatch):
-    """The converter's arguments."""
+    """The converter's arguments, and what the model folder it was given held while it ran."""
     calls = []
 
     def run(program, args, log):
-        calls.append({"args": args})
+        folder = args[2]
+        files = {p.name: p.readlink() if p.is_symlink() else None for p in folder.iterdir()}
+        settings = json.loads((folder / "tokenizer_config.json").read_text())
+        calls.append({"args": args, "folder": folder, "files": files, "settings": settings})
 
     monkeypatch.setattr(convert.toolchain, "converter", lambda: ("python", "convert_hf_to_gguf.py"))
     monkeypatch.setattr(convert, "_run", run)
     return calls
 
 
+def model_with_tokenizer(tmp_path, saved_tokenizer, dtype=torch.bfloat16):
+    folder, _ = hf_folder(tmp_path, dtype)
+    saved_tokenizer.save_pretrained(folder)
+    return folder
+
+
 @pytest.mark.parametrize(("dtype", "outtype"), [(torch.float16, "f16"), (torch.bfloat16, "bf16")])
 def test_the_converter_writes_the_models_float_type_to_the_destination(
     tmp_path, converter_calls, dtype, outtype
 ):
-    folder, _ = hf_folder(tmp_path, dtype)
+    folder = model_with_tokenizer(tmp_path, tokenizer(None, adds_bos=True), dtype)
     destination = tmp_path / "out" / "model.gguf"
     destination.parent.mkdir()
     convert.to_bf16(folder, destination, tmp_path / "convert.log")
     assert converter_calls[0]["args"][3:] == ["--outtype", outtype, "--outfile", destination]
+
+
+def test_a_tokenizer_saved_by_transformers_5_is_given_to_the_converter_renamed(tmp_path, converter_calls):
+    saved = tokenizer(None, adds_bos=True)
+    saved.add_special_tokens({"additional_special_tokens": ["<|tool|>"]})
+    folder = model_with_tokenizer(tmp_path, saved)
+    settings = json.loads((folder / "tokenizer_config.json").read_text())
+    assert settings["tokenizer_class"] == "TokenizersBackend"
+    assert settings["extra_special_tokens"] == ["<|tool|>"]
+    before = {p.name: p.read_bytes() for p in folder.iterdir()}
+    destination = tmp_path / "out" / "model.gguf"
+    destination.parent.mkdir()
+
+    convert.to_bf16(folder, destination, tmp_path / "convert.log")
+
+    [call] = converter_calls
+    assert call["folder"] != folder and call["folder"].name == folder.name
+    links = {name: (folder / name).resolve() for name in before}
+    assert call["files"] == links | {"tokenizer_config.json": None}
+    expected = {k: v for k, v in settings.items() if k != "extra_special_tokens"}
+    expected |= {"tokenizer_class": "PreTrainedTokenizerFast", "additional_special_tokens": ["<|tool|>"]}
+    assert call["settings"] == expected
+    assert {p.name: p.read_bytes() for p in folder.iterdir()} == before
+    assert list(destination.parent.iterdir()) == []
+
+
+def test_a_tokenizer_the_converter_can_read_is_given_as_it_is(tmp_path, converter_calls):
+    folder = model_with_tokenizer(tmp_path, tokenizer(None, adds_bos=True))
+    settings = json.loads((folder / "tokenizer_config.json").read_text())
+    settings["tokenizer_class"] = "PreTrainedTokenizerFast"
+    (folder / "tokenizer_config.json").write_text(json.dumps(settings))
+    convert.to_bf16(folder, tmp_path / "model.gguf", tmp_path / "convert.log")
+    assert converter_calls[0]["folder"] == folder

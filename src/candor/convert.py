@@ -6,7 +6,9 @@ reorders some tensors for some architectures; check_targets catches that before 
 scored.
 """
 
+import json
 import subprocess
+import tempfile
 from pathlib import Path
 
 import gguf
@@ -38,15 +40,47 @@ def float_type(model_folder: Path) -> str:
     return "F16" if stored == {"F16"} else "BF16"
 
 
+def _readable_by_the_converter(model_folder: Path, staging: Path) -> Path:
+    """The folder to hand the converter, whose transformers 4 can't read two things transformers 5
+    writes into tokenizer_config.json.
+
+    A fast tokenizer's class is saved as TokenizersBackend, which is PreTrainedTokenizerFast in
+    transformers 4, and extra special tokens are saved as a list, which transformers 4 calls
+    additional_special_tokens. Such a model is converted from a folder of links to its files with
+    only those settings renamed. The folder keeps the model folder's name, which the converter falls
+    back on to name the GGUF, and the model folder itself is never touched.
+    """
+    tokenizer_config = model_folder / "tokenizer_config.json"
+    if not tokenizer_config.exists():
+        return model_folder
+    settings = json.loads(tokenizer_config.read_text(encoding="utf-8"))
+    readable = dict(settings)
+    if readable.get("tokenizer_class") == "TokenizersBackend":
+        readable["tokenizer_class"] = "PreTrainedTokenizerFast"
+    if isinstance(readable.get("extra_special_tokens"), list):
+        readable["additional_special_tokens"] = readable.pop("extra_special_tokens")
+    if readable == settings:
+        return model_folder
+    staged = staging / model_folder.name
+    staged.mkdir()
+    for item in model_folder.iterdir():
+        if item.name != tokenizer_config.name:
+            (staged / item.name).symlink_to(item.resolve())
+    (staged / tokenizer_config.name).write_text(json.dumps(readable, indent=2), encoding="utf-8")
+    return staged
+
+
 def to_bf16(model_folder: Path, destination: Path, log: Path) -> None:
     """Convert a Hugging Face model folder to an unquantised GGUF of its float_type at destination."""
     python, script = toolchain.converter()
     outtype = float_type(model_folder).lower()
-    _run(
-        "llama.cpp's converter",
-        [python, script, model_folder, "--outtype", outtype, "--outfile", destination],
-        log,
-    )
+    with tempfile.TemporaryDirectory(dir=destination.parent) as staging:
+        folder = _readable_by_the_converter(model_folder, Path(staging))
+        _run(
+            "llama.cpp's converter",
+            [python, script, folder, "--outtype", outtype, "--outfile", destination],
+            log,
+        )
 
 
 def quantize(base: Path, destination: Path, quantization: str, log: Path) -> None:
