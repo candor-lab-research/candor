@@ -43,7 +43,6 @@ class LlamaServer:
         self.client = httpx.Client(base_url=f"http://127.0.0.1:{port}", timeout=None)
         self.process: subprocess.Popen | None = None
         self.adapter_ids: dict[Path, int] = {}
-        self.startup_seconds = 0.0
 
     def __enter__(self) -> "LlamaServer":
         self.start()
@@ -72,7 +71,6 @@ class LlamaServer:
         except BaseException:
             self.stop()
             raise
-        self.startup_seconds = time.perf_counter() - started
 
     def _wait_until_ready(self, started: float, timeout: float) -> None:
         assert self.process is not None
@@ -212,18 +210,6 @@ class LlamaServer:
             entry["id"]: entry["logprob"] for entry in result["completion_probabilities"][0]["top_logprobs"]
         }
 
-    def throughput(
-        self, prompts: list[list[int]], tokens: int, scales: Mapping[Path, float] | None = None
-    ) -> float:
-        """Generated tokens per second with every answer forced to full length. The text is discarded."""
-        lora = self.lora(scales)
-        payloads = [
-            {"prompt": p, "n_predict": tokens, "ignore_eos": True, "temperature": 0.0, "lora": lora}
-            for p in prompts
-        ]
-        started = time.perf_counter()
-        results = self._complete_all(payloads)
-        return sum(result["tokens_predicted"] for result in results) / (time.perf_counter() - started)
 
 
 def _port_in_use(port: int) -> bool:

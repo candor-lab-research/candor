@@ -101,12 +101,6 @@ def test_cached_prompts_are_not_shared_between_adapter_settings(files, reference
         assert_same(s.top_logprobs(PROMPTS, 50), base)
 
 
-def test_throughput_counts_tokens(files):
-    folder, _, _ = files
-    with server(folder, "base.gguf") as s:
-        assert s.throughput(PROMPTS, 8) > 0
-
-
 def test_a_busy_port_is_refused(files):
     folder, _, _ = files
     with socket.socket() as busy:
