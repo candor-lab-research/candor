@@ -1,4 +1,7 @@
-from candor.targets import find_targets, gguf_architecture, gguf_name
+import gguf
+import pytest
+
+from candor.targets import Writer, _converter_table, find_targets, gguf_architecture, gguf_name
 
 HIDDEN = 64
 
@@ -129,6 +132,25 @@ def test_gguf_names():
 def test_gguf_names_strip_language_model_like_the_converter():
     found = find_targets(llama(prefix="model.language_model.layers"), HIDDEN, 2)
     assert gguf_name(found.writers[0], "llama", 2) == "blk.0.attn_output.weight"
+
+
+@pytest.mark.parametrize(
+    ("arch", "layers", "name", "expected"),
+    [
+        ("qwen35", 32, "model.language_model.layers.0.linear_attn.out_proj.weight", "blk.0.ssm_out.weight"),
+        ("qwen35", 32, "model.language_model.layers.3.self_attn.o_proj.weight", "blk.3.attn_output.weight"),
+        ("qwen35", 32, "model.language_model.layers.31.mlp.down_proj.weight", "blk.31.ffn_down.weight"),
+        ("k2-horizon", 36, "model.layers.0.self_attn.o_proj.weight", "blk.0.attn_output.weight"),
+        ("k2-horizon", 36, "model.layers.35.mlp.down_proj.weight", "blk.35.ffn_down.weight"),
+    ],
+)
+def test_gguf_names_for_qwen35_and_k2_horizon(arch, layers, name, expected):
+    layer = int(name.split(".layers.")[1].split(".")[0])
+    assert gguf_name(Writer(name, layer, "attn", (HIDDEN, HIDDEN)), arch, layers) == expected
+
+
+def test_every_architecture_in_the_converter_table_is_known_to_gguf():
+    assert set(_converter_table()["architectures"].values()) <= set(gguf.MODEL_ARCH_NAMES.values())
 
 
 def test_gguf_architecture_comes_from_the_converter_registry():

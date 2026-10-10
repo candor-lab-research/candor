@@ -1,13 +1,25 @@
 """End to end on a small real model with the real converter. Run with CANDOR_E2E=1 (downloads ~270 MB
 the first time, and sets up llama.cpp's converter)."""
 
+import json
 import os
+import shutil
 import socket
 from pathlib import Path
 
+import gguf
 import pytest
+import torch
 from huggingface_hub import snapshot_download
-from transformers import AutoTokenizer
+from safetensors.torch import save_file
+from transformers import (
+    AutoTokenizer,
+    LlamaConfig,
+    LlamaForCausalLM,
+    PreTrainedTokenizerFast,
+    Qwen3_5ForCausalLM,
+    Qwen3_5TextConfig,
+)
 
 from candor import convert, source, targets, toolchain
 from candor.engine import LlamaServer
@@ -41,12 +53,82 @@ def converted(tmp_path_factory):
 
 def test_every_edit_target_reaches_the_gguf_unchanged(converted):
     folder, bf16, _, _ = converted
+    assert converted_targets(folder, bf16) == []
+
+
+def converted_targets(folder: Path, model_gguf: Path) -> list[str]:
     config = source.read_config(str(folder))
-    layers = config["num_hidden_layers"]
-    found = targets.find_targets(source.tensor_shapes(str(folder)), config["hidden_size"], layers)
+    text = source.text_config(config)
+    layers = text["num_hidden_layers"]
+    found = targets.find_targets(source.tensor_shapes(str(folder)), text["hidden_size"], layers)
     arch = targets.gguf_architecture(config)
     assert found.ok and arch is not None
-    assert convert.check_targets(bf16, folder, found.writers, arch, layers) == []
+    return convert.check_targets(model_gguf, folder, found.writers, arch, layers)
+
+
+def test_a_model_whose_tokenizer_transformers_5_saved_converts_with_the_same_vocabulary(converted, tmp_path):
+    smol, smol_gguf, _, _ = converted
+    folder, out = tmp_path / "tiny", tmp_path / "out"
+    torch.manual_seed(0)
+    config = LlamaConfig(
+        vocab_size=49152, hidden_size=64, intermediate_size=128, num_hidden_layers=2, num_attention_heads=4
+    )
+    LlamaForCausalLM(config).bfloat16().save_pretrained(folder)
+    PreTrainedTokenizerFast.from_pretrained(smol).save_pretrained(folder)
+    saved = json.loads((folder / "tokenizer_config.json").read_text())
+    assert saved["tokenizer_class"] == "TokenizersBackend"
+    before = {path.name: path.read_bytes() for path in folder.iterdir()}
+    out.mkdir()
+
+    convert.to_bf16(folder, out / "model.gguf", out / "convert.log")
+
+    assert {path.name: path.read_bytes() for path in folder.iterdir()} == before
+    assert sorted(path.name for path in out.iterdir()) == ["convert.log", "model.gguf"]
+    assert converted_targets(folder, out / "model.gguf") == []
+    ours, reference = gguf.GGUFReader(out / "model.gguf").fields, gguf.GGUFReader(smol_gguf).fields
+    for key in (
+        "tokenizer.ggml.model",
+        "tokenizer.ggml.pre",
+        "tokenizer.ggml.tokens",
+        "tokenizer.ggml.token_type",
+        "tokenizer.ggml.merges",
+        "tokenizer.ggml.bos_token_id",
+        "tokenizer.ggml.eos_token_id",
+        "tokenizer.chat_template",
+    ):
+        assert ours[key].contents() == reference[key].contents(), key
+
+
+def test_qwen35_linear_attention_reaches_the_gguf_in_the_converters_order(converted, tmp_path):
+    folder, out = tmp_path / "qwen35", tmp_path / "out"
+    folder.mkdir()
+    out.mkdir()
+    torch.manual_seed(0)
+    text = Qwen3_5TextConfig(
+        vocab_size=49152, hidden_size=64, intermediate_size=128, num_hidden_layers=4, num_attention_heads=4,
+        num_key_value_heads=2, head_dim=16, linear_num_key_heads=2, linear_num_value_heads=4,
+        linear_key_head_dim=8, linear_value_head_dim=8,
+    )  # fmt: skip
+    weights = {
+        name.replace("model.", "model.language_model.", 1): tensor.to(torch.bfloat16).contiguous()
+        for name, tensor in Qwen3_5ForCausalLM(text).state_dict().items()
+    }
+    save_file(weights, folder / "model.safetensors")
+    # Like Qwen3.5-9B's: the converter refuses a config that doesn't give the MTP layer count.
+    text_config = text.to_dict() | {"mtp_num_hidden_layers": 1}
+    config = {"architectures": ["Qwen3_5ForConditionalGeneration"], "text_config": text_config}
+    (folder / "config.json").write_text(json.dumps(config))
+    for name in ("tokenizer.json", "tokenizer_config.json"):  # one the converter recognises
+        shutil.copy(converted[0] / name, folder / name)
+
+    convert.to_bf16(folder, out / "model.gguf", out / "convert.log")
+
+    assert converted_targets(folder, out / "model.gguf") == []
+    in_gguf = {tensor.name: tensor for tensor in gguf.GGUFReader(out / "model.gguf").tensors}
+    for layer in range(3):
+        hf = weights[f"model.language_model.layers.{layer}.linear_attn.out_proj.weight"]
+        stored = in_gguf[f"blk.{layer}.ssm_out.weight"].data.reshape(-1)
+        assert (hf.view(torch.uint8).numpy().reshape(-1) != stored).any()
 
 
 def test_chat_ids_match_real_chat_requests_and_transformers(converted):
@@ -100,5 +182,6 @@ def test_init_and_run_prepare_every_stage_resume_and_follow_settings(tmp_path):
     assert changed.exit_code == 0, changed.output
     assert "Rebuilding prompts.json" in changed.output
     assert "Rebuilding directions.pt" in changed.output
+    assert "Rebuilding adapters/per-layer" in changed.output
     assert "Converting" not in changed.output
     assert (run_folder / "gguf" / "model-BF16.gguf").stat().st_mtime_ns == stamps[results[0]]
