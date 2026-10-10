@@ -136,9 +136,7 @@ def _check(folder: Path) -> Path:
         if not (folder / tool).exists():
             raise ToolchainError(f"{folder} has no {tool}")
     if f"build {LLAMA_CPP_RELEASE.removeprefix('b')}," not in _version(folder):
-        raise ToolchainError(
-            f"the llama-server in {folder} isn't llama.cpp {LLAMA_CPP_RELEASE}; delete that folder"
-        )
+        raise ToolchainError(f"the llama-server in {folder} isn't llama.cpp {LLAMA_CPP_RELEASE}")
     return folder
 
 
@@ -186,7 +184,10 @@ def binaries() -> Path:
     CANDOR_LLAMA_BIN points at an existing folder instead; it must hold the same release.
     """
     if override := os.environ.get("CANDOR_LLAMA_BIN"):
-        return _check(Path(override).expanduser())
+        try:
+            return _check(Path(override).expanduser())
+        except ToolchainError as error:
+            raise ToolchainError(f"{error}; point CANDOR_LLAMA_BIN at a {LLAMA_CPP_RELEASE} build") from None
     name = this_platform()
     target = cache() / name / "bin"
     with _locked(f"bin-{name}"):

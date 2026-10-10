@@ -82,8 +82,10 @@ def test_a_download_with_the_wrong_checksum_is_refused_and_leaves_nothing(releas
 def test_a_different_release_is_refused(release, monkeypatch):
     add, _, _ = release
     monkeypatch.setitem(toolchain.ASSETS, "test", [binaries_release(add, build="9999")])
-    with pytest.raises(ToolchainError, match=r"isn't llama\.cpp b11524"):
+    with pytest.raises(ToolchainError) as raised:
         toolchain.binaries()
+    message = str(raised.value)
+    assert message.count("delete") == 1 and message.endswith("/bin to fetch it again")
 
 
 def test_an_existing_folder_must_hold_the_same_release(tmp_path, monkeypatch):
@@ -94,7 +96,9 @@ def test_an_existing_folder_must_hold_the_same_release(tmp_path, monkeypatch):
     monkeypatch.setenv("CANDOR_LLAMA_BIN", str(tmp_path))
     assert toolchain.binaries() == tmp_path
     (tmp_path / "llama-server").write_text(SERVER.format(build="1"))
-    with pytest.raises(ToolchainError, match=r"isn't llama\.cpp"):
+    with pytest.raises(
+        ToolchainError, match=r"isn't llama\.cpp b11524; point CANDOR_LLAMA_BIN at a b11524 build$"
+    ):
         toolchain.binaries()
 
 
