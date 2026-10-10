@@ -4,8 +4,9 @@
 
 Every result is written under a temporary name and renamed into place when complete, so a crash
 never leaves a half-made result. Beside each result is a record of what it was built from: the
-settings it used and the records of the stages before it. A result is reused only when that
-record still matches, so editing the settings rebuilds what they affect and everything after it.
+settings it used, the records of the stages before it and the version of candor's code for each
+stage. A result is reused only when that record still matches, so editing the settings, or a new
+version of a stage, rebuilds what they affect and everything after it.
 """
 
 import fcntl
@@ -18,23 +19,23 @@ import socket
 from collections.abc import Callable, Iterator, Sequence
 from contextlib import contextmanager
 from dataclasses import dataclass, field
+from fnmatch import fnmatch
 from functools import cached_property
 from pathlib import Path
 from typing import Any
 
 import torch
-from huggingface_hub import snapshot_download
-from huggingface_hub.utils import disable_progress_bars
+from datasets import load_dataset
+from huggingface_hub import constants, snapshot_download
 
-from . import config, convert, directions, reference, residuals, source, targets, toolchain
+from . import config, convert, directions, residuals, source, targets, toolchain
 from .adapters import write_adapter
 from .edit import RowNorm, rank_one
 from .engine import LLAMA_CPP_RELEASE, LlamaServer
-from .prompts import PromptSet
 from .weights import ModelFiles
 
 MODEL_FILES = ["*.json", "*.safetensors", "*.jinja", "*.txt", "*.model", "*.tiktoken"]
-PROMPT_SETS = ("harmful", "harmless", "harmful_test", "harmless_test")
+PROMPT_SETS = tuple(config.Prompts.model_fields)
 BITS_PER_WEIGHT = {
     "Q4_K_S": 4.6,
     "Q4_K_M": 4.9,
@@ -46,6 +47,10 @@ BITS_PER_WEIGHT = {
 }
 DATE_PROBE = "31 Dec 1999"
 CHECKED_PER_SET = 3
+# The version of each stage's code, in stage order. Bump a stage's number in any commit that changes
+# the results it builds. Each record holds the numbers of its own stage and every stage before it, so
+# results built by older code are rebuilt along with everything after them.
+STAGES = {"gguf": 1, "prompts.json": 1, "directions.pt": 1, "adapters": 1}
 
 
 class RunError(RuntimeError):
@@ -102,6 +107,10 @@ def _free_port() -> int:
         return s.getsockname()[1]
 
 
+def load_prompts(spec: config.PromptSet) -> list[str]:
+    return list(load_dataset(spec.dataset, split=spec.split, revision=spec.revision)[spec.column])
+
+
 @dataclass
 class Run:
     folder: Path
@@ -125,10 +134,16 @@ class Run:
                 raise RunError(f"another candor command is using {self.folder}") from None
             yield
 
+    def _with_code(self, output: Path, inputs: dict[str, Any]) -> dict[str, Any]:
+        """The inputs, and the code versions of the output's stage and every stage before it."""
+        stages = list(STAGES)
+        stage = stages.index(output.relative_to(self.folder).parts[0])
+        return {**inputs, "code": {name: STAGES[name] for name in stages[: stage + 1]}}
+
     def _fresh(self, output: Path, inputs: dict[str, Any]) -> bool:
-        """Whether output exists and was built from exactly these inputs."""
+        """Whether output exists and was built from exactly these inputs, by this version of candor."""
         record = _record(output)
-        expected = json.loads(json.dumps(inputs))
+        expected = json.loads(json.dumps(self._with_code(output, inputs)))
         if output.exists() and _read_record(record) == expected:
             return True
         if output.exists() or record.exists():
@@ -145,30 +160,58 @@ class Run:
         _sync(partial)
         partial.rename(output)
         written = record.with_name(record.name + ".building")
-        written.write_text(json.dumps(inputs, sort_keys=True))
+        written.write_text(json.dumps(self._with_code(output, inputs), sort_keys=True))
         _sync(written)
         written.rename(record)
         _sync(record)
 
     # Model
 
+    @property
+    def model_files(self) -> list[str]:
+        """The model's files a run reads, as download patterns: its own Python only when trusted."""
+        return MODEL_FILES + (["*.py"] if self.settings.model.trust_remote_code else [])
+
     @cached_property
     def model_folder(self) -> Path:
         model = self.settings.model
         if source.is_local(model.source):
-            return Path(model.source).expanduser()
-        disable_progress_bars()
-        return Path(snapshot_download(model.source, revision=model.revision, allow_patterns=MODEL_FILES))
+            folder = Path(model.source).expanduser()
+            if not folder.is_dir():
+                raise RunError(f"the model folder {folder} is gone; move it back or edit model.source")
+            return folder
+        self._check_download()
+        return Path(snapshot_download(model.source, revision=model.revision, allow_patterns=self.model_files))
+
+    def _check_download(self) -> None:
+        model = self.settings.model
+        planned = snapshot_download(
+            model.source, revision=model.revision, allow_patterns=self.model_files, dry_run=True
+        )
+        needed = sum(file.file_size or 0 for file in planned if file.will_download)
+        cache = Path(constants.HF_HUB_CACHE)
+        free = shutil.disk_usage(next(p for p in [cache, *cache.parents] if p.exists())).free
+        if free < needed:
+            raise RunError(
+                f"downloading the model needs {needed / 1e9:.1f} GB free in {cache}; there is "
+                f"{free / 1e9:.1f} GB"
+            )
 
     @cached_property
     def model_fingerprint(self) -> str:
-        """Local folders by their files' names, sizes and times; Hub models by their commit."""
+        """Local folders by the names, sizes and times of the files a run reads; Hub models by their
+        commit. Nothing else, so editing a README or moving the folder rebuilds nothing."""
         folder = self.model_folder
-        if source.is_local(self.settings.model.source):
-            listed = [p for p in folder.iterdir() if p.is_file() and not p.name.startswith(".")]
-            files = sorted((p.name, p.stat().st_size, p.stat().st_mtime_ns) for p in listed)
-            return _digest({"folder": str(folder.resolve()), "files": files})
-        return _digest({"repo": self.settings.model.source, "commit": folder.name})
+        if not source.is_local(self.settings.model.source):
+            return _digest({"repo": self.settings.model.source, "commit": folder.name})
+        read = [
+            p
+            for p in folder.iterdir()
+            if p.is_file()
+            and not p.name.startswith(".")
+            and any(fnmatch(p.name, pattern) for pattern in self.model_files)
+        ]
+        return _digest(sorted((p.name, p.stat().st_size, p.stat().st_mtime_ns) for p in read))
 
     @cached_property
     def context_limit(self) -> int | None:
@@ -179,13 +222,43 @@ class Run:
     @cached_property
     def shape(self) -> tuple[int, int, str, list[targets.Writer]]:
         model_config = source.read_config(str(self.model_folder))
-        text = source.text_config(model_config)
-        hidden, layers = text["hidden_size"], text["num_hidden_layers"]
+        sizes = source.sizes(model_config)
         arch = targets.gguf_architecture(model_config)
+        if sizes is None or arch is None:
+            raise RunError("the model no longer passes candor inspect; run it to see why")
+        hidden, layers = sizes
         found = targets.find_targets(source.tensor_shapes(str(self.model_folder)), hidden, layers)
-        if arch is None or not found.ok or found.experts or found.quantized:
+        if not found.ok or found.experts or found.quantized:
             raise RunError("the model no longer passes candor inspect; run it to see why")
         return hidden, layers, arch, found.writers
+
+    def _device(self) -> tuple[str, torch.dtype]:
+        device, dtype = residuals.device_and_dtype()
+        if device == "cpu" and shutil.which("nvidia-smi"):
+            raise RunError(
+                f"torch {torch.__version__} can't use this machine's NVIDIA GPU, likely because its driver "
+                f"is older than CUDA {torch.version.cuda} needs; reading residuals on the CPU instead "
+                "would be very slow"
+            )
+        return device, dtype
+
+    def check_memory(self) -> None:
+        """Stop before anything is downloaded or converted if this machine's GPU can't hold the model
+        for reading residuals: its weights in 16 bits, and a tenth more for a batch's activations."""
+        residuals.protect_memory()
+        device, _ = self._device()
+        budget = residuals.memory_budget(device)
+        if budget is None:
+            return
+        model = self.settings.model
+        where = str(self.model_folder) if source.is_local(model.source) else model.source
+        weights = sum(math.prod(shape) for shape in source.tensor_shapes(where, model.revision).values())
+        needed = 2 * weights * 1.1
+        if needed > budget:
+            raise RunError(
+                f"reading residuals needs about {needed / 1e9:.1f} GB of GPU memory and this machine "
+                f"allows {budget / 1e9:.1f} GB; run it on a pod"
+            )
 
     # GGUF
 
@@ -291,7 +364,7 @@ class Run:
         texts = {}
         for name in PROMPT_SETS:
             spec = getattr(settings.prompts, name)
-            texts[name] = PromptSet(spec.dataset, spec.split, spec.column).load()
+            texts[name] = load_prompts(spec)
             if not texts[name]:
                 raise RunError(f"the {name} prompt set ({spec.dataset}, {spec.split}) is empty")
         self.report("Tokenizing prompts with llama-server")
@@ -331,29 +404,33 @@ class Run:
         """One refusal direction per residual index, from transformers fed the run's exact prompt ids."""
         ids = self.prompt_ids()
         path = self.path("directions.pt")
-        inputs = {"ids": _digest([ids["harmful"], ids["harmless"]]), "model": self.model_fingerprint}
+        trusted = self.settings.model.trust_remote_code
+        inputs = {
+            "ids": _digest([ids["harmful"], ids["harmless"]]),
+            "model": self.model_fingerprint,
+            "remote_code": trusted,
+        }
         self.inputs["directions"] = _digest(inputs)
         if self._fresh(path, inputs):
             return torch.load(path)
-        reference.protect_memory()
-        device, dtype = reference.device_and_dtype()
+        residuals.protect_memory()
+        device, dtype = self._device()
         self.report(f"Reading residuals on {device}")
         from transformers import AutoModelForCausalLM
 
-        model = AutoModelForCausalLM.from_pretrained(self.model_folder, dtype=dtype)
-        model.to(device).eval()  # pyright: ignore[reportArgumentType]
-        pad_id = reference.pad_token_id_for(self.model_folder)
+        model = AutoModelForCausalLM.from_pretrained(
+            self.model_folder, dtype=dtype, device_map=device, trust_remote_code=trusted
+        ).eval()
+        pad_id = residuals.pad_token_id_for(self.model_folder, trusted)
         harmful = residuals.last_token_residuals(model, ids["harmful"], pad_id)
         harmless = residuals.last_token_residuals(model, ids["harmless"], pad_id)
         del model
-        reference.free_memory(device)
+        residuals.free_memory(device)
         if not (torch.isfinite(harmful).all() and torch.isfinite(harmless).all()):
             raise RunError(
                 f"the model's activations overflowed in {dtype} on {device}; run on a GPU in bfloat16"
             )
         found = directions.difference_of_means(harmful, harmless)
-        if not torch.isfinite(found).all():
-            raise RunError("some refusal directions aren't finite numbers")
         partial = path.with_name("directions.pt.building")
         torch.save(found, partial)
         self._commit(partial, path, inputs)
@@ -411,15 +488,15 @@ class Run:
         return made
 
     def prepare(self) -> dict[str, int]:
-        """Every stage up to the search. Results still matching their settings are reused."""
+        """Every stage up to the search. The last stage pulls in the ones before it, and results still
+        matching their settings are reused."""
         with self.locked():
-            ids = self.prompt_ids()
-            found = self.directions()
+            self.check_memory()
             made = self.adapters()
+            ids = json.loads(self.path("prompts.json").read_text())
         return {
             "edit targets": len(next(iter(made.values()))),
             "direction sets": len(made),
             "adapters": sum(map(len, made.values())),
             "prompts": sum(map(len, ids.values())),
-            "directions": len(found),
         }
