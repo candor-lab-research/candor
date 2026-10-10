@@ -6,7 +6,7 @@ from candor.config import ConfigError, Model, RunConfig
 
 
 def settings(**model) -> RunConfig:
-    return RunConfig(model=Model(**({"source": "org/model"} | model)))
+    return RunConfig(model=Model.model_validate({"source": "org/model"} | model))
 
 
 def write_text(tmp_path, text: str):
@@ -25,7 +25,8 @@ def write_text(tmp_path, text: str):
     ],
 )
 def test_settings_read_back_exactly_as_written(tmp_path, source):
-    written = settings(source=source, revision="abc123", date="10 Oct 2026")
+    written = settings(source=source, revision="abc123", date="10 Oct 2026", trust_remote_code=True)
+    written.prompts.harmful = config.PromptSet(dataset=source, split="train[:4]", revision="def456")
     config.write(tmp_path, "run", written, "A header\nover two lines")
     assert config.load(tmp_path / "run") == written
 
@@ -76,10 +77,10 @@ def test_a_missing_setting_is_an_error_not_a_default(tmp_path, line, name):
 @pytest.mark.parametrize(
     ("old", "new", "message"),
     [
-        ("strength = [0.8, 3.0]", "strength = [3.0, 0.8]", "first number"),
-        ("strength = [0.8, 3.0]", "strength = [0.0, 3.0]", "above 0"),
-        ("strength = [0.8, 3.0]", "strength = [0.8, inf]", "finite"),
-        ("strength = [0.8, 3.0]", 'strength = ["1", "3"]', "valid number"),
+        ("strength = [0.8, 1.5]", "strength = [1.5, 0.8]", "first number"),
+        ("strength = [0.8, 1.5]", "strength = [0.0, 1.5]", "above 0"),
+        ("strength = [0.8, 1.5]", "strength = [0.8, inf]", "finite"),
+        ("strength = [0.8, 1.5]", 'strength = ["1", "3"]', "valid number"),
         ("reach = [0.01, 0.6]", "reach = [0.01, 1.6]", "between 0 and 1"),
         ("trials = 200", "trials = true", "valid integer"),
         ("trials = 200", 'trials = "200"', "valid integer"),
@@ -89,6 +90,11 @@ def test_a_missing_setting_is_an_error_not_a_default(tmp_path, line, name):
         ('quantization = "Q4_K_M"', 'quantization = "Q3"', "must be one of"),
         ('kv_cache = "f16"', 'kv_cache = "fp16"', "must be one of"),
         ("startup_trials = 60", "startup_trials = 600", "startup_trials"),
+        ("answer_tokens = 100", "answer_tokens = true", "valid integer"),
+        ("kl_tokens = 20", 'kl_tokens = "20"', "valid integer"),
+        ('row_norm = "pre"', 'row_norm = "full"', '"none" or "pre"'),
+        ("trust_remote_code = false", 'trust_remote_code = "no"', "valid boolean"),
+        ('split = "train[:400]"', "split = 400", "valid string"),
     ],
 )
 def test_bad_values_are_explained(tmp_path, old, new, message):
@@ -99,7 +105,7 @@ def test_bad_values_are_explained(tmp_path, old, new, message):
 
 
 def test_whole_numbers_in_ranges_are_fine(tmp_path):
-    text = config.render(settings(), "h").replace("strength = [0.8, 3.0]", "strength = [1, 3]")
+    text = config.render(settings(), "h").replace("strength = [0.8, 1.5]", "strength = [1, 3]")
     assert config.load(write_text(tmp_path, text)).search.strength == (1.0, 3.0)
 
 
@@ -130,3 +136,25 @@ def test_run_names_must_be_one_plain_folder(tmp_path, name):
 def test_extra_files_are_written_with_the_settings(tmp_path):
     config.write(tmp_path, "run", settings(), "h", {"inspect.json": "[]"})
     assert (tmp_path / "run" / "inspect.json").read_text() == "[]"
+
+
+def test_a_failed_write_leaves_nothing_behind(tmp_path):
+    with pytest.raises(FileNotFoundError):
+        config.write(tmp_path, "run", settings(), "h", {"inspect.json": "[]", "missing/notes.txt": "x"})
+    assert list(tmp_path.iterdir()) == []
+    config.write(tmp_path, "run", settings(), "h")
+
+
+def test_settings_that_dont_read_back_are_never_written(tmp_path, monkeypatch):
+    render = config.render
+    monkeypatch.setattr(config, "render", lambda *args: render(*args).replace("trials = 200", "trials = 201"))
+    with pytest.raises(ConfigError, match="read back"):
+        config.write(tmp_path, "run", settings(), "h")
+    assert list(tmp_path.iterdir()) == []
+
+
+def test_an_unpinned_prompt_set_is_left_floating(tmp_path):
+    rendered = config.render(settings(), "h")
+    unpinned = 'harmful = { dataset = "mlabonne/harmful_behaviors", split = "train[:400]", column = "text" }'
+    assert unpinned in rendered
+    assert config.load(write_text(tmp_path, rendered)).prompts.harmful.revision is None
