@@ -1,29 +1,10 @@
-"""Read weights straight from a Hugging Face model folder, and name them the way GGUF does."""
+"""Read weights straight from a Hugging Face model folder."""
 
 import json
-from dataclasses import dataclass
 from pathlib import Path
 
 from safetensors import safe_open
 from torch import Tensor
-
-
-@dataclass(frozen=True)
-class Target:
-    """A weight matrix that writes into the residual stream, named in both formats."""
-
-    component: str
-    hf: str
-    gguf: str
-
-    def names(self, layer: int) -> tuple[str, str]:
-        return self.hf.format(layer), self.gguf.format(layer)
-
-
-DENSE = (
-    Target("attn", "model.layers.{}.self_attn.o_proj.weight", "blk.{}.attn_output.weight"),
-    Target("mlp", "model.layers.{}.mlp.down_proj.weight", "blk.{}.ffn_down.weight"),
-)
 
 
 class ModelFiles:
