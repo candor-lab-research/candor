@@ -1,3 +1,5 @@
+.claude/
+private/
 .venv/
 __pycache__/
 .pytest_cache/
