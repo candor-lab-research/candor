@@ -131,7 +131,8 @@ class Run:
         if output.exists() and _read_record(record) == expected:
             return True
         if output.exists() or record.exists():
-            self.report(f"Rebuilding {output.relative_to(self.folder)}: what it was built from has changed")
+            why = "what it was built from has changed" if output.exists() else "it is missing"
+            self.report(f"Rebuilding {output.relative_to(self.folder)}: {why}")
         return False
 
     def _commit(self, partial: Path, output: Path, inputs: dict[str, Any]) -> None:

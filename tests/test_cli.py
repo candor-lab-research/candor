@@ -10,6 +10,7 @@ from types import SimpleNamespace
 import pytest
 import torch
 from safetensors.torch import save_file
+from transformers.utils import logging as transformers_logging
 from typer.testing import CliRunner
 
 from candor import cli, config
@@ -325,3 +326,11 @@ def test_kill_or_a_closed_terminal_stops_what_the_run_started(tmp_path, number):
             stuck.kill()
             with contextlib.suppress(ProcessLookupError):
                 os.kill(child, signal.SIGKILL)
+
+
+def test_library_progress_bars_stay_out_of_candors_output(tmp_path):
+    try:
+        CliRunner().invoke(app, ["run", str(tmp_path / "missing")])
+        assert not transformers_logging.is_progress_bar_enabled()
+    finally:
+        transformers_logging.enable_progress_bar()

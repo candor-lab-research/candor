@@ -139,6 +139,25 @@ Each step was reviewed independently and every finding fixed; the commit message
   of verifying the fixes: stale results after a settings change, the toolchain's checks, finite
   residuals, over-long prompts, the disk check and flushing to disk on macOS.
 
+### First real run: rude-llama through step 2 (2026-10-10)
+
+`candor init rude --model ~/Desktop/tune/models/rude-llama-bf16`, then `candor run runs/rude`, on the
+18 GB Mac: 122 s in all, every check passed, nothing left running.
+
+| Stage | Time | Result |
+| --- | --- | --- |
+| Convert, check the 56 targets byte for byte | 23 s | `model-F16.gguf`, 6.0 GB (rude-llama is F16 on disk; its transformers-5 tokenizer converted through the staging folder) |
+| Quantise | 28 s | `model-Q4_K_M.gguf`, 1.9 GB |
+| Prompt ids from llama-server, checked against the chat endpoint | 8 s | 1,000 prompts, date pinned |
+| Residuals on MPS, straight onto the GPU | 57 s | 29 directions (the embedding's is zero, since every prompt ends on the same token) |
+| Adapters | 6 s | 15 direction sets x 56 targets = 840 files, 31 MB |
+
+- Running it again reused everything in 3.6 s. Deleting `directions.pt` rebuilt only that stage,
+  and the directions came out bit for bit identical; the adapters were reused.
+- The largest process peaked at 2.9 GB of RAM; the model's 6.4 GB sits in GPU memory.
+- Fixed on the way: transformers' weight-loading progress bar leaked into candor's output, and a
+  deleted result was reported as "what it was built from has changed" rather than missing.
+
 ### Full review (2026-10-10)
 
 Eleven reviewers covered the code, the tests (about 90 mutations), the papers and the plan; an

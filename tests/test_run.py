@@ -172,6 +172,16 @@ def test_direction_sets_follow_the_settings_and_drop_old_ones(current):
     assert sorted(p.name for p in this.path("adapters").iterdir()) == kept
 
 
+def test_a_deleted_result_is_reported_as_missing(current):
+    this, messages = current
+    this.adapters()
+    shutil.rmtree(this.path("adapters", "layer-0"))
+    messages.clear()
+    this.adapters()
+    assert messages.count("Rebuilding adapters/layer-0: it is missing") == 1
+    assert rebuilt(messages) == {"adapters/layer-0"}
+
+
 def test_leftovers_from_a_crash_are_never_trusted(current):
     this, _ = current
     this.adapters()

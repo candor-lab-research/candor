@@ -48,9 +48,11 @@ class CannotInspect(Exception):
 
 @app.callback()
 def main() -> None:
-    # The Hub's progress bars and warnings would only clutter candor's own tables and messages.
+    # The Hub's and transformers' progress bars and warnings would only clutter candor's own tables
+    # and messages.
     disable_progress_bars()
     hub_logging.set_verbosity_error()
+    transformers_logging.disable_progress_bar()
 
 
 @contextmanager
