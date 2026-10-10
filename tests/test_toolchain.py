@@ -1,5 +1,6 @@
 import io
 import os
+import shutil
 import subprocess
 import sys
 import tarfile
@@ -189,12 +190,25 @@ def test_a_server_that_wont_start_is_reported_not_downloaded_again(release, monk
     assert len(downloads) == 1
 
 
-def test_two_archives_holding_the_same_file_are_refused(release, monkeypatch):
+def test_a_file_in_two_archives_must_be_identical(release, monkeypatch):
     add, _, _ = release
-    clash = add("clash.tar.gz", {"other/llama-quantize": "#!/bin/sh\n"})
+    same = add("same.tar.gz", {"other/llama-quantize": "#!/bin/sh\n", "other/libcudart.so.12": "lib"})
+    monkeypatch.setitem(toolchain.ASSETS, "test", [binaries_release(add), same])
+    assert (toolchain.binaries() / "libcudart.so.12").exists()
+    shutil.rmtree(toolchain.cache())
+    clash = add("clash.tar.gz", {"other/llama-quantize": "#!/bin/sh\necho different\n"})
     monkeypatch.setitem(toolchain.ASSETS, "test", [binaries_release(add), clash])
-    with pytest.raises(ToolchainError, match="in two of the release archives"):
+    with pytest.raises(ToolchainError, match="differs between two of the release archives"):
         toolchain.binaries()
+
+
+def test_a_damaged_install_is_fetched_again(release, monkeypatch):
+    add, downloads, _ = release
+    monkeypatch.setitem(toolchain.ASSETS, "test", [binaries_release(add)])
+    folder = toolchain.binaries()
+    (folder / "llama-quantize").unlink()
+    assert (toolchain.binaries() / "llama-quantize").exists()
+    assert len(downloads) == 2
 
 
 def test_a_stray_source_folder_is_replaced_by_a_fresh_clone(converter_source, monkeypatch):

@@ -418,3 +418,18 @@ def test_the_checking_server_is_sized_from_the_checked_prompts(tiny_run, monkeyp
     ids = this.prompt_ids()
     sampled = max(len(p) for prompts in ids.values() for p in prompts[: run.CHECKED_PER_SET])
     assert sizes[-1] == (sampled + 16, 1)
+
+
+@pytest.mark.skipif(not hasattr(run.fcntl, "F_FULLFSYNC"), reason="only macOS has F_FULLFSYNC")
+def test_results_are_fully_flushed_on_macos(tmp_path, monkeypatch):
+    calls = []
+    real = run.fcntl.fcntl
+
+    def recording(descriptor, command, *args):
+        calls.append(command)
+        return real(descriptor, command, *args)
+
+    monkeypatch.setattr(run.fcntl, "fcntl", recording)
+    (tmp_path / "result").write_text("x")
+    run._sync(tmp_path / "result")
+    assert calls.count(run.fcntl.F_FULLFSYNC) >= 2

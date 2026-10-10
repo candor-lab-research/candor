@@ -136,8 +136,16 @@ def _check(folder: Path) -> Path:
         if not (folder / tool).exists():
             raise ToolchainError(f"{folder} has no {tool}")
     if f"build {LLAMA_CPP_RELEASE.removeprefix('b')}," not in _version(folder):
-        raise ToolchainError(f"the llama-server in {folder} isn't llama.cpp {LLAMA_CPP_RELEASE}")
+        raise ToolchainError(
+            f"the llama-server in {folder} isn't llama.cpp {LLAMA_CPP_RELEASE}; delete that folder"
+        )
     return folder
+
+
+def _same(a: Path, b: Path) -> bool:
+    if a.is_symlink() or b.is_symlink():
+        return a.is_symlink() and b.is_symlink() and a.readlink() == b.readlink()
+    return a.read_bytes() == b.read_bytes()
 
 
 def _installed(assets: list[Asset]) -> str:
@@ -159,9 +167,12 @@ def _install(target: Path, assets: list[Asset]) -> None:
         for extra in unpacked[1:]:
             for item in sorted(extra.rglob("*")):
                 if item.is_file() or item.is_symlink():
-                    if (home / item.name).exists() or (home / item.name).is_symlink():
-                        raise ToolchainError(f"{item.name} is in two of the release archives")
-                    item.rename(home / item.name)
+                    existing = home / item.name
+                    if existing.exists() or existing.is_symlink():
+                        if not _same(existing, item):
+                            raise ToolchainError(f"{item.name} differs between two of the release archives")
+                        continue
+                    item.rename(existing)
         (home / INSTALLED).write_text(_installed(assets))
         shutil.rmtree(target, ignore_errors=True)
         home.rename(target)
@@ -180,9 +191,13 @@ def binaries() -> Path:
     target = cache() / name / "bin"
     with _locked(f"bin-{name}"):
         marker = target / INSTALLED
-        if not marker.exists() or marker.read_text() != _installed(ASSETS[name]):
+        complete = marker.exists() and all((target / tool).exists() for tool in TOOLS)
+        if not complete or marker.read_text() != _installed(ASSETS[name]):
             _install(target, ASSETS[name])
-        folder = _check(target)
+        try:
+            folder = _check(target)
+        except ToolchainError as error:
+            raise ToolchainError(f"{error}; delete {target} to fetch it again") from None
     if name == "linux-cuda":
         server = str(folder / "llama-server")
         devices = subprocess.run([server, "--list-devices"], capture_output=True, text=True, timeout=120)
