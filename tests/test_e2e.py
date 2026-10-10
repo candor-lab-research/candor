@@ -182,5 +182,6 @@ def test_init_and_run_prepare_every_stage_resume_and_follow_settings(tmp_path):
     assert changed.exit_code == 0, changed.output
     assert "Rebuilding prompts.json" in changed.output
     assert "Rebuilding directions.pt" in changed.output
+    assert "Rebuilding adapters/per-layer" in changed.output
     assert "Converting" not in changed.output
     assert (run_folder / "gguf" / "model-BF16.gguf").stat().st_mtime_ns == stamps[results[0]]
