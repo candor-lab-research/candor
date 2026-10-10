@@ -194,6 +194,18 @@ def test_a_converter_whose_install_failed_is_installed_again(converter_source, m
     assert len(calls.read_text().splitlines()) == 2
 
 
+def test_the_converter_is_installed_again_when_its_pins_change(converter_source, monkeypatch, tmp_path):
+    _, calls = converter_source
+    toolchain.converter()
+    assert f"-c {toolchain.CONSTRAINTS}" in calls.read_text()
+    changed = tmp_path / "constraints.txt"
+    changed.write_text("numpy==2.2.6\n")
+    monkeypatch.setattr(toolchain, "CONSTRAINTS", changed)
+    toolchain.converter()
+    toolchain.converter()
+    assert calls.read_text().count(f"-c {changed}") == 1
+
+
 def test_a_changed_converter_checkout_is_refused(converter_source):
     source, _ = converter_source
     (source / "convert_hf_to_gguf.py").write_text("print('edited')")

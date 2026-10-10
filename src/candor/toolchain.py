@@ -3,8 +3,9 @@ turns a Hugging Face model into GGUF.
 
 Everything is fetched once into ~/.cache/candor (or CANDOR_CACHE). Release archives are checked
 against their sha256, the binaries against their version, and the converter's source against its
-commit and for local changes, so every machine and pod runs exactly the same llama.cpp. Setup holds
-a lock, so two runs starting at once can't trip over each other.
+commit and for local changes, and the converter's Python packages are pinned, so every machine and
+pod runs exactly the same llama.cpp. Setup holds a lock, so two runs starting at once can't trip
+over each other.
 """
 
 import fcntl
@@ -29,6 +30,7 @@ SOURCE = "https://github.com/ggml-org/llama.cpp"
 TIMEOUT = 60
 TOOLS = ("llama-server", "llama-quantize")
 INSTALLED = ".candor-assets"
+CONSTRAINTS = Path(__file__).parent / "data" / "converter-constraints.txt"
 
 
 @dataclass(frozen=True)
@@ -227,8 +229,9 @@ def converter() -> tuple[Path, Path]:
     """The Python that runs llama.cpp's converter, and the converter script, set up on first use.
 
     The converter needs transformers 4, which can't share an environment with candor's
-    transformers 5, so it gets its own, built by uv from llama.cpp's own requirements file. The
-    environment counts as ready only once its install has finished.
+    transformers 5, so it gets its own, built by uv from llama.cpp's own requirements file at the
+    versions in CONSTRAINTS. The environment counts as ready only once its install has finished,
+    and is built again when CONSTRAINTS changes.
     """
     root = cache()
     source, venv = root / "source", root / "converter-venv"
@@ -246,14 +249,16 @@ def converter() -> tuple[Path, Path]:
             raise ToolchainError(f"{source} isn't llama.cpp {LLAMA_CPP_RELEASE}; delete it to fetch again")
         if _git(source, "status", "--porcelain"):
             raise ToolchainError(f"{source} has local changes; delete it to fetch a clean copy")
-        if not installed.exists():
+        pinned = sha256(CONSTRAINTS)
+        if not installed.exists() or installed.read_text() != pinned:
             uv = shutil.which("uv")
             if uv is None:
                 raise ToolchainError("setting up llama.cpp's converter needs uv: https://docs.astral.sh/uv/")
             requirements = source / "requirements" / "requirements-convert_hf_to_gguf.txt"
             shutil.rmtree(venv, ignore_errors=True)
             subprocess.run([uv, "venv", "--quiet", "--python", "3.12", str(venv)], check=True)
-            install = [uv, "pip", "install", "--quiet", "--python", str(python), "-r", str(requirements)]
+            install = [uv, "pip", "install", "--quiet", "--python", str(python),
+                       "-r", str(requirements), "-c", str(CONSTRAINTS)]  # fmt: skip
             subprocess.run(install, check=True)
-            installed.touch()
+            installed.write_text(pinned)
     return python, source / "convert_hf_to_gguf.py"
