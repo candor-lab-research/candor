@@ -14,6 +14,7 @@ from transformers import AutoTokenizer
 
 from . import checks, config, source, targets
 from .engine import LLAMA_CPP_RELEASE
+from .run import Run, RunError
 
 app = typer.Typer(
     no_args_is_help=True,
@@ -273,3 +274,26 @@ def init(
             "[yellow]Bionic can't read this model's chat template.[/] candor still works, but test the "
             "result in Bionic only after pasting in a fixed template."
         )
+
+
+@app.command()
+def run(folder: Annotated[Path, typer.Argument(help="A run folder made by candor init.")]) -> None:
+    """Carry a run through every stage built so far. Finished stages are reused, so it can resume."""
+    console = Console()
+    folder = folder.expanduser()
+    try:
+        current = Run.open(folder, report=lambda message: console.print(f"[dim]{message}[/]"))
+        done = current.prepare()
+    except config.ConfigError as error:
+        console.print(f"[red]{error}[/]")
+        raise typer.Exit(COULD_NOT_INSPECT) from None
+    except RunError as error:
+        console.print(f"[red]The run stopped:[/] {error}")
+        raise typer.Exit(FAILED_CHECK) from None
+    except Exception as error:
+        console.print(f"[red]The run stopped on an unexpected error:[/] {type(error).__name__}: {error}")
+        raise typer.Exit(COULD_NOT_INSPECT) from None
+    summary = ", ".join(f"{count} {what}" for what, count in done.items())
+    console.print(
+        f"[green]Prepared {folder}:[/] {summary}. The search over edits is the next stage to build."
+    )

@@ -43,7 +43,7 @@ def random_weights(seed: int = 0) -> dict[str, np.ndarray]:
     return weights
 
 
-def write_model(path: Path, weights: dict[str, np.ndarray]) -> None:
+def write_model(path: Path, weights: dict[str, np.ndarray], chat_template: str | None = None) -> None:
     writer = gguf.GGUFWriter(path, "llama")
     writer.add_context_length(256)
     writer.add_embedding_length(HIDDEN)
@@ -61,6 +61,8 @@ def write_model(path: Path, weights: dict[str, np.ndarray]) -> None:
     writer.add_token_types(TYPES)
     writer.add_bos_token_id(1)
     writer.add_eos_token_id(2)
+    if chat_template:
+        writer.add_chat_template(chat_template)
     for name, tensor in weights.items():
         writer.add_tensor(name, tensor)
     writer.write_header_to_file()

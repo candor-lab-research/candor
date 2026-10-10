@@ -103,6 +103,21 @@ class Prompts(Section):
     )
 
 
+class Edit(Section):
+    row_norm: str = Field(
+        default="pre",
+        description='How the edit treats each weight row\'s length: "none" removes the direction as is; '
+        '"pre" computes the edit on rows of length 1 and scales them back, as heretic does on the Mac.',
+    )
+
+    @field_validator("row_norm")
+    @classmethod
+    def _known_row_norm(cls, value: str) -> str:
+        if value not in {"none", "pre"}:
+            raise ValueError('must be "none" or "pre"')
+        return value
+
+
 class Search(Section):
     trials: StrictInt = Field(default=200, ge=1, description="How many edits to try.")
     startup_trials: StrictInt = Field(
@@ -166,6 +181,7 @@ class RunConfig(Section):
         description="How you actually run the model, so trials are scored that way.",
     )
     prompts: Prompts = Field(default_factory=Prompts, description="Where the prompts come from.")
+    edit: Edit = Field(default_factory=Edit, description="The weight edit itself.")
     search: Search = Field(default_factory=Search, description="The search over edits.")
 
 

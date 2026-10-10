@@ -63,3 +63,21 @@ def test_chat_ids_match_real_chat_requests_and_transformers(converted):
     assert ids == [
         tokenizer.apply_chat_template(c, add_generation_prompt=True, return_dict=False) for c in CHATS
     ]
+
+
+def test_init_and_run_prepare_every_stage_and_resume(tmp_path):
+    from typer.testing import CliRunner
+
+    from candor.cli import app
+
+    runner = CliRunner(env={"COLUMNS": "250"})
+    created = runner.invoke(app, ["init", "smol", "--model", MODEL, "--runs", str(tmp_path)])
+    assert created.exit_code == 0, created.output
+    first = runner.invoke(app, ["run", str(tmp_path / "smol")])
+    assert first.exit_code == 0, first.output
+    assert "60 edit targets" in first.output and "1000 prompts" in first.output
+    stamp = (tmp_path / "smol" / "directions.pt").stat().st_mtime_ns
+    again = runner.invoke(app, ["run", str(tmp_path / "smol")])
+    assert again.exit_code == 0, again.output
+    assert "Converting" not in again.output and "Reading residuals" not in again.output
+    assert (tmp_path / "smol" / "directions.pt").stat().st_mtime_ns == stamp

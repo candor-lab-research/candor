@@ -1,5 +1,9 @@
 """Plain transformers versions of what the engine measures, used to check the engine."""
 
+import gc
+import os
+from pathlib import Path
+
 import torch
 import torch.nn.functional as F
 from torch import Tensor
@@ -15,6 +19,28 @@ def device_and_dtype() -> tuple[str, torch.dtype]:
     if torch.backends.mps.is_available():
         return "mps", torch.float16
     return "cpu", torch.float32
+
+
+def protect_memory() -> None:
+    """Defaults that stop PyTorch on an Apple GPU taking more memory than the machine has, which
+    freezes it, and a loader deadlock on Metal. Must run before the first model is loaded."""
+    os.environ.setdefault("PYTORCH_MPS_HIGH_WATERMARK_RATIO", "0.7")
+    os.environ.setdefault("PYTORCH_MPS_LOW_WATERMARK_RATIO", "0.6")
+    os.environ.setdefault("HF_DEACTIVATE_ASYNC_LOAD", "1")
+
+
+def free_memory(device: str) -> None:
+    gc.collect()
+    if device == "mps":
+        torch.mps.empty_cache()
+    elif device == "cuda":
+        torch.cuda.empty_cache()
+
+
+def pad_token_id_for(model_folder: Path) -> int:
+    from transformers import AutoTokenizer
+
+    return pad_token_id(AutoTokenizer.from_pretrained(model_folder))
 
 
 def pad_token_id(tokenizer: PreTrainedTokenizerBase) -> int:
