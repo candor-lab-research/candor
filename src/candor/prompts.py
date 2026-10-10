@@ -31,16 +31,25 @@ def encode(
     system: str = SYSTEM_PROMPT,
     prefix: str = "",
     add_special_tokens: bool = False,
+    template_kwargs: dict | None = None,
 ) -> list[list[int]]:
     """Token ids for each prompt, up to the point where the model starts answering.
 
     The chat template already writes the special tokens the model expects. add_special_tokens=True
     lets the tokenizer add its own as well, which is what heretic does: for Llama 3 that means two
     begin-of-text tokens. It exists only to reproduce heretic's numbers.
+
+    template_kwargs go to the chat template, e.g. {"date_string": "09 Oct 2026"} for templates that
+    otherwise write today's date into every prompt.
     """
     encoded = []
     for prompt in prompts:
         chat = [{"role": "system", "content": system}, {"role": "user", "content": prompt}]
-        text = cast(str, tokenizer.apply_chat_template(chat, add_generation_prompt=True, tokenize=False))
+        text = cast(
+            str,
+            tokenizer.apply_chat_template(
+                chat, add_generation_prompt=True, tokenize=False, **(template_kwargs or {})
+            ),
+        )
         encoded.append(tokenizer(text + prefix, add_special_tokens=add_special_tokens)["input_ids"])
     return encoded

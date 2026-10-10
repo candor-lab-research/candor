@@ -32,14 +32,6 @@ from candor.weights import DENSE
 RUNS = Path(__file__).resolve().parent.parent / "runs"
 
 
-def device_and_dtype() -> tuple[str, torch.dtype]:
-    if torch.cuda.is_available():
-        return "cuda", torch.bfloat16
-    if torch.backends.mps.is_available():
-        return "mps", torch.float16
-    return "cpu", torch.float32
-
-
 def load_prompts(tokenizer: PreTrainedTokenizerBase, settings: dict, name: str, heretic_tokens: bool):
     spec = settings[name]
     if spec["prefix"] or spec["suffix"]:
@@ -82,7 +74,7 @@ def main() -> None:
     def elapsed() -> str:
         return f"{time.perf_counter() - started:.0f} s"
 
-    device, dtype = device_and_dtype()
+    device, dtype = reference.device_and_dtype()
     tokenizer = AutoTokenizer.from_pretrained(model_folder)
     model: PreTrainedModel = AutoModelForCausalLM.from_pretrained(model_folder, dtype=dtype)
     model.to(device).eval()  # pyright: ignore[reportArgumentType]

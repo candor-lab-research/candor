@@ -29,20 +29,29 @@ Numbers: `runs/phase0/results.json` (not in git). Pod: A40, about 23 minutes, ab
 
 ## Phase 1: core maths vs heretic (in progress)
 
-Done 2026-10-10: `spikes/reproduce_trial.py` rebuilds a heretic trial from its journal with
-candor's own direction finding and edit, then scores it the way heretic does. rude-llama Trial 170,
-on the Mac (MPS, float16, about 3 minutes):
+Done 2026-10-10:
 
-| | heretic | candor, heretic's tokens | candor |
-| --- | --- | --- | --- |
-| Begin-of-text tokens per prompt | 2 | 2 | 1 |
-| Refusals, original | 96 | 97 | 91 |
-| Refusals, edited | 2 | 2 | 2 |
-| KL | 0.026 | 0.030 | 0.044 |
+- `candor.heretic` reads heretic's Optuna journals; `spikes/reproduce_trial.py` rebuilds a trial
+  with candor's own direction finding and edit. On rude-llama Trial 170 it gets heretic's 2/100.
+- Heretic tokenizes the rendered chat with the tokenizer's own special tokens added, so Llama 3
+  and K2-Horizon get two begin-of-text tokens. Proved by running heretic's own `Model.generate`
+  with a recording stub: its input is exactly one extra token in front of the canonical input.
+  transformers, mlx-lm, Bionic's MLX engine (`model_kit.py`) and llama.cpp (`chat.cpp`) all send
+  one. Qwen3.5 has none, so it is unaffected.
+- `spikes/compare_models.py` scored the saved heretic model (`models/local/rude-llama-heretic`)
+  against the original with heretic's test prompts:
 
-candor reproduces heretic once it is fed the same tokens. Heretic lets the tokenizer add its own
-begin-of-text token in front of the chat template's, so Llama 3 sees two. With the single token
-it's really run with, Trial 170's KL is 0.044.
+| Input | Date in prompt | Batch | Refusals, original | Refusals, edited | KL |
+| --- | --- | --- | --- | --- | --- |
+| heretic's (2 tokens) | 09 Oct 2026 | 64 | 96 | 2 | 0.0260 |
+| as apps send it (1 token) | 09 Oct 2026 | 64 | 89 | 3 | 0.0375 |
+| as apps send it (1 token) | 10 Oct 2026 | 32 | 91 | 4 | 0.0384 |
+
+  The first row is exactly heretic's journal, so every difference is explained: the extra token,
+  the date the Llama 3 template writes into each prompt, and batch-size noise of about 1-2
+  refusals. candor's refusal judge and heretic's agreed on all 800 saved answers.
+- `candor.checks` reports both traps for any model: `begin_of_text` (what transformers, llama.cpp
+  and heretic each send) and `writes_the_date`.
 
 Next:
 

@@ -8,6 +8,15 @@ from transformers import PreTrainedModel, PreTrainedTokenizerBase
 from .residuals import left_pad
 
 
+def device_and_dtype() -> tuple[str, torch.dtype]:
+    """The fastest device here, with the dtype that loads reliably on it (float16 on Apple GPUs)."""
+    if torch.cuda.is_available():
+        return "cuda", torch.bfloat16
+    if torch.backends.mps.is_available():
+        return "mps", torch.float16
+    return "cpu", torch.float32
+
+
 def pad_token_id(tokenizer: PreTrainedTokenizerBase) -> int:
     pad = tokenizer.pad_token_id if tokenizer.pad_token_id is not None else tokenizer.eos_token_id
     if not isinstance(pad, int):
