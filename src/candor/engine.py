@@ -7,8 +7,9 @@ import os
 import socket
 import subprocess
 import time
-from collections.abc import Iterable, Mapping
-from concurrent.futures import ThreadPoolExecutor
+from collections.abc import Callable, Iterable, Mapping
+from concurrent.futures import ThreadPoolExecutor, as_completed
+from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
 
@@ -23,6 +24,14 @@ QUICK = httpx.Timeout(30, connect=5)
 
 class ServerError(RuntimeError):
     pass
+
+
+@dataclass(frozen=True)
+class Answer:
+    text: str
+    tokens: int
+    # False when the answer reached its length limit before the model ended it.
+    finished: bool
 
 
 class LlamaServer:
@@ -164,9 +173,25 @@ class LlamaServer:
         body = {**payload, "cache_prompt": False}
         return self._call("POST", "/completion", _answering(payload["n_predict"]), json=body)
 
-    def _complete_all(self, payloads: list[dict[str, Any]]) -> list[dict[str, Any]]:
-        with ThreadPoolExecutor(self.parallel) as pool:
-            return list(pool.map(self._complete, payloads))
+    def _complete_all(
+        self, payloads: list[dict[str, Any]], done: Callable[[], None] | None = None
+    ) -> list[dict[str, Any]]:
+        """Every payload's result, in order. done is called as each one finishes."""
+        results: list[dict[str, Any]] = [{}] * len(payloads)
+        pool = ThreadPoolExecutor(self.parallel)
+        try:
+            futures = {pool.submit(self._complete, payload): i for i, payload in enumerate(payloads)}
+            for future in as_completed(futures):
+                results[futures[future]] = future.result()
+                if done:
+                    done()
+        except BaseException:
+            # A failed request or a signal stops the rest at once, rather than sending every one still
+            # queued before the server can be stopped.
+            pool.shutdown(wait=False, cancel_futures=True)
+            raise
+        pool.shutdown()
+        return results
 
     def lora(self, scales: Mapping[Path, float] | None) -> list[dict[str, float]]:
         """The request's adapter list. Adapters left out run at scale 0, which llama.cpp skips."""
@@ -205,12 +230,16 @@ class LlamaServer:
         return self._call("POST", "/v1/chat/completions", _answering(1), json=body)["usage"]["prompt_tokens"]
 
     def generate(
-        self, prompts: list[list[int]], max_tokens: int, scales: Mapping[Path, float] | None = None
-    ) -> list[str]:
-        """Greedy answers to prompts given as token ids."""
+        self,
+        prompts: list[list[int]],
+        max_tokens: int,
+        scales: Mapping[Path, float] | None = None,
+        done: Callable[[], None] | None = None,
+    ) -> list[Answer]:
+        """Greedy answers to prompts given as token ids. done is called as each one finishes."""
         lora = self.lora(scales)
         payloads = [{"prompt": p, "n_predict": max_tokens, "temperature": 0.0, "lora": lora} for p in prompts]
-        results = self._complete_all(payloads)
+        results = self._complete_all(payloads, done)
         for prompt, result in zip(prompts, results, strict=True):
             # The server also flags an answer that fills its slot exactly, so only a short one counts.
             if result["truncated"] and result["tokens_predicted"] < max_tokens:
@@ -218,10 +247,17 @@ class LlamaServer:
                     f"the server's context cut an answer short: a prompt of {len(prompt)} tokens needs"
                     f" a slot of at least {len(prompt) + max_tokens} tokens"
                 )
-        return [result["content"] for result in results]
+        return [
+            Answer(result["content"], result["tokens_predicted"], result["stop_type"] != "limit")
+            for result in results
+        ]
 
     def top_logprobs(
-        self, prompts: list[list[int]], k: int, scales: Mapping[Path, float] | None = None
+        self,
+        prompts: list[list[int]],
+        k: int,
+        scales: Mapping[Path, float] | None = None,
+        done: Callable[[], None] | None = None,
     ) -> list[dict[int, float]]:
         """The k most likely first answer tokens for each prompt, as {token id: log probability}."""
         lora = self.lora(scales)
@@ -238,7 +274,7 @@ class LlamaServer:
         ]
         return [
             self._first_token(payload, result)
-            for payload, result in zip(payloads, self._complete_all(payloads), strict=True)
+            for payload, result in zip(payloads, self._complete_all(payloads, done), strict=True)
         ]
 
     def _first_token(self, payload: dict[str, Any], result: dict[str, Any]) -> dict[int, float]:

@@ -1,8 +1,12 @@
 """The candor command line."""
 
 import json
+import os
+import shutil
 import signal
-from collections.abc import Iterable, Iterator
+import subprocess
+import traceback
+from collections.abc import Callable, Iterable, Iterator
 from contextlib import contextmanager
 from datetime import date
 from importlib.metadata import version
@@ -13,13 +17,22 @@ import typer
 from huggingface_hub import HfApi
 from huggingface_hub.utils import disable_progress_bars
 from huggingface_hub.utils import logging as hub_logging
+from rich import box
 from rich.console import Console
 from rich.markup import escape
+from rich.progress import (
+    BarColumn,
+    MofNCompleteColumn,
+    Progress,
+    TextColumn,
+    TimeElapsedColumn,
+    TimeRemainingColumn,
+)
 from rich.table import Table
 from transformers import AutoTokenizer
 from transformers.utils import logging as transformers_logging
 
-from . import checks, config, source, targets
+from . import checks, config, measure, source, targets
 from .convert import ConversionError
 from .engine import LLAMA_CPP_RELEASE, ServerError
 from .run import PROMPT_SETS, Run, RunError
@@ -306,7 +319,11 @@ def init(
         path = config.write(
             runs,
             name,
-            config.RunConfig(model=model_settings, prompts=_pinned(config.Prompts(), PROMPT_SETS)),
+            config.RunConfig(
+                model=model_settings,
+                prompts=_pinned(config.Prompts(), PROMPT_SETS),
+                measure=config.Measure(judge_revision=_revision(config.Measure().judge)),
+            ),
             header,
             {"inspect.json": json.dumps(record, indent=1)},
         )
@@ -340,6 +357,8 @@ def upgrade(folder: Annotated[Path, typer.Argument(help="A run folder made by ca
             return
         new_sets = [name for name in PROMPT_SETS if {"prompts", f"prompts.{name}"} & set(added)]
         settings.prompts = _pinned(settings.prompts, new_sets)
+        if {"measure", "measure.judge"} & set(added) and settings.measure.judge_revision is None:
+            settings.measure.judge_revision = _revision(settings.measure.judge)
         header += f"\nUpgraded {date.today()} by candor {version('candor')}: added {', '.join(added)}."
         with Run(folder, settings).locked():
             config.rewrite(folder, settings, header)
@@ -401,4 +420,162 @@ def run(folder: Annotated[Path, typer.Argument(help="A run folder made by candor
     console.print(
         f"[green]Prepared {escape(str(folder))}:[/] {summary}. The search over edits is the next stage to "
         "build."
+    )
+
+
+@contextmanager
+def _awake() -> Iterator[None]:
+    """Keep a Mac awake while candor works. caffeinate stops by itself when candor exits."""
+    caffeinate = shutil.which("caffeinate")
+    process = subprocess.Popen([caffeinate, "-i", "-w", str(os.getpid())]) if caffeinate else None
+    try:
+        yield
+    finally:
+        if process:
+            process.terminate()
+
+
+def _where(error: Exception) -> str:
+    """An unexpected error by its type and the line that raised it. Its message could quote a prompt
+    or an answer, so it is never shown."""
+    frame = traceback.extract_tb(error.__traceback__)[-1]
+    return f"{type(error).__name__} at {Path(frame.filename).name}:{frame.lineno}"
+
+
+def _measurement_name(trial: int | None, slots: int, limit: int | None) -> str:
+    name = "base" if trial is None else f"heretic-{trial}"
+    if slots != measure.DEFAULT_SLOTS:
+        name += f"-slots-{slots}"
+    return name + (f"-first-{limit}" if limit else "")
+
+
+def _duration(seconds: float) -> str:
+    minutes = round(seconds / 60)
+    return f"{minutes // 60} h {minutes % 60} min" if minutes >= 60 else f"{max(minutes, 1)} min"
+
+
+@app.command("measure")
+def measure_command(
+    folder: Annotated[Path, typer.Argument(help="A run folder made by candor init.")],
+    heretic: Annotated[
+        Path | None,
+        typer.Option(help="A heretic study's journal (.jsonl), to measure one of its trials."),
+    ] = None,
+    trial: Annotated[int | None, typer.Option(help="The heretic trial, by the number heretic shows.")] = None,
+    slots: Annotated[
+        int,
+        typer.Option(
+            min=1,
+            help="How many answers llama-server works on at once. Results can shift slightly with it, so "
+            "measuring the same edit with two different numbers shows how much is noise.",
+        ),
+    ] = measure.DEFAULT_SLOTS,
+    limit: Annotated[
+        int | None,
+        typer.Option(min=1, help="Only the first N prompts of each set, to try the measurement and time it."),
+    ] = None,
+    name: Annotated[
+        str | None,
+        typer.Option(
+            help="The measurement's name. By default base or heretic-TRIAL, with -slots-N and -first-N "
+            "added when those are set."
+        ),
+    ] = None,
+) -> None:
+    """Measure the unedited model, or a heretic trial rebuilt with this run's directions, on the prompts
+    the search never sees and on maths. Answers go only to the run's private folder; this shows counts.
+    A stopped measurement carries on where it stopped."""
+    console = Console()
+    folder = folder.expanduser()
+    if (heretic is None) != (trial is None):
+        raise typer.BadParameter("give --heretic and --trial together", param_hint="--trial")
+    name = name or _measurement_name(trial, slots, limit)
+    try:
+        config.check_run_name(name)
+    except config.ConfigError as error:
+        raise typer.BadParameter(str(error), param_hint="--name") from None
+
+    def report(message: str) -> None:
+        console.print(f"[dim]{escape(message)}[/]")
+
+    columns = (
+        TextColumn("{task.description}"),
+        BarColumn(bar_width=20),
+        MofNCompleteColumn(),
+        TimeElapsedColumn(),
+        TextColumn("left"),
+        TimeRemainingColumn(),
+    )
+    try:
+        with _stopped_by_signals(), _awake(), Progress(*columns, console=console) as bars:
+
+            def progress(description: str, total: int) -> Callable[[], None]:
+                task = bars.add_task(description, total=total)
+                return lambda: bars.advance(task)
+
+            run = Run.open(folder, report)
+            edit = None
+            if heretic is not None and trial is not None:
+                edit = measure.heretic_trial(heretic.expanduser(), trial, run.settings.edit.row_norm)
+            measurement = measure.Measurement(run, edit, name, slots, limit, progress)
+            results = measurement.measure()
+    except config.ConfigError as error:
+        console.print(f"[red]{escape(str(error))}[/]")
+        raise typer.Exit(COULD_NOT_INSPECT) from None
+    except (RunError, ToolchainError, ConversionError, ServerError) as error:
+        console.print(f"[red]The measurement stopped:[/] {escape(str(error))}")
+        raise typer.Exit(FAILED_CHECK) from None
+    except Exception as error:
+        console.print(f"[red]The measurement stopped on an unexpected error:[/] {escape(_where(error))}")
+        raise typer.Exit(COULD_NOT_INSPECT) from None
+    table = Table(title=f"candor measure: {name}", title_justify="left", box=box.SIMPLE_HEAD)
+    table.add_column("")
+    table.add_column("Result", justify="right")
+    for row in measure.summary(results):
+        table.add_row(*map(escape, row))
+    console.print(table)
+    console.print(f"Numbers in {escape(str(measurement.folder))}; answers only in the run's private folder.")
+    if limit:
+        seconds = sum(
+            measure.seconds(results[s]) * measurement.sizes[s] / len(results[s]["finished"])
+            for s in measure.SETS
+        )
+        console.print(
+            f"Measuring every prompt would take about {_duration(seconds)} at this speed. Edits that "
+            "refuse less give longer answers, so allow more for them."
+        )
+
+
+@app.command()
+def compare(
+    folder: Annotated[Path, typer.Argument(help="A run folder made by candor init.")],
+    first: Annotated[str, typer.Argument(help="A measurement's name, such as base.")],
+    second: Annotated[str, typer.Argument(help="Another measurement's name, such as heretic-170.")],
+) -> None:
+    """Compare two measurements prompt by prompt: each count, how many prompts changed each way, and how
+    likely so uneven a change would be by chance (McNemar)."""
+    console = Console()
+    try:
+        run = Run.open(folder.expanduser())
+        rows = measure.compare(measure.load(run, first), measure.load(run, second))
+    except config.ConfigError as error:
+        console.print(f"[red]{escape(str(error))}[/]")
+        raise typer.Exit(COULD_NOT_INSPECT) from None
+    except RunError as error:
+        console.print(f"[red]{escape(str(error))}[/]")
+        raise typer.Exit(FAILED_CHECK) from None
+    except Exception as error:
+        console.print(f"[red]candor couldn't compare them:[/] {escape(_where(error))}")
+        raise typer.Exit(COULD_NOT_INSPECT) from None
+    console.print(f"candor compare\n  A: {escape(first)}\n  B: {escape(second)}")
+    table = Table(box=box.SIMPLE_HEAD)
+    for heading in ["", "A", "B", "Change", "Only A/B", "p"]:
+        table.add_column(heading, justify="left" if not heading else "right")
+    for row in rows:
+        table.add_row(*map(escape, row))
+    console.print(table)
+    console.print(
+        "Harmful and Harmless are the held-out sets. Only A/B counts the prompts where just one of them "
+        "says yes, and p is how likely a split that uneven would be if neither were really better. "
+        "Two measurements of the same edit with different --slots show what noise alone does."
     )

@@ -11,6 +11,7 @@ import shutil
 import signal
 import socket
 import subprocess
+import time
 from pathlib import Path
 
 import pytest
@@ -172,7 +173,8 @@ def test_an_answer_cut_short_by_the_context_is_refused(files):
     prompt = PROMPTS[1]  # the tiny model never ends this one, so it runs until the slot is full
     with server(folder, "base.gguf") as s:
         room = s.client.get("/props").json()["default_generation_settings"]["n_ctx"] - len(prompt)
-        assert len(s.generate([prompt], room)) == 1
+        [answer] = s.generate([prompt], room)
+        assert not answer.finished and answer.tokens == room
         with pytest.raises(ServerError, match=f"a slot of at least {len(prompt) + room + 1} tokens"):
             s.generate([prompt], room + 1)
 
@@ -311,3 +313,33 @@ def test_chat_ids_are_what_a_real_chat_request_uses(files):
     with server(folder, "base.gguf") as s:
         ids = s.chat_ids(chats, {})
         assert [len(i) for i in ids] == [s.chat_prompt_length(chat, {}) for chat in chats]
+
+
+def test_each_answer_is_reported_as_it_finishes(files):
+    folder, _, _ = files
+    finished = []
+    with server(folder, "base.gguf") as s:
+        answers = s.generate(PROMPTS, 4, done=lambda: finished.append(1))
+        s.top_logprobs(PROMPTS, 5, done=lambda: finished.append(2))
+    assert finished == [1] * len(PROMPTS) + [2] * len(PROMPTS)
+    assert all(a.tokens <= 4 for a in answers)
+    assert all(a.finished == (a.tokens < 4) for a in answers)
+
+
+def test_a_failure_stops_the_requests_still_queued(monkeypatch):
+    s = LlamaServer(LLAMA_SERVER, Path("model.gguf"), Path("server.log"), parallel=2)
+    sent = []
+
+    def complete(payload):
+        sent.append(payload)
+        time.sleep(0.02)
+        return {}
+
+    def done():
+        raise KeyboardInterrupt
+
+    monkeypatch.setattr(s, "_complete", complete)
+    with pytest.raises(KeyboardInterrupt):
+        s._complete_all([{}] * 40, done)
+    time.sleep(0.1)
+    assert len(sent) <= 4

@@ -55,11 +55,16 @@ def directions_by_seed():
     return state, found
 
 
+def short() -> config.Measure:
+    """Measure settings that fit the tiny test models' 256 tokens of context."""
+    return config.Measure(answer_tokens=16, maths_answer_tokens=16, maths_instruction="Answer.")
+
+
 @pytest.fixture
 def current(tmp_path, model, monkeypatch, directions_by_seed):
     """A run whose directions stage is faked: these tests are about adapters and records."""
     state, found = directions_by_seed
-    settings = config.RunConfig(model=config.Model(source=str(model)))
+    settings = config.RunConfig(model=config.Model(source=str(model)), measure=short())
     folder = tmp_path / "runs" / "test"
     folder.mkdir(parents=True)
     messages = []
@@ -206,7 +211,7 @@ def test_a_result_without_its_record_is_rebuilt(current):
 def test_a_result_is_on_the_disk_before_its_record(current, monkeypatch):
     this, _ = current
     events = []
-    sync, rename = run._sync, Path.rename
+    sync, rename = run.sync, Path.rename
 
     def recording_sync(path):
         events.append(("sync", path.name))
@@ -216,7 +221,7 @@ def test_a_result_is_on_the_disk_before_its_record(current, monkeypatch):
         events.append(("rename", path.name))
         return rename(path, target)
 
-    monkeypatch.setattr(run, "_sync", recording_sync)
+    monkeypatch.setattr(run, "sync", recording_sync)
     monkeypatch.setattr(Path, "rename", recording_rename)
     this.adapters()
     order = [
@@ -656,8 +661,8 @@ def test_prompts_too_long_for_the_model_are_named(tiny_run):
     prompts["value"] = ["w0 " * 100]
     with pytest.raises(
         RunError,
-        match=r"model's 256 tokens \(answers get 100\): 1 harmful, 1 harmless, 1 harmful_test, "
-        "1 harmless_test, 1 harmful_held_out, 1 harmless_held_out$",
+        match=r"model's 256 tokens with their answers: 1 harmful, 1 harmless, 1 harmful_test, "
+        "1 harmless_test, 1 harmful_held_out, 1 harmless_held_out, 1 maths$",
     ):
         this.prompt_ids()
 
@@ -665,14 +670,14 @@ def test_prompts_too_long_for_the_model_are_named(tiny_run):
 def test_prompts_are_read_at_their_pinned_commit(monkeypatch):
     calls = []
 
-    def load_dataset(dataset, split, revision):
-        calls.append((dataset, split, revision))
+    def load_dataset(dataset, subset, split, revision):
+        calls.append((dataset, subset, split, revision))
         return {"text": ["a", "b"]}
 
     monkeypatch.setattr(run, "load_dataset", load_dataset)
-    spec = config.PromptSet(dataset="org/prompts", split="train[:2]", revision="abc123")
+    spec = config.PromptSet(dataset="org/prompts", subset="main", split="train[:2]", revision="abc123")
     assert run.load_prompts(spec) == ["a", "b"]
-    assert calls == [("org/prompts", "train[:2]", "abc123")]
+    assert calls == [("org/prompts", "main", "train[:2]", "abc123")]
 
 
 def test_excluded_rows_are_left_out(monkeypatch):
@@ -705,6 +710,17 @@ def test_a_gated_dataset_says_how_to_get_access(monkeypatch):
     monkeypatch.setattr(run, "load_dataset", gated)
     with pytest.raises(RunError, match=r"accept its terms at https://huggingface\.co/datasets/org/prompts"):
         run.load_prompts(config.PromptSet(dataset="org/prompts", split="train"))
+
+
+def test_each_maths_question_ends_with_the_instruction_and_nothing_else_does(current, monkeypatch):
+    this, _ = current
+    monkeypatch.setattr(run, "load_prompts", lambda spec: [f"question from {spec.dataset} {spec.split}"])
+    this.settings.measure.maths_instruction = "Show your working."
+    texts, _ = this.prompt_texts()
+    assert texts["maths"] == ["question from openai/gsm8k test\n\nShow your working."]
+    others = [text for name in run.PROMPT_SETS if name != "maths" for text in texts[name]]
+    assert len(others) == len(run.PROMPT_SETS) - 1
+    assert not any("working" in text for text in others)
 
 
 def test_held_out_sets_lose_prompts_seen_elsewhere_or_twice():
@@ -774,7 +790,7 @@ def test_changing_only_the_quantisation_keeps_the_prompt_ids(current, fake_conve
     assert this.inputs["base"] == before
 
 
-ANSWERED = ["harmful_test", "harmful_held_out", "harmless_held_out"]
+ANSWERED = ["harmful_test", "harmful_held_out", "harmless_held_out", "maths"]
 
 
 @pytest.mark.parametrize("answered", ANSWERED)
@@ -782,9 +798,11 @@ def test_lengths_count_answers_only_for_the_prompts_the_model_answers(current, a
     this, _ = current
     limit = 256
     this.settings.scoring.answer_tokens = 100
+    this.settings.measure.answer_tokens = 100
+    this.settings.measure.maths_answer_tokens = 100
     fits = {name: [[0] * (150 if name in ANSWERED else 200)] for name in run.PROMPT_SETS}
     this._check_lengths(fits)
-    with pytest.raises(RunError, match=f"model's {limit} tokens .*: 1 {answered}$"):
+    with pytest.raises(RunError, match=f"model's {limit} tokens with their answers: 1 {answered}$"):
         this._check_lengths(fits | {answered: [[0] * 200]})
 
 
@@ -808,7 +826,7 @@ def test_results_are_fully_flushed_on_macos(tmp_path, monkeypatch):
 
     monkeypatch.setattr(run.fcntl, "fcntl", recording)
     (tmp_path / "result").write_text("x")
-    run._sync(tmp_path / "result")
+    run.sync(tmp_path / "result")
     assert calls.count(run.fcntl.F_FULLFSYNC) >= 2
 
 
@@ -825,7 +843,7 @@ def fake_everything_but_the_stages(monkeypatch, tiny: Path) -> None:
 
 
 def pinned(model: Path) -> config.RunConfig:
-    return config.RunConfig(model=config.Model(source=str(model), date="01 Jan 2020"))
+    return config.RunConfig(model=config.Model(source=str(model), date="01 Jan 2020"), measure=short())
 
 
 @pytest.fixture(scope="module")
@@ -881,6 +899,7 @@ def rename_a_target(settings, monkeypatch):
             {"prompts.json", "directions.pt"} | ADAPTERS,
         ),
         (lambda s, m: setattr(s.prompts.harmful, "revision", "abc123"), {"prompts.json"}),
+        (lambda s, m: setattr(s.measure, "maths_instruction", "Show your working."), {"prompts.json"}),
         (lambda s, m: setattr(s.model, "trust_remote_code", True), {"directions.pt"} | ADAPTERS),
         (lambda s, m: setattr(s.edit, "row_norm", "none"), ADAPTERS),
         (rename_a_target, ADAPTERS),
@@ -891,6 +910,7 @@ def rename_a_target(settings, monkeypatch):
         "date",
         "system prompt",
         "prompt commit",
+        "maths instruction",
         "remote code",
         "row norm",
         "targets",

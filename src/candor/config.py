@@ -99,6 +99,8 @@ class Deployment(Section):
 
 class PromptSet(Section):
     dataset: Text
+    # The dataset's configuration, for datasets that have several, such as GSM8K's "main".
+    subset: Text | None = None
     split: Text
     column: Text = "text"
     # The dataset's Hugging Face commit, pinned by init so a rebuild reads the same prompts.
@@ -138,6 +140,11 @@ class Prompts(Section):
         "divergence and checking the judge on answers that aren't refusals. Prompts also in another "
         "set are dropped.",
     )
+    maths: PromptSet = Field(
+        default=PromptSet(dataset="openai/gsm8k", subset="main", split="test", column="question"),
+        description="Maths questions, for checking that a finished edit keeps the model's reasoning. "
+        "Each needs an answer column ending in '#### ' and the number, as GSM8K's does.",
+    )
 
 
 class Edit(Section):
@@ -166,6 +173,35 @@ class Scoring(Section):
         le=1000,
         description="How many of the most likely first tokens KL divergence is measured over (20 is "
         "within 0.5% of the full vocabulary).",
+    )
+
+
+class Measure(Section):
+    answer_tokens: StrictInt = Field(
+        default=256,
+        ge=1,
+        le=8192,
+        description="How long an answer to each held-out prompt may be, for the judge to read.",
+    )
+    maths_answer_tokens: StrictInt = Field(
+        default=512,
+        ge=1,
+        le=8192,
+        description="How long an answer to each maths question may be. One cut off before it states "
+        "its answer counts as wrong.",
+    )
+    maths_instruction: Text = Field(
+        default="Solve this step by step. End with the final answer on its own line, as: Answer: <number>",
+        description="Added below each maths question, so every answer ends with a number candor can check.",
+    )
+    judge: Text = Field(
+        default="Qwen/Qwen3Guard-Gen-0.6B",
+        description="The Qwen3Guard-Gen model on Hugging Face that decides whether each answer is a "
+        "refusal. Keyword counts are kept beside its verdicts.",
+    )
+    judge_revision: Text | None = Field(
+        default=None,
+        description="The judge's Hugging Face commit, pinned by init so its verdicts can't change.",
     )
 
 
@@ -236,6 +272,10 @@ class RunConfig(Section):
     prompts: Prompts = Field(default_factory=Prompts, description="Where the prompts come from.")
     edit: Edit = Field(default_factory=Edit, description="The weight edit itself.")
     scoring: Scoring = Field(default_factory=Scoring, description="How each candidate edit is measured.")
+    measure: Measure = Field(
+        default_factory=Measure,
+        description="How finished edits are measured, on prompts the search never sees.",
+    )
     search: Search = Field(default_factory=Search, description="The search over edits.")
 
 

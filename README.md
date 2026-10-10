@@ -29,6 +29,9 @@ uv run candor inspect ~/Desktop/tune/models/rude-llama-bf16   # a local folder o
 uv run candor init rude --model ~/Desktop/tune/models/rude-llama-bf16   # writes runs/rude/candor.toml
 uv run candor run runs/rude                                    # every stage built so far
 uv run candor upgrade runs/rude                                # after updating candor: add new settings
+uv run candor measure runs/rude                                # the unedited model, on held-out prompts
+uv run candor measure runs/rude --heretic STUDY.jsonl --trial 170   # a heretic trial, rebuilt
+uv run candor compare runs/rude base heretic-170               # prompt by prompt
 ```
 
 - `inspect` reads only the config, tokenizer and file headers, so it is quick and needs no GPU. Its
@@ -47,12 +50,21 @@ uv run candor upgrade runs/rude                                # after updating 
 - The held-out harmful prompts, which the search never sees, come from StrongREJECT without the
   rows it took from AdvBench. It is gated: accept its terms on its Hugging Face page, then
   `hf auth login`.
+- `measure` answers the held-out prompts and GSM8K's 1,319 maths questions with the deployed GGUF
+  in llama-server. Qwen3Guard-Gen-0.6B (pinned) labels each held-out answer as a refusal or not, with
+  keyword counts beside it, and the first-token probabilities on the harmless prompts give KL
+  divergence. It keeps one number per prompt in `measurements/NAME/`; answers and the judge's
+  replies go only to `private/`. `--limit N` measures the first N prompts of each set and estimates
+  the full run's time; a stopped measurement resumes; the Mac is kept awake.
+- `compare A B` pairs two measurements prompt by prompt: each count, how many prompts went each
+  way, and the exact McNemar p-value. Measuring the same edit twice with different `--slots` shows
+  what batching noise alone does.
 - Reading residuals needs the model in 16 bits on the GPU. `run` checks this before downloading or
   converting anything: rude-llama fits on an 18 GB Mac; Qwen3.5-9B and K2-Horizon need a pod.
 
 A run folder holds `candor.toml`, `inspect.json`, `gguf/` (the model as an unquantised GGUF of its
 own float type, the deployment quantisation, and `convert.log`), `prompts.json`, `directions.pt`,
-`adapters/` and `logs/`, each result beside a `.inputs.json` record. llama.cpp itself (release
+`adapters/`, `measurements/`, `private/` and `logs/`, each result beside a `.inputs.json` record. llama.cpp itself (release
 b11524: the binaries, checked by sha256, and its converter in its own environment, pinned by
 `src/candor/data/converter-constraints.txt`) is fetched once into `~/.cache/candor`, or
 `CANDOR_CACHE`; `CANDOR_LLAMA_BIN` points at an existing b11524 build instead.

@@ -33,6 +33,9 @@ class FakeHub:
     def dataset_info(self, name):
         return SimpleNamespace(sha=f"{name}@commit")
 
+    def model_info(self, name):
+        return SimpleNamespace(sha=f"{name}@commit")
+
 
 @pytest.fixture(autouse=True)
 def no_network(monkeypatch):
@@ -219,6 +222,9 @@ def test_init_pins_the_prompt_datasets(tmp_path):
     assert prompts.harmful.revision == "mlabonne/harmful_behaviors@commit"
     assert prompts.harmless_test.revision == "mlabonne/harmless_alpaca@commit"
     assert prompts.harmful_held_out.revision == "walledai/StrongREJECT@commit"
+    assert prompts.maths.revision == "openai/gsm8k@commit"
+    judge = config.load(tmp_path / "runs" / "first").measure
+    assert judge.judge_revision == "Qwen/Qwen3Guard-Gen-0.6B@commit"
 
 
 def upgrade(folder):
@@ -244,6 +250,18 @@ def test_upgrade_adds_missing_settings_pinned_and_keeps_every_value(tmp_path):
     upgraded = (folder / config.FILE).read_text()
     assert upgraded.startswith(text.split("\n\n")[0] + "\n# Upgraded ")
     assert "added prompts.harmful_held_out." in upgraded
+
+
+def test_upgrade_pins_the_judge_it_adds(tmp_path):
+    assert init(tmp_path, model_folder(tmp_path)).exit_code == 0
+    path = tmp_path / "runs" / "first" / config.FILE
+    text = path.read_text()
+    start, end = text.index("# How finished edits are measured"), text.index("# The search over")
+    path.write_text(text[:start] + text[end:])
+    result = upgrade(path.parent)
+    assert result.exit_code == 0, result.output
+    assert "measure = { answer_tokens = 256" in result.output
+    assert config.load(path.parent).measure.judge_revision == "Qwen/Qwen3Guard-Gen-0.6B@commit"
 
 
 def test_upgrade_with_nothing_missing_changes_nothing(tmp_path):

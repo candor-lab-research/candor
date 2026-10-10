@@ -46,7 +46,7 @@ def test_every_setting_and_section_has_an_explanation():
         if (
             line.startswith("[")
             or (is_setting and not line.startswith("# "))
-            or line in ("# date =", "# revision =")
+            or line in ("# date =", "# revision =", "# judge_revision =")
         ):
             assert lines[i - 1].startswith("# ") and not lines[i - 1].endswith(" ="), (
                 f"{line!r} has no comment above it"

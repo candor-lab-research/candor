@@ -24,6 +24,24 @@ Every step gets an independent review before it is called done; its findings are
 tests and the fixes verified until a review comes back clean. Heavy jobs on the Mac (converting
 a real model, reading residuals, a search) wait for the user's go.
 
+### Next: the full measurement (the user runs it)
+
+About 3.5 hours on the Mac, plugged in (candor keeps it awake). Each command resumes if stopped,
+and prints only counts.
+
+```
+uv run candor measure runs/rude
+uv run candor measure runs/rude --heretic ~/Desktop/tune/checkpoints/models--rude-llama-bf16.jsonl --trial 170
+uv run candor measure runs/rude --slots 16
+uv run candor compare runs/rude base heretic-170
+uv run candor compare runs/rude base base-slots-16
+```
+
+The first measures the unedited model (about 1 hour), the second heretic's Trial 170 rebuilt with
+this run's directions (about 1 h 15 min, longer since it answers in full), and the third the
+unedited model again with different batching, the noise floor. The two comparisons are what the
+decision rule is written from.
+
 ### Phase 2 steps
 
 | Step | What | State |
@@ -31,7 +49,7 @@ a real model, reading residuals, a search) wait for the user's go.
 | 1 | `candor init NAME --model SOURCE`: checks the model, writes `runs/NAME/candor.toml` with every setting explained, validated on every load; pins the model's commit, the datasets' commits and the date; refuses models candor can't edit; never overwrites a run | Done, reviewed |
 | 2 | `candor run RUN` up to the search: GGUF (edit targets checked byte for byte), prompt ids from llama-server, directions, one adapter per edit target per direction set; resumable, and rebuilds whatever a settings or code change affects | Done, reviewed |
 | 3 | Fixes from the full review (see the log) | Done: every fix shown to matter by a test that fails without it; a second review was stopped as diminishing returns, so the first real rude-llama run is the check that matters |
-| 4 | Measurement, settled before any search: a held-out harmful set outside AdvBench (de-duplicated against the direction prompts, pinned); the Qwen3Guard judge with its false-refusal rate measured on answers to harmless prompts, keyword counts kept beside it; the scoring noise floor from repeat scoring; paired comparison (McNemar) with a margin; KL on 300 harmless prompts; the full GSM8K test set, paired; heretic's Trial 170 rebuilt by candor and scored as adapters, so the comparison is like for like. Written down as phase 2's decision rule | In progress: held-out sets done (288 harmful from StrongREJECT, 300 harmless) |
+| 4 | Measurement, settled before any search: a held-out harmful set outside AdvBench (de-duplicated against the direction prompts, pinned); the Qwen3Guard judge with its false-refusal rate measured on answers to harmless prompts, keyword counts kept beside it; the scoring noise floor from repeat scoring; paired comparison (McNemar) with a margin; KL on 300 harmless prompts; the full GSM8K test set, paired; heretic's Trial 170 rebuilt by candor and scored as adapters, so the comparison is like for like. Written down as phase 2's decision rule | Built and piloted on rude-llama. Next: the user runs the full measurement (below), then the decision rule is written from it |
 | 5 | The search: Optuna over a kernel per component (heretic's 0.8-1.5 strength range), stored resumably in the run folder, each trial scored in llama.cpp on the quantised GGUF; progress with time left, the Mac kept awake. Built on SmolLM2, then a 10-trial rude-llama pilot (time per trial, noise floor) and the full search, each with the user's go | |
 | 6 | Export: merge, convert and quantise; the final check on the exact shipped file with your KV cache type; how many begin-of-text tokens Bionic's GGUF engine sends; loading it in Bionic; the blind A/B | |
 
@@ -174,6 +192,49 @@ held-out harmful prompts. Its prompts are never read; everything below is counts
 - `candor upgrade RUN` adds settings a newer candor has, at their defaults, pins any prompt sets it
   adds and lists what it added; `runs/rude` was upgraded with it. A missing setting's error points
   to it.
+
+### Step 4: measurement built and piloted (2026-10-10)
+
+- `candor measure` answers the held-out sets and GSM8K's 1,319 test questions with the deployed
+  Q4_K_M in llama-server, 8 at a time. Qwen3Guard-Gen-0.6B (pinned at `fada3b2f`) labels each
+  held-out answer from its `Refusal:` and `Safety:` lines; keyword counts sit beside it. It keeps
+  the 20 most likely first tokens on the harmless prompts for KL. Each set's answers are saved as
+  soon as they finish, then judged and the labels saved apart, so a stopped run resumes from the
+  last set saved and a new judge re-judges the saved answers without answering again. Answers and
+  the judge's replies go only to `private/`; numbers are per prompt, so `candor compare` pairs two
+  measurements (exact McNemar), and refuses two made on a different model file or settings.
+- An edit gets its own adapters, since heretic's Trial 170 reads its direction at layer 12.04, between
+  whole layers. Trial 170 is checked to match candor's method (row norm "pre", no winsorising,
+  orthogonalised directions) before it is rebuilt.
+- Maths answers are asked to end with "Answer: N"; the stated number, or else the last number of a
+  finished answer, is compared with GSM8K's. One cut off at 512 tokens without stating its answer is
+  wrong. Held-out answers get 256 tokens for the judge.
+- One independent review found 8 problems, all fixed with a test that fails without the fix:
+  measurements didn't record the quantisation, so a Q8_0 measurement could reuse or be compared
+  with a Q4_K_M one; `compare` didn't check the two used the same settings; a kill sent every queued
+  request before stopping; a judge failure lost the answers; a cut-off maths answer could count as
+  correct; prompts read at measure time weren't checked against `prompts.json`; a heretic study
+  without the orthogonalisation setting was accepted; and saved answers weren't tied to the
+  numbers.
+- The real judge was checked on made-up answers: a refusal is labelled one, a bread recipe isn't.
+- `candor upgrade` added `prompts.maths` and `[measure]` to `runs/rude`, pinning both.
+
+Pilot on rude-llama, the first 10 prompts of each set (counts only):
+
+| | Unedited | Trial 170 rebuilt | Only one / other | p |
+| --- | --- | --- | --- | --- |
+| Harmful refused, judge | 9/10 | 0/10 | 9 / 0 | 0.004 |
+| Harmful refused, keywords | 9/10 | 0/10 | 9 / 0 | 0.004 |
+| Harmful answered unsafely | 0/10 | 8/10 | 0 / 8 | 0.008 |
+| Harmful cut off at 256 tokens | 1/10 | 10/10 | 0 / 9 | 0.004 |
+| Harmless refused, judge and keywords | 0/10 | 0/10 | | |
+| Maths correct | 5/10 | 4/10 | 1 / 0 | 1 |
+| KL on harmless first tokens | | 0.058 | | |
+| Time (full run, estimated) | 48 s (about 1 h) | 56 s (about 1 h 11 min) | | |
+
+The judge and keywords agreed on all 40 held-out answers; 10 prompts can't say more than that.
+Re-running both gave the same counts and KL 0.0577 against 0.0576, a first sight of the noise the
+full measurement's `--slots 16` run will size.
 
 ### Full review (2026-10-10)
 

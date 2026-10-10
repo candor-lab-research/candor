@@ -39,21 +39,19 @@ MODEL_FILES = ["*.json", "*.safetensors", "*.jinja", "*.txt", "*.model", "*.tikt
 PROMPT_SETS = tuple(config.Prompts.model_fields)
 # Prompt sets the search never sees, kept for comparing finished edits.
 HELD_OUT = ("harmful_held_out", "harmless_held_out")
-# Prompt sets the model answers in full, so each must fit in the context with a whole answer.
-ANSWERED = ("harmful_test", *HELD_OUT)
 DATE_PROBE = "31 Dec 1999"
 CHECKED_PER_SET = 3
 # The version of each stage's code, in stage order. Bump a stage's number in any commit that changes
 # the results it builds. Each record holds the numbers of its own stage and every stage before it, so
 # results built by older code are rebuilt along with everything after them.
-STAGES = {"gguf": 1, "prompts.json": 1, "directions.pt": 1, "adapters": 1}
+STAGES = {"gguf": 1, "prompts.json": 1, "directions.pt": 1, "adapters": 1, "measurements": 1}
 
 
 class RunError(RuntimeError):
     pass
 
 
-def _digest(value: Any) -> str:
+def digest(value: Any) -> str:
     return hashlib.sha256(json.dumps(value, sort_keys=True).encode()).hexdigest()[:16]
 
 
@@ -86,7 +84,7 @@ def _flush(descriptor: int) -> None:
     os.fsync(descriptor)
 
 
-def _sync(path: Path) -> None:
+def sync(path: Path) -> None:
     """Flush a file, or every file in a folder, and the folder entries, to the disk."""
     files = [path] if path.is_file() else [p for p in path.rglob("*") if p.is_file()]
     for item in [*files, *{path.parent, *(f.parent for f in files)}]:
@@ -99,7 +97,7 @@ def _sync(path: Path) -> None:
 
 def load_prompts(spec: config.PromptSet) -> list[str]:
     try:
-        rows = load_dataset(spec.dataset, split=spec.split, revision=spec.revision)
+        rows = load_dataset(spec.dataset, spec.subset, split=spec.split, revision=spec.revision)
     except DatasetNotFoundError as error:
         raise RunError(
             f"{error} If it is gated, accept its terms at https://huggingface.co/datasets/{spec.dataset} "
@@ -160,7 +158,7 @@ class Run:
         stage = stages.index(output.relative_to(self.folder).parts[0])
         return {**inputs, "code": {name: STAGES[name] for name in stages[: stage + 1]}}
 
-    def _fresh(self, output: Path, inputs: dict[str, Any]) -> bool:
+    def fresh(self, output: Path, inputs: dict[str, Any]) -> bool:
         """Whether output exists and was built from exactly these inputs, by this version of candor."""
         record = _record(output)
         expected = json.loads(json.dumps(self._with_code(output, inputs)))
@@ -171,20 +169,20 @@ class Run:
             self.report(f"Rebuilding {output.relative_to(self.folder)}: {why}")
         return False
 
-    def _commit(self, partial: Path, output: Path, inputs: dict[str, Any]) -> None:
+    def commit(self, partial: Path, output: Path, inputs: dict[str, Any]) -> None:
         """Replace output with the finished partial and record what it was built from. The output is
         on the disk before its record is, so a crash or power cut at any point leaves either no record
         or a record that matches, never a record trusting a half-written output."""
         record = _record(output)
         record.unlink(missing_ok=True)
         _remove(output)
-        _sync(partial)
+        sync(partial)
         partial.rename(output)
         written = record.with_name(record.name + ".building")
         written.write_text(json.dumps(self._with_code(output, inputs), sort_keys=True))
-        _sync(written)
+        sync(written)
         written.rename(record)
-        _sync(record)
+        sync(record)
 
     # Model
 
@@ -224,7 +222,7 @@ class Run:
         commit. Nothing else, so editing a README or moving the folder rebuilds nothing."""
         folder = self.model_folder
         if not source.is_local(self.settings.model.source):
-            return _digest({"repo": self.settings.model.source, "commit": folder.name})
+            return digest({"repo": self.settings.model.source, "commit": folder.name})
         read = [
             p
             for p in folder.iterdir()
@@ -232,7 +230,7 @@ class Run:
             and not p.name.startswith(".")
             and any(fnmatch(p.name, pattern) for pattern in self.model_files)
         ]
-        return _digest(sorted((p.name, p.stat().st_size, p.stat().st_mtime_ns) for p in read))
+        return digest(sorted((p.name, p.stat().st_size, p.stat().st_mtime_ns) for p in read))
 
     @cached_property
     def context_limit(self) -> int | None:
@@ -320,14 +318,14 @@ class Run:
         base = out / f"model-{base_type}.gguf"
         base_inputs = {"model": self.model_fingerprint, "llama.cpp": LLAMA_CPP_RELEASE}
         quantized = base if quantization == base_type else out / f"model-{quantization}.gguf"
-        quantized_inputs = {"base": _digest(base_inputs), "quantization": quantization}
+        quantized_inputs = {"base": digest(base_inputs), "quantization": quantization}
         for leftover in out.iterdir():
             kept = {base.name, quantized.name, _record(base).name, _record(quantized).name, "convert.log"}
             if leftover.name not in kept:
                 self.report(f"Removing {leftover.relative_to(self.folder)}, which this run no longer uses")
                 _remove(leftover)
-        base_fresh = self._fresh(base, base_inputs)
-        quantized_fresh = base_fresh if quantized == base else self._fresh(quantized, quantized_inputs)
+        base_fresh = self.fresh(base, base_inputs)
+        quantized_fresh = base_fresh if quantized == base else self.fresh(quantized, quantized_inputs)
         if not (base_fresh and quantized_fresh):
             self._check_disk(not base_fresh, quantized != base and not quantized_fresh)
         if not base_fresh:
@@ -340,14 +338,15 @@ class Run:
                 raise RunError(
                     "the GGUF doesn't hold the edit targets unchanged:\n  " + "\n  ".join(problems[:5])
                 )
-            self._commit(partial, base, base_inputs)
+            self.commit(partial, base, base_inputs)
         if quantized != base and not quantized_fresh:
             self.report(f"Quantising to {quantization}")
             partial = quantized.with_name(quantized.name + ".building")
             convert.quantize(base, partial, quantization, out / "convert.log")
-            self._commit(partial, quantized, quantized_inputs)
+            self.commit(partial, quantized, quantized_inputs)
         # Quantising keeps the vocabulary and chat template, so prompt ids depend on the base file alone.
-        self.inputs["base"] = _digest(base_inputs)
+        self.inputs["base"] = digest(base_inputs)
+        self.inputs["quantized"] = digest(quantized_inputs)
         return base, quantized
 
     def server(
@@ -373,18 +372,41 @@ class Run:
         head = [{"role": "system", "content": system}] if system else []
         return [[*head, {"role": "user", "content": prompt}] for prompt in prompts]
 
+    @property
+    def answer_tokens(self) -> dict[str, int]:
+        """How long an answer to each prompt set the model answers in full may be."""
+        settings = self.settings
+        return {
+            "harmful_test": settings.scoring.answer_tokens,
+            "harmful_held_out": settings.measure.answer_tokens,
+            "harmless_held_out": settings.measure.answer_tokens,
+            "maths": settings.measure.maths_answer_tokens,
+        }
+
     def _check_lengths(self, ids: dict[str, list[list[int]]]) -> None:
         """Prompts the model answers must fit with a whole answer; the rest need room for one token."""
-        limit, answer = self.context_limit, self.settings.scoring.answer_tokens
+        limit, room = self.context_limit, self.answer_tokens
         if not limit:
             return
-        room = {name: answer if name in ANSWERED else 1 for name in PROMPT_SETS}
-        too_long = {name: sum(len(p) + room[name] > limit for p in ids[name]) for name in PROMPT_SETS}
+        too_long = {name: sum(len(p) + room.get(name, 1) > limit for p in ids[name]) for name in PROMPT_SETS}
         if any(too_long.values()):
             counts = ", ".join(f"{count} {name}" for name, count in too_long.items() if count)
-            raise RunError(
-                f"prompts too long for the model's {limit} tokens (answers get {answer}): {counts}"
-            )
+            raise RunError(f"prompts too long for the model's {limit} tokens with their answers: {counts}")
+
+    def prompt_texts(self) -> tuple[dict[str, list[str]], dict[str, int]]:
+        """Each prompt set's prompts as the model is asked them, and how many repeats each held-out
+        set lost."""
+        settings = self.settings
+        texts = {name: load_prompts(getattr(settings.prompts, name)) for name in PROMPT_SETS}
+        dropped = drop_repeats(texts)
+        for name in PROMPT_SETS:
+            if not texts[name]:
+                spec = getattr(settings.prompts, name)
+                why = ": every one of its prompts is also in another set" if dropped.get(name) else ""
+                raise RunError(f"the {name} prompt set ({spec.dataset}, {spec.split}) is empty{why}")
+        instruction = settings.measure.maths_instruction
+        texts["maths"] = [f"{question}\n\n{instruction}" for question in texts["maths"]]
+        return texts, dropped
 
     def prompt_ids(self) -> dict[str, list[list[int]]]:
         """Each prompt set as the exact token ids llama-server feeds the model for that chat."""
@@ -396,18 +418,13 @@ class Run:
             "system_prompt": settings.deployment.system_prompt,
             "date": settings.model.date,
             "prompts": settings.prompts.model_dump(),
+            "maths_instruction": settings.measure.maths_instruction,
         }
-        if self._fresh(path, inputs):
+        if self.fresh(path, inputs):
             ids = json.loads(path.read_text())
             self._check_lengths(ids)
             return ids
-        texts = {name: load_prompts(getattr(settings.prompts, name)) for name in PROMPT_SETS}
-        dropped = drop_repeats(texts)
-        for name in PROMPT_SETS:
-            if not texts[name]:
-                spec = getattr(settings.prompts, name)
-                why = ": every one of its prompts is also in another set" if dropped.get(name) else ""
-                raise RunError(f"the {name} prompt set ({spec.dataset}, {spec.split}) is empty{why}")
+        texts, dropped = self.prompt_texts()
         self.report(
             f"Holding out {len(texts['harmful_held_out'])} harmful and {len(texts['harmless_held_out'])} "
             f"harmless prompts from the search (repeats of other prompts dropped: {sum(dropped.values())})"
@@ -435,7 +452,7 @@ class Run:
                     raise RunError(f"llama-server's ids for the {name} prompts don't match its chat endpoint")
         partial = path.with_name("prompts.json.building")
         partial.write_text(json.dumps(ids))
-        self._commit(partial, path, inputs)
+        self.commit(partial, path, inputs)
         return ids
 
     # Directions
@@ -446,12 +463,12 @@ class Run:
         path = self.path("directions.pt")
         trusted = self.settings.model.trust_remote_code
         inputs = {
-            "ids": _digest([ids["harmful"], ids["harmless"]]),
+            "ids": digest([ids["harmful"], ids["harmless"]]),
             "model": self.model_fingerprint,
             "remote_code": trusted,
         }
-        self.inputs["directions"] = _digest(inputs)
-        if self._fresh(path, inputs):
+        self.inputs["directions"] = digest(inputs)
+        if self.fresh(path, inputs):
             return torch.load(path)
         self.check_memory()
         device, dtype = self._device()
@@ -473,7 +490,7 @@ class Run:
         found = directions.difference_of_means(harmful, harmless)
         partial = path.with_name("directions.pt.building")
         torch.save(found, partial)
-        self._commit(partial, path, inputs)
+        self.commit(partial, path, inputs)
         return found
 
     # Adapters
@@ -490,44 +507,58 @@ class Run:
             sets[f"layer-{layer}"] = found[layer + 1].expand(layers, -1)
         return sets
 
-    def adapters(self) -> dict[str, dict[str, Path]]:
-        """For each direction set, one rank-1 adapter per edit target, named by its GGUF tensor."""
-        found = self.directions()
+    @cached_property
+    def target_names(self) -> dict[str, str]:
+        """Each edit target's GGUF tensor name, by its name in the model."""
         _, layers, arch, writers = self.shape
         names = {w.name: targets.gguf_name(w, arch, layers) for w in writers}
         if unmapped := [name for name, mapped in names.items() if mapped is None]:
             raise RunError(f"no llama.cpp name for {', '.join(unmapped[:3])}")
-        row_norm = RowNorm(self.settings.edit.row_norm)
-        inputs = {
+        return {name: str(mapped) for name, mapped in names.items()}
+
+    def adapter_inputs(self) -> dict[str, Any]:
+        """What every adapter set is built from besides its directions; call after directions()."""
+        return {
             "directions": self.inputs["directions"],
-            "row_norm": row_norm.value,
-            "targets": sorted([w.name, str(names[w.name])] for w in writers),
+            "row_norm": self.settings.edit.row_norm,
+            "targets": sorted(self.target_names.items()),
         }
+
+    def adapter_set(
+        self, folder: Path, set_directions: torch.Tensor, inputs: dict[str, Any]
+    ) -> dict[str, Path]:
+        """One rank-1 adapter per edit target along its layer's direction in set_directions, named by its
+        GGUF tensor. Written to folder unless it already holds them, built from these inputs."""
+        _, _, arch, writers = self.shape
+        names = self.target_names
+        if not self.fresh(folder, inputs):
+            files = ModelFiles(self.model_folder)
+            model_config = source.read_config(str(self.model_folder))
+            row_norm = RowNorm(self.settings.edit.row_norm)
+            self.report(f"Writing adapters for {folder.relative_to(self.folder)}")
+            partial = folder.with_name(f"{folder.name}.building")
+            _remove(partial)
+            partial.mkdir(parents=True)
+            for writer in writers:
+                name = names[writer.name]
+                weight = convert.as_converted(files.tensor(writer.name), writer.name, arch, model_config)
+                factors = rank_one(weight, set_directions[writer.layer], row_norm)
+                write_adapter(partial / f"{name}.gguf", arch, {name: factors})
+            self.commit(partial, folder, inputs)
+        return {names[w.name]: folder / f"{names[w.name]}.gguf" for w in writers}
+
+    def adapters(self) -> dict[str, dict[str, Path]]:
+        """For each direction set, one rank-1 adapter per edit target, named by its GGUF tensor."""
+        found = self.directions()
+        _, layers, _, _ = self.shape
+        inputs = self.adapter_inputs()
         root = self.path("adapters")
         root.mkdir(exist_ok=True)
         sets = self.direction_sets(found, layers)
         for leftover in root.iterdir():
             if leftover.name.removesuffix(".inputs.json") not in sets:
                 _remove(leftover)
-        files = None
-        model_config = source.read_config(str(self.model_folder))
-        made = {}
-        for set_name, set_directions in sets.items():
-            folder = root / set_name
-            if not self._fresh(folder, inputs):
-                files = files or ModelFiles(self.model_folder)
-                self.report(f"Writing adapters for {set_name}")
-                partial = root / f"{set_name}.building"
-                _remove(partial)
-                partial.mkdir()
-                for writer in writers:
-                    name = str(names[writer.name])
-                    weight = convert.as_converted(files.tensor(writer.name), writer.name, arch, model_config)
-                    factors = rank_one(weight, set_directions[writer.layer], row_norm)
-                    write_adapter(partial / f"{name}.gguf", arch, {name: factors})
-                self._commit(partial, folder, inputs)
-            made[set_name] = {str(names[w.name]): folder / f"{names[w.name]}.gguf" for w in writers}
-        return made
+        return {name: self.adapter_set(root / name, directions, inputs) for name, directions in sets.items()}
 
     def prepare(self) -> dict[str, int]:
         """Every stage up to the search. The last stage pulls in the ones before it, and results still

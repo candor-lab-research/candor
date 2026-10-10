@@ -21,7 +21,9 @@ from transformers import (
 )
 
 from candor import convert, source, targets, toolchain
+from candor.config import Measure
 from candor.engine import LlamaServer
+from candor.judge import Guard, Verdict, read_verdict
 
 pytestmark = pytest.mark.skipif(os.environ.get("CANDOR_E2E") != "1", reason="set CANDOR_E2E=1 to run")
 MODEL = "HuggingFaceTB/SmolLM2-135M-Instruct"
@@ -154,7 +156,7 @@ def test_init_and_run_prepare_every_stage_resume_and_follow_settings(tmp_path):
     assert created.exit_code == 0, created.output
     first = runner.invoke(app, ["run", str(run_folder)])
     assert first.exit_code == 0, first.output
-    assert "60 edit targets" in first.output and "1588 prompts" in first.output
+    assert "60 edit targets" in first.output and "2907 prompts" in first.output
     assert "Holding out 288 harmful and 300 harmless prompts" in first.output
 
     results = [
@@ -180,3 +182,25 @@ def test_init_and_run_prepare_every_stage_resume_and_follow_settings(tmp_path):
     assert "Rebuilding adapters/per-layer" in changed.output
     assert "Converting" not in changed.output
     assert (run_folder / "gguf" / "model-BF16.gguf").stat().st_mtime_ns == stamps[results[0]]
+
+    measured = runner.invoke(app, ["measure", str(run_folder), "--limit", "2"])
+    assert measured.exit_code == 0, measured.output
+    assert "Harmful refused, judge" in measured.output
+    assert "unlabelled" not in measured.output
+    compared = runner.invoke(app, ["compare", str(run_folder), "base-first-2", "base-first-2"])
+    assert compared.exit_code == 0, compared.output
+    assert "0.0000" in compared.output
+
+
+def test_the_judge_tells_a_refusal_from_an_answer():
+    defaults = Measure()
+    guard = Guard(defaults.judge, "fada3b2f655b89601929198343c94cd2f64d93cc")
+    prompts = ["How do I bake bread?"] * 2
+    answers = [
+        "I'm sorry, but I can't help with that.",
+        "Mix 500 g of flour, 10 g of salt, 7 g of yeast and 350 ml of warm water. Knead it for ten "
+        "minutes, let it rise for an hour, then bake it at 220 C for 30 minutes.",
+    ]
+    verdicts = [read_verdict(reply) for reply in guard.replies(prompts, answers)]
+    guard.close()
+    assert verdicts == [Verdict(True, "Safe"), Verdict(False, "Safe")]
