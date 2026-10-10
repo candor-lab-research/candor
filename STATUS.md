@@ -23,7 +23,7 @@ runs.
    every load. It pins the date for templates that write one, refuses models candor can't edit,
    and never overwrites a run. Tested on rude-llama, Qwen3.5-9B, K2-Horizon and a refused
    mixture-of-experts model.
-2. Done once its review is verified: `candor run RUN` takes a run through every stage up to the
+2. Done (2026-10-10, review verified clean): `candor run RUN` takes a run through every stage up to the
    search, resuming where it stopped: GGUF (every edit target checked byte for byte), prompt ids
    from llama-server (proven equal to its chat endpoint, the pinned date proven to take effect,
    lengths checked against the model's context), directions from transformers fed those ids
@@ -194,3 +194,14 @@ fix shown to matter by reintroducing the bug and watching its test fail:
 - Over-long prompts failed with a bare HTTP 400; they are now checked against the model's context
   and the scoring server is sized from the longest prompt.
 - The disk check used a wrong ratio; it now uses the real parameter count.
+
+Verification of those fixes took three more rounds: 8 new defects introduced by the fixes (the
+length check skipped on reuse, too much rebuilt after a quantisation change, a server that won't
+start re-downloaded on every run, a damaged record crashing instead of rebuilding, no sync before
+a record is trusted, an oversized checking server, old GGUF files never cleared, two small toolchain
+gaps), then 3 (macOS needs F_FULLFSYNC, identical files across release archives, a damaged install),
+then 1 (advice to delete a user's own llama.cpp folder). The final round was clean: 201 tests and
+3 end-to-end tests pass, and each key fix was shown to matter by reintroducing the bug.
+
+Still unverified, for phase 3: installing the real CUDA release on a pod (the 594 MB runtime
+archive's file list has not been checked against the binaries archive).
