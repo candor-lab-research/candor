@@ -27,8 +27,24 @@ Two llama-server traps, both handled in `engine.py`:
 
 Numbers: `runs/phase0/results.json` (not in git). Pod: A40, about 23 minutes, about $0.23.
 
-## Next: phase 1
+## Phase 1: core maths vs heretic (in progress)
 
-- Reproduce rude-llama Trial 170 (heretic: 2/100, KL 0.026) on the Mac, which needs the user's go.
+Done 2026-10-10: `spikes/reproduce_trial.py` rebuilds a heretic trial from its journal with
+candor's own direction finding and edit, then scores it the way heretic does. rude-llama Trial 170,
+on the Mac (MPS, float16, about 3 minutes):
+
+| | heretic | candor, heretic's tokens | candor |
+| --- | --- | --- | --- |
+| Begin-of-text tokens per prompt | 2 | 2 | 1 |
+| Refusals, original | 96 | 97 | 91 |
+| Refusals, edited | 2 | 2 | 2 |
+| KL | 0.026 | 0.030 | 0.044 |
+
+candor reproduces heretic once it is fed the same tokens. Heretic lets the tokenizer add its own
+begin-of-text token in front of the chat template's, so Llama 3 sees two. With the single token
+it's really run with, Trial 170's KL is 0.044.
+
+Next:
+
 - An engine integration test with a tiny GGUF on the Mac's llama-server.
 - The first CLI commands: `candor init`, `candor inspect`.
