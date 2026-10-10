@@ -12,7 +12,9 @@ INDEX = "model.safetensors.index.json"
 
 
 def is_local(model: str) -> bool:
-    return Path(model).expanduser().is_dir()
+    """Local folders are given by their full path, which is how init stores them, so a Hugging Face id
+    is never mistaken for a folder that happens to share its name."""
+    return Path(model).expanduser().is_absolute()
 
 
 def read_json(model: str, name: str) -> dict[str, Any] | None:
@@ -36,6 +38,13 @@ def read_config(model: str) -> dict[str, Any]:
 def text_config(config: dict[str, Any]) -> dict[str, Any]:
     """Multimodal models keep the language model's settings under text_config."""
     return config.get("text_config", config)
+
+
+def sizes(config: dict[str, Any]) -> tuple[int, int] | None:
+    """The hidden size and layer count, or None when the config doesn't give both."""
+    text = text_config(config)
+    hidden, layers = text.get("hidden_size"), text.get("num_hidden_layers")
+    return (hidden, layers) if isinstance(hidden, int) and isinstance(layers, int) else None
 
 
 def weight_files(folder: Path) -> list[str]:
@@ -62,10 +71,10 @@ def local_headers(folder: Path) -> dict[str, dict[str, Any]]:
     return headers
 
 
-def tensor_shapes(model: str) -> dict[str, list[int]]:
+def tensor_shapes(model: str, revision: str | None = None) -> dict[str, list[int]]:
     """Every tensor's shape, read from the safetensors headers only."""
     if not is_local(model):
-        metadata = get_safetensors_metadata(model)
+        metadata = get_safetensors_metadata(model, revision=revision)
         return {
             name: list(info.shape)
             for file in metadata.files_metadata.values()
