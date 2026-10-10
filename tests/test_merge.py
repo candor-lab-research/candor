@@ -94,6 +94,36 @@ def test_scales_on_a_float_weight_are_refused(tmp_path):
         merge(folder, tmp_path / "merged", {"a.weight": (torch.zeros(4, 1), torch.zeros(1, 6))})
 
 
+def test_a_failed_merge_leaves_no_model_and_the_next_one_succeeds(model_folder, tmp_path, monkeypatch):
+    written = []
+
+    def fail_after_one_shard(tensors, path, metadata=None):
+        if written:
+            raise OSError("disk full")
+        save_file(tensors, path, metadata=metadata)
+        written.append(path)
+
+    monkeypatch.setattr("candor.merge.save_file", fail_after_one_shard)
+    with pytest.raises(OSError, match="disk full"):
+        merge(model_folder, tmp_path / "merged", {})
+    assert written
+    assert not (tmp_path / "merged").exists()
+
+    monkeypatch.undo()
+    merge(model_folder, tmp_path / "merged", {})
+    assert sorted(p.name for p in tmp_path.iterdir()) == ["merged", "model"]
+    assert sorted(p.name for p in (tmp_path / "merged").iterdir()) == sorted(
+        p.name for p in model_folder.iterdir()
+    )
+
+
+def test_an_existing_destination_is_refused_and_left_alone(model_folder, tmp_path):
+    (tmp_path / "merged").mkdir()
+    with pytest.raises(FileExistsError):
+        merge(model_folder, tmp_path / "merged", {})
+    assert list((tmp_path / "merged").iterdir()) == []
+
+
 def test_other_weight_formats_are_left_out(model_folder, tmp_path):
     (model_folder / "pytorch_model.bin").write_bytes(b"old weights")
     assert merge(model_folder, tmp_path / "merged", {}) == ["pytorch_model.bin"]

@@ -38,12 +38,20 @@ def merge(source: Path, destination: Path, deltas: dict[str, tuple[Tensor, Tenso
     Every other file, config and tokenizer included, is copied byte for byte, so nothing gets
     rewritten the way transformers' save_pretrained does it. Weight files the model's index doesn't
     list, and weights in other formats, are left out, so the copy never ships an unedited duplicate.
+
+    The copy is built under a temporary name and renamed into place when complete, so a failure
+    never leaves a half-written model at destination.
     """
     shards = weight_files(source)
     if not shards:
         raise FileNotFoundError(f"{source} has no model.safetensors and no {INDEX}")
     _check(source, set(deltas))
-    destination.mkdir(parents=True)
+    if destination.exists():
+        raise FileExistsError(f"{destination} already exists")
+    partial = destination.with_name(destination.name + ".partial")
+    if partial.exists():
+        shutil.rmtree(partial)
+    partial.mkdir(parents=True)
     pending = dict(deltas)
     left_out = []
     for path in sorted(source.iterdir()):
@@ -53,7 +61,7 @@ def merge(source: Path, destination: Path, deltas: dict[str, tuple[Tensor, Tenso
             left_out.append(path.name)
             continue
         if path.suffix != ".safetensors":
-            shutil.copy2(path, destination / path.name)
+            shutil.copy2(path, partial / path.name)
             continue
         if path.name not in shards:
             left_out.append(path.name)
@@ -65,5 +73,6 @@ def merge(source: Path, destination: Path, deltas: dict[str, tuple[Tensor, Tenso
             b, a = pending.pop(name)
             weight = tensors[name]
             tensors[name] = (weight.float() + b.float() @ a.float()).to(weight.dtype)
-        save_file(tensors, destination / path.name, metadata=metadata)
+        save_file(tensors, partial / path.name, metadata=metadata)
+    partial.rename(destination)
     return left_out
