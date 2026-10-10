@@ -16,12 +16,12 @@ from huggingface_hub.utils import logging as hub_logging
 from rich.console import Console
 from rich.markup import escape
 from rich.table import Table
-from transformers import CONFIG_MAPPING, AutoTokenizer
+from transformers import AutoTokenizer
 from transformers.utils import logging as transformers_logging
 
 from . import checks, config, source, targets
 from .convert import ConversionError
-from .engine import LLAMA_CPP_RELEASE
+from .engine import LLAMA_CPP_RELEASE, ServerError
 from .run import Run, RunError
 from .toolchain import ToolchainError
 
@@ -68,12 +68,6 @@ def _quiet_transformers() -> Iterator[None]:
 def _examples(names: list[str], limit: int = 3) -> str:
     shown = ", ".join(names[:limit])
     return shown + (f" and {len(names) - limit} more" if len(names) > limit else "")
-
-
-def _needs_remote_code(model_config: dict[str, Any]) -> bool:
-    """Whether transformers can load the model only with the Python files it ships: its config names
-    its own classes, and transformers has none for its type."""
-    return bool(checks.remote_code(model_config)) and model_config.get("model_type") not in CONFIG_MAPPING
 
 
 def _target_rows(model: str, hidden: int, layers: int, arch: str | None) -> list[Row]:
@@ -180,7 +174,7 @@ def _rows(model: str) -> list[Row]:
     summary = f"{names}, {layers} layers, hidden size {hidden}; {converts}"
     rows: list[Row] = [("Architecture", "ok" if arch else "fail", summary)]
     code = checks.remote_code(config, source.read_json(model, "tokenizer_config.json"))
-    if _needs_remote_code(config):
+    if checks.needs_remote_code(config):
         detail = f"transformers can only load it by running {_examples(code)}; a run does, so read it first"
         rows.append(("Remote code", "warn", detail))
     elif code:
@@ -297,7 +291,7 @@ def init(
         model_settings = config.Model(
             source=model,
             revision=revision,
-            trust_remote_code=_needs_remote_code(source.read_config(model)),
+            trust_remote_code=checks.needs_remote_code(source.read_config(model)),
             date=_pinned_date(model, revision),
         )
         header = (
@@ -358,7 +352,7 @@ def run(folder: Annotated[Path, typer.Argument(help="A run folder made by candor
     except config.ConfigError as error:
         console.print(f"[red]{escape(str(error))}[/]")
         raise typer.Exit(COULD_NOT_INSPECT) from None
-    except (RunError, ToolchainError, ConversionError) as error:
+    except (RunError, ToolchainError, ConversionError, ServerError) as error:
         console.print(f"[red]The run stopped:[/] {escape(str(error))}")
         raise typer.Exit(FAILED_CHECK) from None
     except Exception as error:

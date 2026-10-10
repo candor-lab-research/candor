@@ -146,7 +146,7 @@ def test_gguf_names_strip_language_model_like_the_converter():
 )
 def test_gguf_names_for_qwen35_and_k2_horizon(arch, layers, name, expected):
     layer = int(name.split(".layers.")[1].split(".")[0])
-    assert gguf_name(Writer(name, layer, "attn", (HIDDEN, HIDDEN)), arch, layers) == expected
+    assert gguf_name(Writer(name, layer, "attn"), arch, layers) == expected
 
 
 def test_every_architecture_in_the_converter_table_is_known_to_gguf():

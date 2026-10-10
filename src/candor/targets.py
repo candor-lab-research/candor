@@ -46,7 +46,6 @@ class Writer:
     name: str
     layer: int
     component: str
-    shape: tuple[int, ...]
     expert: bool = False
 
     @property
@@ -56,7 +55,6 @@ class Writer:
 
 @dataclass
 class Targets:
-    layers: int
     stack: str
     writers: list[Writer] = field(default_factory=list)
     unclassified: list[str] = field(default_factory=list)
@@ -115,9 +113,9 @@ def find_targets(shapes: dict[str, list[int]], hidden: int, layers: int) -> Targ
             stacks[match[1]].add(int(match[2]))
     stack, problem = _choose_stack(stacks, layers)
     if stack is None:
-        return Targets(layers, "", missing=[problem])
+        return Targets("", missing=[problem])
 
-    targets = Targets(layers, stack, extra_layers=sorted(stacks[stack] - set(range(layers))))
+    targets = Targets(stack, extra_layers=sorted(stacks[stack] - set(range(layers))))
     scaled: set[str] = set()
     for name, shape in sorted(shapes.items()):
         match = LAYER.match(name)
@@ -139,7 +137,7 @@ def find_targets(shapes: dict[str, list[int]], hidden: int, layers: int) -> Targ
         if role == "reader":
             continue
         if role == "writer" and component:
-            targets.writers.append(Writer(name, int(match[2]), component, tuple(shape), "experts" in path))
+            targets.writers.append(Writer(name, int(match[2]), component, "experts" in path))
         else:
             targets.unclassified.append(name)
     targets.writers.sort(key=lambda w: (w.layer, w.component, w.name))

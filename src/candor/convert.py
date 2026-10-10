@@ -73,7 +73,7 @@ def _readable_by_the_converter(model_folder: Path, staging: Path) -> Path:
     return staged
 
 
-def to_bf16(model_folder: Path, destination: Path, log: Path) -> None:
+def to_gguf(model_folder: Path, destination: Path, log: Path) -> None:
     """Convert a Hugging Face model folder to an unquantised GGUF of its float_type at destination."""
     python, script = toolchain.converter()
     outtype = float_type(model_folder).lower()

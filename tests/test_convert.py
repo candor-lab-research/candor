@@ -251,7 +251,7 @@ def test_the_converter_writes_the_models_float_type_to_the_destination(
     folder = model_with_tokenizer(tmp_path, tokenizer(None, adds_bos=True), dtype)
     destination = tmp_path / "out" / "model.gguf"
     destination.parent.mkdir()
-    convert.to_bf16(folder, destination, tmp_path / "convert.log")
+    convert.to_gguf(folder, destination, tmp_path / "convert.log")
     assert converter_calls[0]["args"][3:] == ["--outtype", outtype, "--outfile", destination]
 
 
@@ -266,7 +266,7 @@ def test_a_tokenizer_saved_by_transformers_5_is_given_to_the_converter_renamed(t
     destination = tmp_path / "out" / "model.gguf"
     destination.parent.mkdir()
 
-    convert.to_bf16(folder, destination, tmp_path / "convert.log")
+    convert.to_gguf(folder, destination, tmp_path / "convert.log")
 
     [call] = converter_calls
     assert call["folder"] != folder and call["folder"].name == folder.name
@@ -284,5 +284,5 @@ def test_a_tokenizer_the_converter_can_read_is_given_as_it_is(tmp_path, converte
     settings = json.loads((folder / "tokenizer_config.json").read_text())
     settings["tokenizer_class"] = "PreTrainedTokenizerFast"
     (folder / "tokenizer_config.json").write_text(json.dumps(settings))
-    convert.to_bf16(folder, tmp_path / "model.gguf", tmp_path / "convert.log")
+    convert.to_gguf(folder, tmp_path / "model.gguf", tmp_path / "convert.log")
     assert converter_calls[0]["folder"] == folder

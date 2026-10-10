@@ -15,7 +15,6 @@ import json
 import math
 import os
 import shutil
-import socket
 from collections.abc import Callable, Iterator, Sequence
 from contextlib import contextmanager
 from dataclasses import dataclass, field
@@ -28,7 +27,7 @@ import torch
 from datasets import load_dataset
 from huggingface_hub import constants, snapshot_download
 
-from . import config, convert, directions, residuals, source, targets, toolchain
+from . import checks, config, convert, directions, residuals, source, targets, toolchain
 from .adapters import write_adapter
 from .edit import RowNorm, rank_one
 from .engine import LLAMA_CPP_RELEASE, LlamaServer
@@ -36,16 +35,6 @@ from .weights import ModelFiles
 
 MODEL_FILES = ["*.json", "*.safetensors", "*.jinja", "*.txt", "*.model", "*.tiktoken"]
 PROMPT_SETS = tuple(config.Prompts.model_fields)
-BITS_PER_WEIGHT = {
-    "Q4_K_S": 4.6,
-    "Q4_K_M": 4.9,
-    "Q5_K_S": 5.5,
-    "Q5_K_M": 5.7,
-    "Q6_K": 6.6,
-    "Q8_0": 8.5,
-    "F16": 16,
-    "BF16": 16,
-}
 DATE_PROBE = "31 Dec 1999"
 CHECKED_PER_SET = 3
 # The version of each stage's code, in stage order. Bump a stage's number in any commit that changes
@@ -100,12 +89,6 @@ def _sync(path: Path) -> None:
             _flush(descriptor)
         finally:
             os.close(descriptor)
-
-
-def _free_port() -> int:
-    with socket.socket() as s:
-        s.bind(("127.0.0.1", 0))
-        return s.getsockname()[1]
 
 
 def load_prompts(spec: config.PromptSet) -> list[str]:
@@ -243,16 +226,32 @@ class Run:
             )
         return device, dtype
 
+    @property
+    def _model_without_download(self) -> str:
+        """Where to read the model's config and headers before deciding to download it."""
+        model = self.settings.model
+        return str(self.model_folder) if source.is_local(model.source) else model.source
+
+    def check_remote_code(self) -> None:
+        model = self.settings.model
+        if not model.trust_remote_code and checks.needs_remote_code(
+            source.read_config(self._model_without_download, model.revision)
+        ):
+            raise RunError(
+                "transformers can load this model only with the Python files it ships; set "
+                "model.trust_remote_code = true in candor.toml to run them"
+            )
+
     def check_memory(self) -> None:
-        """Stop before anything is downloaded or converted if this machine's GPU can't hold the model
-        for reading residuals: its weights in 16 bits, and a tenth more for a batch's activations."""
+        """Stop if this machine's GPU can't hold the model for reading residuals: its weights in 16
+        bits, and a tenth more for a batch's activations."""
         residuals.protect_memory()
         device, _ = self._device()
         budget = residuals.memory_budget(device)
         if budget is None:
             return
         model = self.settings.model
-        where = str(self.model_folder) if source.is_local(model.source) else model.source
+        where = self._model_without_download
         weights = sum(math.prod(shape) for shape in source.tensor_shapes(where, model.revision).values())
         needed = 2 * weights * 1.1
         if needed > budget:
@@ -266,7 +265,7 @@ class Run:
     def _check_disk(self, base_needed: bool, quantized_needed: bool) -> None:
         shapes = source.tensor_shapes(str(self.model_folder))
         weights = sum(math.prod(shape) for shape in shapes.values())
-        quantized = BITS_PER_WEIGHT[self.settings.deployment.quantization] / 8 if quantized_needed else 0
+        quantized = config.QUANTIZATIONS[self.settings.deployment.quantization] / 8 if quantized_needed else 0
         needed = 1.1 * weights * ((2 if base_needed else 0) + quantized)
         free = shutil.disk_usage(self.folder).free
         if free < needed:
@@ -297,7 +296,7 @@ class Run:
         if not base_fresh:
             self.report("Converting to GGUF")
             partial = base.with_name(base.name + ".building")
-            convert.to_bf16(self.model_folder, partial, out / "convert.log")
+            convert.to_gguf(self.model_folder, partial, out / "convert.log")
             _, layers, arch, writers = self.shape
             if problems := convert.check_targets(partial, self.model_folder, writers, arch, layers):
                 partial.unlink()
@@ -311,7 +310,7 @@ class Run:
             convert.quantize(base, partial, quantization, out / "convert.log")
             self._commit(partial, quantized, quantized_inputs)
         # Quantising keeps the vocabulary and chat template, so prompt ids depend on the base file alone.
-        self.inputs["bf16"] = _digest(base_inputs)
+        self.inputs["base"] = _digest(base_inputs)
         return base, quantized
 
     def server(
@@ -324,7 +323,7 @@ class Run:
         self.path("logs").mkdir(exist_ok=True)
         binary = toolchain.binaries() / "llama-server"
         log = self.path("logs", "server.log")
-        return LlamaServer(binary, model, log, adapters, parallel, context_per_slot, _free_port(), extra)
+        return LlamaServer(binary, model, log, adapters, parallel, context_per_slot, extra=extra)
 
     # Prompt ids
 
@@ -356,7 +355,7 @@ class Run:
         path = self.path("prompts.json")
         settings = self.settings
         inputs = {
-            "bf16": self.inputs["bf16"],
+            "base": self.inputs["base"],
             "system_prompt": settings.deployment.system_prompt,
             "date": settings.model.date,
             "prompts": settings.prompts.model_dump(),
@@ -375,13 +374,8 @@ class Run:
         kwargs = self.template_kwargs()
         with self.server(quantized, context_per_slot=2048, parallel=2) as server:
             if settings.model.date:
-                body = {
-                    "messages": self.chats(["x"])[0],
-                    "chat_template_kwargs": self.template_kwargs(DATE_PROBE),
-                }
-                rendered = server.client.post("/apply-template", json=body)
-                rendered.raise_for_status()
-                if DATE_PROBE not in rendered.json()["prompt"]:
+                rendered = server.apply_template(self.chats(["x"])[0], self.template_kwargs(DATE_PROBE))
+                if DATE_PROBE not in rendered:
                     raise RunError(
                         "the chat template ignores the pinned date, so prompts would still change daily"
                     )
@@ -417,7 +411,7 @@ class Run:
         self.inputs["directions"] = _digest(inputs)
         if self._fresh(path, inputs):
             return torch.load(path)
-        residuals.protect_memory()
+        self.check_memory()
         device, dtype = self._device()
         self.report(f"Reading residuals on {device}")
         from transformers import AutoModelForCausalLM
@@ -497,7 +491,11 @@ class Run:
         """Every stage up to the search. The last stage pulls in the ones before it, and results still
         matching their settings are reused."""
         with self.locked():
-            self.check_memory()
+            self.check_remote_code()
+            # Checked again before reading residuals; up front only so a model this machine can't
+            # read isn't downloaded and converted first. Directions read on a pod skip it.
+            if not self.path("directions.pt").exists():
+                self.check_memory()
             made = self.adapters()
             ids = json.loads(self.path("prompts.json").read_text())
         return {

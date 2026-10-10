@@ -17,19 +17,19 @@ def is_local(model: str) -> bool:
     return Path(model).expanduser().is_absolute()
 
 
-def read_json(model: str, name: str) -> dict[str, Any] | None:
+def read_json(model: str, name: str, revision: str | None = None) -> dict[str, Any] | None:
     """A JSON file from the model, or None if it has none by that name."""
     if is_local(model):
         path = Path(model).expanduser() / name
         return json.loads(path.read_text()) if path.exists() else None
     try:
-        return json.loads(Path(hf_hub_download(model, name)).read_text())
+        return json.loads(Path(hf_hub_download(model, name, revision=revision)).read_text())
     except RemoteEntryNotFoundError:
         return None
 
 
-def read_config(model: str) -> dict[str, Any]:
-    config = read_json(model, "config.json")
+def read_config(model: str, revision: str | None = None) -> dict[str, Any]:
+    config = read_json(model, "config.json", revision)
     if config is None:
         raise FileNotFoundError(f"{model} has no config.json")
     return config

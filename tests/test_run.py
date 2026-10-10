@@ -317,15 +317,15 @@ def test_a_download_that_would_not_fit_stops_before_it_starts(current, monkeypat
 def fake_conversion(monkeypatch):
     calls = []
 
-    def to_bf16(folder, destination, log):
-        calls.append("bf16")
-        destination.write_bytes(b"bf16")
+    def to_gguf(folder, destination, log):
+        calls.append("base")
+        destination.write_bytes(b"base")
 
-    def quantize(bf16, destination, quantization, log):
+    def quantize(base, destination, quantization, log):
         calls.append(quantization)
         destination.write_bytes(quantization.encode())
 
-    monkeypatch.setattr(run.convert, "to_bf16", to_bf16)
+    monkeypatch.setattr(run.convert, "to_gguf", to_gguf)
     monkeypatch.setattr(run.convert, "quantize", quantize)
     monkeypatch.setattr(run.convert, "check_targets", lambda *_: [])
     return calls
@@ -366,10 +366,10 @@ def test_gguf_is_converted_once_and_requantised_only_when_needed(current, fake_c
     this, _ = current
     this.gguf()
     this.gguf()
-    assert fake_conversion == ["bf16", "Q4_K_M"]
+    assert fake_conversion == ["base", "Q4_K_M"]
     this.settings.deployment.quantization = "Q8_0"
     this.gguf()
-    assert fake_conversion == ["bf16", "Q4_K_M", "Q8_0"]
+    assert fake_conversion == ["base", "Q4_K_M", "Q8_0"]
 
 
 def test_a_deleted_gguf_is_rebuilt_not_trusted(current, fake_conversion):
@@ -377,7 +377,7 @@ def test_a_deleted_gguf_is_rebuilt_not_trusted(current, fake_conversion):
     _, quantized = this.gguf()
     quantized.unlink()
     this.gguf()
-    assert fake_conversion == ["bf16", "Q4_K_M", "Q4_K_M"]
+    assert fake_conversion == ["base", "Q4_K_M", "Q4_K_M"]
 
 
 def test_a_gguf_that_changed_a_target_stops_the_run_and_leaves_nothing(current, fake_conversion, monkeypatch):
@@ -449,6 +449,50 @@ def test_a_gpu_torch_cannot_use_stops_the_run(current, monkeypatch):
     )
     with pytest.raises(RunError, match="can't use this machine's NVIDIA GPU"):
         this.check_memory()
+
+
+def test_directions_read_on_a_pod_are_used_without_the_up_front_memory_check(current, monkeypatch):
+    this, _ = current
+    monkeypatch.setattr(Run, "check_memory", lambda self: pytest.fail("checked the memory"))
+    monkeypatch.setattr(Run, "adapters", lambda self: {"per-layer": {"t": Path("t.gguf")}})
+    this.path("directions.pt").write_bytes(b"read on a pod")
+    this.path("prompts.json").write_text(json.dumps({"harmful": [[1]]}))
+    assert this.prepare()["adapters"] == 1
+
+
+def test_memory_is_checked_again_before_residuals_are_read(tmp_path, model, monkeypatch):
+    folder = tmp_path / "runs" / "test"
+    folder.mkdir(parents=True)
+    this = Run(folder, config.RunConfig(model=config.Model(source=str(model))), report=lambda _: None)
+    loads = fake_residuals(monkeypatch)
+    monkeypatch.setattr(Run, "prompt_ids", lambda self: {"harmful": [[1]], "harmless": [[2]]})
+
+    def too_big(self):
+        raise RunError("too big")
+
+    monkeypatch.setattr(Run, "check_memory", too_big)
+    with pytest.raises(RunError, match="too big"):
+        this.directions()
+    assert loads.models == []
+
+
+def test_a_model_that_needs_its_own_code_must_be_trusted_before_anything_is_downloaded(current, monkeypatch):
+    this, _ = current
+    this.settings.model.source = "org/model"
+    this.settings.model.revision = "abc123"
+    asked = []
+
+    def read_config(model, revision=None):
+        asked.append((model, revision))
+        return {"model_type": "made_up", "auto_map": {"AutoModelForCausalLM": "modeling_made_up.Model"}}
+
+    monkeypatch.setattr(run.source, "read_config", read_config)
+    monkeypatch.setattr(run, "snapshot_download", lambda *_, **__: pytest.fail("downloaded"))
+    with pytest.raises(RunError, match=r"model\.trust_remote_code = true"):
+        this.prepare()
+    assert asked == [("org/model", "abc123")]
+    this.settings.model.trust_remote_code = True
+    this.check_remote_code()
 
 
 def test_the_kv_cache_type_reaches_llama_server(current, monkeypatch):
@@ -557,7 +601,7 @@ def tiny_run(current, monkeypatch):
         write_model(tiny, random_weights(), chat_template=template)
 
         def fake_gguf(self):
-            self.inputs["bf16"] = template
+            self.inputs["base"] = template
             return tiny, tiny
 
         monkeypatch.setattr(Run, "gguf", fake_gguf)
@@ -650,10 +694,10 @@ def test_old_gguf_files_are_cleared_before_the_disk_check(current, fake_conversi
 def test_changing_only_the_quantisation_keeps_the_prompt_ids(current, fake_conversion):
     this, _ = current
     this.gguf()
-    before = this.inputs["bf16"]
+    before = this.inputs["base"]
     this.settings.deployment.quantization = "Q8_0"
     this.gguf()
-    assert this.inputs["bf16"] == before
+    assert this.inputs["base"] == before
 
 
 def test_lengths_count_answers_only_for_the_harmful_test_prompts(current):
@@ -699,9 +743,9 @@ def fake_everything_but_the_stages(monkeypatch, tiny: Path) -> None:
     """The converter copies a tiny random GGUF, and residuals are random but fixed by their prompts."""
     monkeypatch.setenv("CANDOR_LLAMA_BIN", str(LLAMA_SERVER.parent))
     monkeypatch.setattr(
-        run.convert, "to_bf16", lambda folder, destination, log: shutil.copy(tiny, destination)
+        run.convert, "to_gguf", lambda folder, destination, log: shutil.copy(tiny, destination)
     )
-    monkeypatch.setattr(run.convert, "quantize", lambda bf16, destination, *_: shutil.copy(bf16, destination))
+    monkeypatch.setattr(run.convert, "quantize", lambda base, destination, *_: shutil.copy(base, destination))
     monkeypatch.setattr(run.convert, "check_targets", lambda *_: [])
     monkeypatch.setattr(run, "load_prompts", lambda spec: ["first prompt", "second"])
     fake_residuals(monkeypatch)

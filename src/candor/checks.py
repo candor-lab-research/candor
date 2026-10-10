@@ -9,7 +9,7 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Any, cast
 
-from transformers import PreTrainedTokenizerBase
+from transformers import CONFIG_MAPPING, PreTrainedTokenizerBase
 
 JS = Path(__file__).parent / "js"
 
@@ -24,6 +24,12 @@ def remote_code(*configs: dict[str, Any] | None) -> list[str]:
                 if reference:
                     modules.add(reference.split("--")[-1].rsplit(".", 1)[0] + ".py")
     return sorted(modules)
+
+
+def needs_remote_code(model_config: dict[str, Any]) -> bool:
+    """Whether transformers can load the model only with the Python files it ships: its config names
+    its own classes, and transformers has none for its type."""
+    return bool(remote_code(model_config)) and model_config.get("model_type") not in CONFIG_MAPPING
 
 
 def chat_template(tokenizer: PreTrainedTokenizerBase) -> str | None:

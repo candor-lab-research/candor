@@ -4,7 +4,6 @@ the first time, and sets up llama.cpp's converter)."""
 import json
 import os
 import shutil
-import socket
 from pathlib import Path
 
 import gguf
@@ -46,7 +45,7 @@ def converted(tmp_path_factory):
     folder = Path(snapshot_download(MODEL, allow_patterns=["*.json", "*.safetensors", "*.jinja", "*.txt"]))
     out = tmp_path_factory.mktemp("smol")
     bf16, quantized = out / "model-BF16.gguf", out / "model-Q4_K_M.gguf"
-    convert.to_bf16(folder, bf16, out / "convert.log")
+    convert.to_gguf(folder, bf16, out / "convert.log")
     convert.quantize(bf16, quantized, "Q4_K_M", out / "convert.log")
     return folder, bf16, quantized, out
 
@@ -80,7 +79,7 @@ def test_a_model_whose_tokenizer_transformers_5_saved_converts_with_the_same_voc
     before = {path.name: path.read_bytes() for path in folder.iterdir()}
     out.mkdir()
 
-    convert.to_bf16(folder, out / "model.gguf", out / "convert.log")
+    convert.to_gguf(folder, out / "model.gguf", out / "convert.log")
 
     assert {path.name: path.read_bytes() for path in folder.iterdir()} == before
     assert sorted(path.name for path in out.iterdir()) == ["convert.log", "model.gguf"]
@@ -121,7 +120,7 @@ def test_qwen35_linear_attention_reaches_the_gguf_in_the_converters_order(conver
     for name in ("tokenizer.json", "tokenizer_config.json"):  # one the converter recognises
         shutil.copy(converted[0] / name, folder / name)
 
-    convert.to_bf16(folder, out / "model.gguf", out / "convert.log")
+    convert.to_gguf(folder, out / "model.gguf", out / "convert.log")
 
     assert converted_targets(folder, out / "model.gguf") == []
     in_gguf = {tensor.name: tensor for tensor in gguf.GGUFReader(out / "model.gguf").tensors}
@@ -133,13 +132,8 @@ def test_qwen35_linear_attention_reaches_the_gguf_in_the_converters_order(conver
 
 def test_chat_ids_match_real_chat_requests_and_transformers(converted):
     folder, _, quantized, out = converted
-    with socket.socket() as s:
-        s.bind(("127.0.0.1", 0))
-        port = s.getsockname()[1]
     binary = toolchain.binaries() / "llama-server"
-    with LlamaServer(
-        binary, quantized, out / "server.log", parallel=2, context_per_slot=256, port=port
-    ) as server:
+    with LlamaServer(binary, quantized, out / "server.log", parallel=2, context_per_slot=256) as server:
         ids = server.chat_ids(CHATS, {})
         lengths = [server.chat_prompt_length(chat, {}) for chat in CHATS]
     tokenizer = AutoTokenizer.from_pretrained(folder)

@@ -5,6 +5,7 @@ description = "Remove a model's refusal direction, scored the way you actually r
 readme = "README.md"
 requires-python = ">=3.12"
 dependencies = [
+    "accelerate>=1.10",
     "datasets>=4",
     # The same llama.cpp release as the engine, so tensor and architecture names always agree.
     "gguf @ git+https://github.com/ggml-org/llama.cpp@b11524#subdirectory=gguf-py",

@@ -42,7 +42,7 @@ def llama_run(tmp_path, dtype):
 def conversions(monkeypatch):
     calls = []
 
-    def to_bf16(folder, destination, log):
+    def to_gguf(folder, destination, log):
         calls.append("convert")
         destination.write_bytes(b"converted")
 
@@ -50,7 +50,7 @@ def conversions(monkeypatch):
         calls.append(f"{base.name} -> {quantization}")
         destination.write_bytes(quantization.encode())
 
-    monkeypatch.setattr(run.convert, "to_bf16", to_bf16)
+    monkeypatch.setattr(run.convert, "to_gguf", to_gguf)
     monkeypatch.setattr(run.convert, "quantize", quantize)
     monkeypatch.setattr(run.convert, "check_targets", lambda *_: [])
     return calls
