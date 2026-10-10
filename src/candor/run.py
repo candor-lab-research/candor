@@ -12,6 +12,7 @@ import fcntl
 import hashlib
 import json
 import math
+import os
 import shutil
 import socket
 from collections.abc import Callable, Iterator, Sequence
@@ -66,6 +67,27 @@ def _remove(path: Path) -> None:
         path.unlink(missing_ok=True)
 
 
+def _read_record(record: Path) -> Any:
+    try:
+        return json.loads(record.read_text())
+    except (OSError, UnicodeDecodeError, json.JSONDecodeError):
+        return None
+
+
+def _sync(path: Path) -> None:
+    """Flush a file, or every file in a folder, and the folder entries, to the disk."""
+    files = [path] if path.is_file() else [p for p in path.rglob("*") if p.is_file()]
+    for file in files:
+        with file.open("rb") as handle:
+            os.fsync(handle.fileno())
+    for folder in {path.parent, *(f.parent for f in files)}:
+        descriptor = os.open(folder, os.O_RDONLY)
+        try:
+            os.fsync(descriptor)
+        finally:
+            os.close(descriptor)
+
+
 def _free_port() -> int:
     with socket.socket() as s:
         s.bind(("127.0.0.1", 0))
@@ -99,20 +121,26 @@ class Run:
         """Whether output exists and was built from exactly these inputs."""
         record = _record(output)
         expected = json.loads(json.dumps(inputs))
-        if output.exists() and record.exists() and json.loads(record.read_text()) == expected:
+        if output.exists() and _read_record(record) == expected:
             return True
         if output.exists() or record.exists():
             self.report(f"Rebuilding {output.relative_to(self.folder)}: what it was built from has changed")
         return False
 
     def _commit(self, partial: Path, output: Path, inputs: dict[str, Any]) -> None:
-        """Replace output with the finished partial and record what it was built from. A crash at any
-        point leaves either no record or a record that matches, never a stale one."""
+        """Replace output with the finished partial and record what it was built from. The output is
+        on the disk before its record is, so a crash or power cut at any point leaves either no record
+        or a record that matches, never a record trusting a half-written output."""
         record = _record(output)
         record.unlink(missing_ok=True)
         _remove(output)
+        _sync(partial)
         partial.rename(output)
-        record.write_text(json.dumps(inputs, sort_keys=True))
+        written = record.with_name(record.name + ".building")
+        written.write_text(json.dumps(inputs, sort_keys=True))
+        _sync(written)
+        written.rename(record)
+        _sync(record)
 
     # Model
 
@@ -172,6 +200,11 @@ class Run:
         bf16_inputs = {"model": self.model_fingerprint, "llama.cpp": LLAMA_CPP_RELEASE}
         quantized = bf16 if quantization == "BF16" else out / f"model-{quantization}.gguf"
         quantized_inputs = {"bf16": _digest(bf16_inputs), "quantization": quantization}
+        for leftover in out.iterdir():
+            kept = {bf16.name, quantized.name, _record(bf16).name, _record(quantized).name, "convert.log"}
+            if leftover.name not in kept:
+                self.report(f"Removing {leftover.relative_to(self.folder)}, which this run no longer uses")
+                _remove(leftover)
         bf16_fresh = self._fresh(bf16, bf16_inputs)
         quantized_fresh = bf16_fresh if quantized == bf16 else self._fresh(quantized, quantized_inputs)
         if not (bf16_fresh and quantized_fresh):
@@ -192,7 +225,8 @@ class Run:
             partial = out / f"model-{quantization}.gguf.building"
             convert.quantize(bf16, partial, quantization, out / "convert.log")
             self._commit(partial, quantized, quantized_inputs)
-        self.inputs["gguf"] = _digest({"bf16": bf16_inputs, "quantized": quantized_inputs})
+        # Quantising keeps the vocabulary and chat template, so prompt ids depend on the bf16 file alone.
+        self.inputs["bf16"] = _digest(bf16_inputs)
         return bf16, quantized
 
     def server(
@@ -218,20 +252,34 @@ class Run:
         head = [{"role": "system", "content": system}] if system else []
         return [[*head, {"role": "user", "content": prompt}] for prompt in prompts]
 
+    def _check_lengths(self, ids: dict[str, list[list[int]]]) -> None:
+        """Harmful test prompts must fit with a whole answer; the rest need room for one token."""
+        limit, answer = self.context_limit, self.settings.scoring.answer_tokens
+        if not limit:
+            return
+        room = {name: answer if name == "harmful_test" else 1 for name in PROMPT_SETS}
+        too_long = {name: sum(len(p) + room[name] > limit for p in ids[name]) for name in PROMPT_SETS}
+        if any(too_long.values()):
+            counts = ", ".join(f"{count} {name}" for name, count in too_long.items() if count)
+            raise RunError(
+                f"prompts too long for the model's {limit} tokens (answers get {answer}): {counts}"
+            )
+
     def prompt_ids(self) -> dict[str, list[list[int]]]:
         """Each prompt set as the exact token ids llama-server feeds the model for that chat."""
         _, quantized = self.gguf()
         path = self.path("prompts.json")
         settings = self.settings
         inputs = {
-            "gguf": self.inputs["gguf"],
+            "bf16": self.inputs["bf16"],
             "system_prompt": settings.deployment.system_prompt,
             "date": settings.model.date,
             "prompts": settings.prompts.model_dump(),
         }
-        self.inputs["prompts"] = _digest(inputs)
         if self._fresh(path, inputs):
-            return json.loads(path.read_text())
+            ids = json.loads(path.read_text())
+            self._check_lengths(ids)
+            return ids
         texts = {}
         for name in PROMPT_SETS:
             spec = getattr(settings.prompts, name)
@@ -240,8 +288,7 @@ class Run:
                 raise RunError(f"the {name} prompt set ({spec.dataset}, {spec.split}) is empty")
         self.report("Tokenizing prompts with llama-server")
         kwargs = self.template_kwargs()
-        slot = 2048
-        with self.server(quantized, context_per_slot=slot, parallel=2) as server:
+        with self.server(quantized, context_per_slot=2048, parallel=2) as server:
             if settings.model.date:
                 body = {
                     "messages": self.chats(["x"])[0],
@@ -254,21 +301,16 @@ class Run:
                         "the chat template ignores the pinned date, so prompts would still change daily"
                     )
             ids = {name: server.chat_ids(self.chats(texts[name]), kwargs) for name in PROMPT_SETS}
-        longest = max(len(prompt) for prompts in ids.values() for prompt in prompts)
-        answer = settings.scoring.answer_tokens
-        if self.context_limit and longest + answer > self.context_limit:
-            too_long = {n: sum(len(p) + answer > self.context_limit for p in ids[n]) for n in PROMPT_SETS}
-            counts = ", ".join(f"{count} {name}" for name, count in too_long.items() if count)
-            limit = self.context_limit
-            raise RunError(
-                f"prompts plus a {answer}-token answer don't fit the model's {limit} tokens: {counts}"
-            )
-        slot = max(slot, longest + 16)
-        with self.server(quantized, context_per_slot=slot, parallel=2) as server:
+        self._check_lengths(ids)
+        sampled = {name: ids[name][:CHECKED_PER_SET] for name in PROMPT_SETS}
+        slot = max(len(p) for prompts in sampled.values() for p in prompts) + 16
+        with self.server(quantized, context_per_slot=slot, parallel=1) as server:
             for name in PROMPT_SETS:
-                sample = self.chats(texts[name][:CHECKED_PER_SET])
-                expected = [server.chat_prompt_length(chat, kwargs) for chat in sample]
-                if [len(i) for i in ids[name][:CHECKED_PER_SET]] != expected:
+                expected = [
+                    server.chat_prompt_length(chat, kwargs)
+                    for chat in self.chats(texts[name][:CHECKED_PER_SET])
+                ]
+                if [len(i) for i in sampled[name]] != expected:
                     raise RunError(f"llama-server's ids for the {name} prompts don't match its chat endpoint")
         partial = path.with_name("prompts.json.building")
         partial.write_text(json.dumps(ids))
@@ -281,7 +323,7 @@ class Run:
         """One refusal direction per residual index, from transformers fed the run's exact prompt ids."""
         ids = self.prompt_ids()
         path = self.path("directions.pt")
-        inputs = {"prompts": self.inputs["prompts"], "model": self.model_fingerprint}
+        inputs = {"ids": _digest([ids["harmful"], ids["harmless"]]), "model": self.model_fingerprint}
         self.inputs["directions"] = _digest(inputs)
         if self._fresh(path, inputs):
             return torch.load(path)

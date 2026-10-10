@@ -27,6 +27,7 @@ RELEASES = f"https://github.com/ggml-org/llama.cpp/releases/download/{LLAMA_CPP_
 SOURCE = "https://github.com/ggml-org/llama.cpp"
 TIMEOUT = 60
 TOOLS = ("llama-server", "llama-quantize")
+INSTALLED = ".candor-assets"
 
 
 @dataclass(frozen=True)
@@ -115,23 +116,32 @@ def _fetch(asset: Asset, folder: Path) -> Path:
     return unpacked
 
 
-def _version_ok(folder: Path) -> bool:
+def _version(folder: Path) -> str:
+    """What llama-server reports about its version, or why it couldn't run."""
     try:
         result = subprocess.run(
             [str(folder / "llama-server"), "--version"], capture_output=True, text=True, timeout=60
         )
-    except (OSError, subprocess.TimeoutExpired):
-        return False
-    return f"build {LLAMA_CPP_RELEASE.removeprefix('b')}," in result.stdout + result.stderr
+    except (OSError, subprocess.TimeoutExpired) as error:
+        raise ToolchainError(f"the llama-server in {folder} won't start: {error}") from None
+    output = (result.stdout + result.stderr).strip()
+    if result.returncode != 0:
+        last = output.splitlines()[-3:] or ["no output"]
+        raise ToolchainError(f"the llama-server in {folder} won't start: {' / '.join(last)}")
+    return output
 
 
 def _check(folder: Path) -> Path:
     for tool in TOOLS:
         if not (folder / tool).exists():
             raise ToolchainError(f"{folder} has no {tool}")
-    if not _version_ok(folder):
+    if f"build {LLAMA_CPP_RELEASE.removeprefix('b')}," not in _version(folder):
         raise ToolchainError(f"the llama-server in {folder} isn't llama.cpp {LLAMA_CPP_RELEASE}")
     return folder
+
+
+def _installed(assets: list[Asset]) -> str:
+    return "\n".join(f"{asset.name} {asset.sha256}" for asset in assets)
 
 
 def _install(target: Path, assets: list[Asset]) -> None:
@@ -149,7 +159,10 @@ def _install(target: Path, assets: list[Asset]) -> None:
         for extra in unpacked[1:]:
             for item in sorted(extra.rglob("*")):
                 if item.is_file() or item.is_symlink():
+                    if (home / item.name).exists() or (home / item.name).is_symlink():
+                        raise ToolchainError(f"{item.name} is in two of the release archives")
                     item.rename(home / item.name)
+        (home / INSTALLED).write_text(_installed(assets))
         shutil.rmtree(target, ignore_errors=True)
         home.rename(target)
     finally:
@@ -166,7 +179,8 @@ def binaries() -> Path:
     name = this_platform()
     target = cache() / name / "bin"
     with _locked(f"bin-{name}"):
-        if not target.exists() or not _version_ok(target):
+        marker = target / INSTALLED
+        if not marker.exists() or marker.read_text() != _installed(ASSETS[name]):
             _install(target, ASSETS[name])
         folder = _check(target)
     if name == "linux-cuda":
@@ -194,6 +208,7 @@ def converter() -> tuple[Path, Path]:
     python, installed = venv / "bin" / "python", venv / ".candor-installed"
     with _locked("converter"):
         if not (source / ".git").exists():
+            shutil.rmtree(source, ignore_errors=True)
             partial = root / "source.partial"
             shutil.rmtree(partial, ignore_errors=True)
             clone = ["git", "-c", "advice.detachedHead=false", "clone", "--quiet", "--depth", "1",

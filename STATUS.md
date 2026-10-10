@@ -23,16 +23,13 @@ runs.
    every load. It pins the date for templates that write one, refuses models candor can't edit,
    and never overwrites a run. Tested on rude-llama, Qwen3.5-9B, K2-Horizon and a refused
    mixture-of-experts model.
-2. Directions. Done so far: `toolchain` fetches the pinned llama.cpp (binaries by sha256, the
-   converter's source by commit, in its own environment); `convert` makes bf16 and quantised GGUF
-   and checks every edit target arrives byte for byte (SmolLM2: 60 of 60); the engine's `chat_ids`
-   gets the exact ids a real chat request uses (SmolLM2: same length as the chat endpoint reports
-   and identical to transformers on 4 conversations, emoji and multi-turn included). Still to do:
-   prompts rendered with the run's settings (system prompt, pinned date passed as `date_string`)
-   and tokenized by llama-server itself, then fed to transformers for the residuals,
-   so directions and scoring see identical input; one adapter per writer from `targets` (named by
-   its GGUF tensor, since a component can have several writers) for each candidate direction; a
-   check that each GGUF writer tensor equals its Hugging Face original.
+2. Done once its review is verified: `candor run RUN` takes a run through every stage up to the
+   search, resuming where it stopped: GGUF (every edit target checked byte for byte), prompt ids
+   from llama-server (proven equal to its chat endpoint, the pinned date proven to take effect,
+   lengths checked against the model's context), directions from transformers fed those ids
+   (finite), and one adapter per edit target for each direction set. Each result records what it
+   was built from, so changing a setting rebuilds what it affects and everything after it.
+   SmolLM2-135M: 60 targets, 16 direction sets, 960 adapters, 1,000 prompts in about 20 s.
 3. The search loop scored in llama.cpp (Optuna over the per-layer strengths), with the classifier
    judge and keyword cross-check; then the held-out re-score, the maths gate, export and the final
    check on the shipped file.
@@ -180,3 +177,20 @@ A review found 9 defects and 4 weak tests; all fixed (161 tests):
   exactly those weights and that template.
 - The date is pinned only when the template's one date is a `date_string` it accepts from outside,
   in that call's own format; otherwise `init` warns that a run must finish the day it starts.
+
+### Review of step 2 (2026-10-10)
+
+The review found 12 defects and 5 weak tests; all fixed (189 tests, 3 end to end), with each key
+fix shown to matter by reintroducing the bug and watching its test fail:
+
+- Every stage reused its result even after the settings it was built from changed (a new
+  `row_norm` left old adapters in use). Each result now records its inputs and the records of
+  the stages before it; a change rebuilds it and everything after it, and says so.
+- The toolchain trusted a converter environment whose install had failed, didn't check binary
+  versions, would have left the CUDA runtime in a separate folder from llama-server on pods (likely
+  a silent fall back to the CPU), had no download timeout and no lock against two first runs.
+- The pinned-date check couldn't fail on the day of `init`; it now renders a made-up date.
+- Residuals and directions are checked to be finite (float16 on the Mac can overflow).
+- Over-long prompts failed with a bare HTTP 400; they are now checked against the model's context
+  and the scoring server is sized from the longest prompt.
+- The disk check used a wrong ratio; it now uses the real parameter count.

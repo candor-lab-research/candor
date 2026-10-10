@@ -176,3 +176,34 @@ def test_setup_waits_for_another_process_holding_the_lock(tmp_path, monkeypatch)
         waited = time.perf_counter() - started
     other.wait()
     assert waited > 0.5
+
+
+def test_a_server_that_wont_start_is_reported_not_downloaded_again(release, monkeypatch):
+    add, downloads, _ = release
+    broken = add("llama.tar.gz", {"llama-b0/llama-server": "#!/bin/sh\necho 'missing libfoo' >&2\nexit 127\n",
+                                  "llama-b0/llama-quantize": "#!/bin/sh\n"})  # fmt: skip
+    monkeypatch.setitem(toolchain.ASSETS, "test", [broken])
+    for _ in range(2):
+        with pytest.raises(ToolchainError, match="won't start: missing libfoo"):
+            toolchain.binaries()
+    assert len(downloads) == 1
+
+
+def test_two_archives_holding_the_same_file_are_refused(release, monkeypatch):
+    add, _, _ = release
+    clash = add("clash.tar.gz", {"other/llama-quantize": "#!/bin/sh\n"})
+    monkeypatch.setitem(toolchain.ASSETS, "test", [binaries_release(add), clash])
+    with pytest.raises(ToolchainError, match="in two of the release archives"):
+        toolchain.binaries()
+
+
+def test_a_stray_source_folder_is_replaced_by_a_fresh_clone(converter_source, monkeypatch):
+    source, _ = converter_source
+    upstream = source.with_name("upstream")
+    source.rename(upstream)
+    subprocess.run(["git", "-C", str(upstream), "tag", toolchain.LLAMA_CPP_RELEASE], check=True)
+    source.mkdir()
+    (source / "half-cloned").write_text("x")
+    monkeypatch.setattr(toolchain, "SOURCE", str(upstream))
+    _, script = toolchain.converter()
+    assert script.exists() and (source / ".git").exists() and not (source / "half-cloned").exists()

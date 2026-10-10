@@ -278,7 +278,7 @@ def tiny_run(current, monkeypatch):
         write_model(tiny, random_weights(), chat_template=template)
 
         def fake_gguf(self):
-            self.inputs["gguf"] = template
+            self.inputs["bf16"] = template
             return tiny, tiny
 
         monkeypatch.setattr(Run, "gguf", fake_gguf)
@@ -317,5 +317,104 @@ def test_prompts_too_long_for_the_model_are_named(tiny_run):
     this, _, use, prompts = tiny_run
     use(TEMPLATE)
     prompts["value"] = ["w0 " * 100]
-    with pytest.raises(RunError, match="don't fit the model's 256 tokens: 1 harmful"):
+    with pytest.raises(
+        RunError, match=r"model's 256 tokens \(answers get 100\): 1 harmful, 1 harmless, 1 harmful_test"
+    ):
         this.prompt_ids()
+
+
+def test_a_damaged_record_means_rebuild_not_crash(current):
+    this, messages = current
+    this.adapters()
+    this.path("adapters", "per-layer.inputs.json").write_text('{"half')
+    this.adapters()
+    assert any("Rebuilding adapters/per-layer" in m for m in messages)
+
+
+def test_old_gguf_files_are_cleared_before_the_disk_check(current, fake_conversion):
+    this, messages = current
+    this.gguf()
+    this.settings.deployment.quantization = "Q8_0"
+    leftover = this.path("gguf", "model-BF16.gguf.building")
+    leftover.write_bytes(b"half")
+    this.gguf()
+    assert sorted(p.name for p in this.path("gguf").iterdir()) == [
+        "model-BF16.gguf", "model-BF16.gguf.inputs.json", "model-Q8_0.gguf", "model-Q8_0.gguf.inputs.json",
+    ]  # fmt: skip
+    assert any("Removing gguf/model-Q4_K_M.gguf" in m for m in messages)
+
+
+def test_changing_only_the_quantisation_keeps_the_prompt_ids(current, fake_conversion):
+    this, _ = current
+    this.gguf()
+    before = this.inputs["bf16"]
+    this.settings.deployment.quantization = "Q8_0"
+    this.gguf()
+    assert this.inputs["bf16"] == before
+
+
+def test_directions_follow_the_prompts_they_read_and_nothing_else(tmp_path, model, monkeypatch):
+    this = Run(tmp_path, config.RunConfig(model=config.Model(source=str(model))), report=lambda _: None)
+    ids = {"harmful": [[1, 2]], "harmless": [[3, 4]], "harmful_test": [[5]], "harmless_test": [[6]]}
+    monkeypatch.setattr(Run, "prompt_ids", lambda self: ids)
+    reads = []
+
+    def residuals(model, prompts, pad_id):
+        reads.append(len(prompts))
+        return torch.randn(len(prompts), LAYERS + 1, HIDDEN)
+
+    monkeypatch.setattr(run.residuals, "last_token_residuals", residuals)
+    monkeypatch.setattr(run.reference, "pad_token_id_for", lambda _: 0)
+
+    class Loaded(torch.nn.Module):
+        def to(self, *_):
+            return self
+
+    monkeypatch.setattr("transformers.AutoModelForCausalLM.from_pretrained", lambda *_, **__: Loaded())
+    this.directions()
+    ids["harmful_test"] = [[7, 8, 9]]
+    this.directions()
+    assert len(reads) == 2
+    ids["harmful"] = [[1, 2, 3]]
+    this.directions()
+    assert len(reads) == 4
+
+
+def test_lengths_count_answers_only_for_the_harmful_test_prompts(current):
+    this, _ = current
+    limit = 256
+    this.settings.scoring.answer_tokens = 100
+    fits = {
+        "harmful": [[0] * 200],
+        "harmless": [[0] * 200],
+        "harmful_test": [[0] * 150],
+        "harmless_test": [[0] * 200],
+    }
+    this._check_lengths(fits)
+    with pytest.raises(RunError, match=f"model's {limit} tokens .*1 harmful_test"):
+        this._check_lengths(fits | {"harmful_test": [[0] * 200]})
+
+
+def test_raising_the_answer_length_later_is_still_checked(tiny_run):
+    this, _, use, _ = tiny_run
+    use(TEMPLATE)
+    this.prompt_ids()
+    this.settings.scoring.answer_tokens = 250
+    with pytest.raises(RunError, match="too long"):
+        this.prompt_ids()
+
+
+def test_the_checking_server_is_sized_from_the_checked_prompts(tiny_run, monkeypatch):
+    this, _, use, _ = tiny_run
+    use(TEMPLATE)
+    sizes = []
+    real = Run.server
+
+    def recording(self, model, adapters=(), context_per_slot=8192, parallel=4):
+        sizes.append((context_per_slot, parallel))
+        return real(self, model, adapters, context_per_slot, parallel)
+
+    monkeypatch.setattr(Run, "server", recording)
+    ids = this.prompt_ids()
+    sampled = max(len(p) for prompts in ids.values() for p in prompts[: run.CHECKED_PER_SET])
+    assert sizes[-1] == (sampled + 16, 1)
