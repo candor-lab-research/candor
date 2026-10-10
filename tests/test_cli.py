@@ -1,5 +1,6 @@
 import json
 
+import pytest
 import torch
 from safetensors.torch import save_file
 from typer.testing import CliRunner
@@ -139,3 +140,45 @@ def test_init_goes_ahead_when_only_bionic_cannot_read_the_template(tmp_path):
     result = init(tmp_path, model_folder(tmp_path, template=template))
     assert result.exit_code == 0, result.output
     assert "Bionic can't read this model's chat template" in result.output
+
+
+def test_init_pins_the_date_in_the_templates_own_format(tmp_path):
+    template = PINNABLE.replace("%d %b %Y", "%Y-%m-%d")
+    result = init(tmp_path, model_folder(tmp_path, template=template))
+    assert result.exit_code == 0, result.output
+    assert config.load(tmp_path / "runs" / "first").model.date == config.today_in("%Y-%m-%d")
+
+
+def test_a_local_model_has_no_revision(tmp_path):
+    assert init(tmp_path, model_folder(tmp_path)).exit_code == 0
+    assert config.load(tmp_path / "runs" / "first").model.revision is None
+
+
+@pytest.mark.parametrize("name", ["../escape", "a/b", "..", "-x"])
+def test_init_rejects_names_that_are_not_one_plain_folder(tmp_path, name):
+    result = init(tmp_path, model_folder(tmp_path), name=name)
+    assert result.exit_code == 2
+    assert not (tmp_path / "escape").exists()
+    assert not (tmp_path / "runs").exists()
+
+
+def test_init_expands_home_in_the_runs_folder(tmp_path, monkeypatch):
+    monkeypatch.setenv("HOME", str(tmp_path / "home"))
+    folder = model_folder(tmp_path)
+    result = CliRunner(env={"COLUMNS": "250"}).invoke(
+        app, ["init", "first", "--model", str(folder), "--runs", "~/runs"]
+    )
+    assert result.exit_code == 0, result.output
+    assert (tmp_path / "home" / "runs" / "first" / "candor.toml").exists()
+    assert not (tmp_path / "~").exists()
+
+
+def test_a_failure_while_writing_exits_3_and_leaves_nothing(tmp_path, monkeypatch):
+    def broken(*_args, **_kwargs):
+        raise RuntimeError("disk full")
+
+    monkeypatch.setattr(config, "render", broken)
+    result = init(tmp_path, model_folder(tmp_path))
+    assert result.exit_code == 3
+    assert "disk full" in result.output
+    assert not (tmp_path / "runs" / "first").exists()

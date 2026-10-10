@@ -140,20 +140,23 @@ def begin_of_text(tokenizer: PreTrainedTokenizerBase) -> BeginOfText:
     return BeginOfText(template=template, tokenizer_adds=with_special - template)
 
 
-def date_format(template: str) -> str | None:
-    """The strftime format the template writes today's date in, if it writes one."""
-    match = re.search(r"strftime_now\(\s*[\"']([^\"']+)[\"']", template)
-    return match[1] if match else None
+STRFTIME = re.compile(r"strftime_now\s*\(")
+DATE_STRING = re.compile(r"set\s+date_string\s*=\s*strftime_now\s*\(\s*[\"']([^\"']+)[\"']\s*\)")
+DATE_GUARD = re.compile(r"date_string\s+is\s+(not\s+)?defined")
 
 
-def date_can_be_pinned(template: str) -> bool:
-    """Llama 3 style templates only call strftime_now when no date_string is passed in."""
-    return "date_string is defined" in template or "date_string is not defined" in template
+def pinnable_date_format(template: str) -> str | None:
+    """The date format to pin, when the template's only date is a date_string it accepts from outside.
 
-
-def writes_the_date(tokenizer: PreTrainedTokenizerBase) -> bool:
-    """True when the chat template puts today's date in every prompt, so prompts change daily.
-
-    Pin it for a run by passing the template a fixed date_string.
+    Llama 3 templates set date_string from strftime_now only when none is passed in, so passing
+    one fixes the date. Any other call to strftime_now would still write today's date.
     """
-    return "strftime_now" in (chat_template(tokenizer) or "")
+    match = DATE_STRING.search(template)
+    if match and len(STRFTIME.findall(template)) == 1 and DATE_GUARD.search(template):
+        return match[1]
+    return None
+
+
+def writes_the_date(template: str) -> bool:
+    """True when the chat template puts today's date in every prompt, so prompts change daily."""
+    return STRFTIME.search(template) is not None

@@ -158,3 +158,20 @@ A second review of those fixes found one regression and five gaps, all now fixed
   reports unexpected errors as a message, and handles a template that can't render one message.
 - Known and accepted: another process could take the port in the instant between candor's check
   and llama-server binding it; the served-model check catches that unless it serves the same file.
+
+### Review of `candor init` (2026-10-10)
+
+A review found 9 defects and 4 weak tests; all fixed (161 tests):
+
+- Run names must be one plain folder name, so `init ../x` can't write outside the runs folder;
+  `--runs ~/...` is expanded (it used to create a folder literally named `~`).
+- The settings file must spell out every setting: a missing one is an error, not a silent
+  default, so a later candor release can't quietly change an existing run.
+- Numbers are strict (no `true` or `"200"` for 200, no infinity), the seed is limited to what
+  the search can use, and names can't be empty.
+- A run folder is built under a temporary name and renamed into place, so a failure leaves
+  nothing behind to block the next `init`; files are read and written as UTF-8.
+- Hub models are pinned to the commit they were checked at (`revision`), so later steps use
+  exactly those weights and that template.
+- The date is pinned only when the template's one date is a `date_string` it accepts from outside,
+  in that call's own format; otherwise `init` warns that a run must finish the day it starts.

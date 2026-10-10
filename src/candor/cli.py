@@ -7,6 +7,7 @@ from pathlib import Path
 from typing import Annotated
 
 import typer
+from huggingface_hub import HfApi
 from rich.console import Console
 from rich.table import Table
 from transformers import AutoTokenizer
@@ -108,8 +109,12 @@ def _tokenizer_rows(model: str) -> list[Row]:
     rows: list[Row] = [
         ("Begin-of-text", "warn" if found.problems() else "ok", "; ".join([counts, *found.problems()]))
     ]
-    if checks.writes_the_date(tokenizer):
-        rows.append(("Date in prompt", "warn", "the chat template writes today's date, so runs pin it"))
+    if checks.pinnable_date_format(template):
+        rows.append(("Date in prompt", "warn", "the chat template writes today's date into every prompt; "
+                     "a run can pin it"))  # fmt: skip
+    elif checks.writes_the_date(template):
+        rows.append(("Date in prompt", "warn", "the chat template writes today's date into every prompt and "
+                     "can't be given a fixed one, so finish each run on the day it starts"))  # fmt: skip
     else:
         rows.append(("Date in prompt", "ok", "none"))
     result = checks.app_template_parses(tokenizer, template)
@@ -195,19 +200,15 @@ def inspect(model: Annotated[str, typer.Argument(help="A Hugging Face model id o
 NOT_BLOCKING = {"Bionic template"}
 
 
-def _pinned_date(console: Console, model: str) -> str | None:
-    tokenizer = AutoTokenizer.from_pretrained(model, trust_remote_code=False)
-    template = checks.chat_template(tokenizer) or ""
-    date_format = checks.date_format(template)
-    if date_format is None:
-        return None
-    if not checks.date_can_be_pinned(template):
-        console.print(
-            "[yellow]The chat template writes today's date and can't be given a fixed one, so finish "
-            "each run on the day it starts.[/]"
-        )
-        return None
-    return config.today_in(date_format)
+def _pinned_date(model: str, revision: str | None) -> str | None:
+    tokenizer = AutoTokenizer.from_pretrained(model, revision=revision, trust_remote_code=False)
+    date_format = checks.pinnable_date_format(checks.chat_template(tokenizer) or "")
+    return config.today_in(date_format) if date_format else None
+
+
+def _revision(model: str) -> str | None:
+    """The Hub commit the model is at now, so later steps use exactly what was checked."""
+    return None if Path(model).is_dir() else HfApi().model_info(model).sha
 
 
 @app.command()
@@ -223,9 +224,15 @@ def init(
     Nothing is written if the model fails a check candor can't work around.
     """
     console = Console()
-    folder = runs / name
-    if folder.exists():
-        console.print(f"[red]{folder} already exists.[/] Pick another name, or delete that folder first.")
+    try:
+        config.check_run_name(name)
+    except config.ConfigError as error:
+        raise typer.BadParameter(str(error), param_hint="NAME") from None
+    runs = runs.expanduser()
+    if (runs / name).exists():
+        console.print(
+            f"[red]{runs / name} already exists.[/] Pick another name, or delete that folder first."
+        )
         raise typer.Exit(FAILED_CHECK)
     model = _resolved(model)
     rows = _checked_rows(console, model)
@@ -238,15 +245,28 @@ def init(
         )
         raise typer.Exit(FAILED_CHECK)
 
-    settings = config.RunConfig(model=config.Model(source=model, date=_pinned_date(console, model)))
-    header = (
-        f"Settings for the candor run {name!r}, created {date.today()} by candor {version('candor')} "
-        f"for llama.cpp {LLAMA_CPP_RELEASE}.\nEdit freely: every later command reads and checks this file."
-    )
-    path = config.write(folder, settings, header)
-    (folder / "inspect.json").write_text(
-        json.dumps([dict(zip(("check", "result", "detail"), r, strict=True)) for r in rows], indent=1)
-    )
+    try:
+        revision = _revision(model)
+        model_settings = config.Model(source=model, revision=revision, date=_pinned_date(model, revision))
+        header = (
+            f"Settings for the candor run {name!r}, created {date.today()} by candor {version('candor')} "
+            f"for llama.cpp {LLAMA_CPP_RELEASE}.\n"
+            "Edit freely: every later command reads and checks this file."
+        )
+        record = [dict(zip(("check", "result", "detail"), row, strict=True)) for row in rows]
+        path = config.write(
+            runs,
+            name,
+            config.RunConfig(model=model_settings),
+            header,
+            {"inspect.json": json.dumps(record, indent=1)},
+        )
+    except FileExistsError as error:
+        console.print(f"[red]{error}.[/] Pick another name, or delete that folder first.")
+        raise typer.Exit(FAILED_CHECK) from None
+    except Exception as error:
+        console.print(f"[red]candor couldn't create the run:[/] {type(error).__name__}: {error}")
+        raise typer.Exit(COULD_NOT_INSPECT) from None
     console.print(f"[green]Created {path}[/]")
     if any(check in NOT_BLOCKING and status == "fail" for check, status, _ in rows):
         console.print(

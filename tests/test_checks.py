@@ -8,6 +8,7 @@ from candor.checks import (
     app_template_parses,
     begin_of_text,
     chat_template,
+    pinnable_date_format,
     remote_code,
     writes_the_date,
 )
@@ -40,14 +41,40 @@ def test_model_without_a_bos_token():
 
 
 def test_writes_the_date():
-    assert writes_the_date(tokenizer(DATED, adds_bos=False))
-    assert not writes_the_date(tokenizer(WITH_BOS, adds_bos=False))
+    assert writes_the_date(DATED)
+    assert writes_the_date("{{ strftime_now ('%Y') }}")
+    assert not writes_the_date(WITH_BOS)
+
+
+LLAMA_3 = (
+    "{%- if not date_string is defined %}{%- if strftime_now is defined %}"
+    '{%- set date_string = strftime_now("%d %b %Y") %}{%- else %}{%- set date_string = "26 Jul 2024" %}'
+    "{%- endif %}{%- endif %}Today Date: {{ date_string }}"
+)
+
+
+@pytest.mark.parametrize(
+    ("template", "expected"),
+    [
+        (LLAMA_3, "%d %b %Y"),
+        (LLAMA_3.replace("%d %b %Y", "%Y-%m-%d"), "%Y-%m-%d"),
+        (
+            LLAMA_3.replace("set date_string = strftime_now(", "set date_string  =  strftime_now ( "),
+            "%d %b %Y",
+        ),
+        (LLAMA_3 + "{{ strftime_now('%A') }}", None),
+        ("{{ strftime_now('%Y') }}" + LLAMA_3, None),
+        ("{% set date_string = strftime_now('%d %b %Y') %}{{ date_string }}", None),
+        (WITH_BOS, None),
+    ],
+)
+def test_pinnable_date_format(template, expected):
+    assert pinnable_date_format(template) == expected
 
 
 def test_several_named_templates_resolve_to_the_default():
     named = tokenizer({"default": DATED, "tool_use": WITH_BOS}, adds_bos=False)
     assert chat_template(named) == DATED
-    assert writes_the_date(named)
 
 
 def test_no_template():

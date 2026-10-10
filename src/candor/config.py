@@ -1,20 +1,37 @@
 """A run's settings: one TOML file per run, written by `candor init` and read by every later command.
 
-Every setting a run uses lives here, search ranges included, so nothing is hidden in the code.
-Each field's description is also the comment written above it in the file.
+Every setting a run uses lives here, search ranges included, so nothing is hidden in the code. The
+file must spell out every setting: a missing one is an error, not a silent default, so a later
+candor release can't change an existing run. Each field's description is also the comment
+written above it in the file.
 """
 
-import json
+import os
+import re
+import shutil
 import tomllib
 from datetime import date
 from pathlib import Path
-from typing import Any
+from typing import Annotated, Any
 
-from pydantic import BaseModel, ConfigDict, Field, ValidationError, field_validator, model_validator
+from pydantic import (
+    BaseModel,
+    ConfigDict,
+    Field,
+    StrictInt,
+    ValidationError,
+    field_validator,
+    model_validator,
+)
 
 FILE = "candor.toml"
 QUANTIZATIONS = {"Q4_K_M", "Q4_K_S", "Q5_K_M", "Q5_K_S", "Q6_K", "Q8_0", "F16", "BF16"}
 KV_CACHE_TYPES = {"f32", "f16", "bf16", "q8_0", "q5_1", "q5_0", "q4_1", "q4_0", "iq4_nl"}
+RUN_NAME = re.compile(r"[A-Za-z0-9][A-Za-z0-9._-]*")
+
+Finite = Annotated[float, Field(strict=True, allow_inf_nan=False)]
+Range = tuple[Finite, Finite]
+Text = Annotated[str, Field(strict=True, min_length=1)]
 
 
 class Section(BaseModel):
@@ -22,11 +39,16 @@ class Section(BaseModel):
 
 
 class Model(Section):
-    source: str = Field(description="The model to edit: a Hugging Face id or a local folder.")
-    date: str | None = Field(
+    source: Text = Field(description="The model to edit: a Hugging Face id or a local folder.")
+    revision: Text | None = Field(
         default=None,
-        description="The date written into every prompt, pinned so a run's prompts don't change "
-        "from day to day. Only set when the chat template writes the date.",
+        description="The Hugging Face commit the model was checked at, so later steps use exactly those "
+        "weights and that chat template. Not set for a local folder.",
+    )
+    date: Text | None = Field(
+        default=None,
+        description="The date written into every prompt, pinned so a run's prompts don't change from day "
+        "to day. Only set when the chat template writes the date and can be given a fixed one.",
     )
 
 
@@ -35,7 +57,7 @@ class Deployment(Section):
     kv_cache: str = Field(
         default="f16", description="The KV cache type you run with (llama.cpp's --cache-type-k and -v)."
     )
-    system_prompt: str = Field(
+    system_prompt: Annotated[str, Field(strict=True)] = Field(
         default="",
         description="The system prompt you use. Bionic sends none by default; heretic used "
         '"You are a helpful assistant."',
@@ -57,9 +79,9 @@ class Deployment(Section):
 
 
 class PromptSet(Section):
-    dataset: str
-    split: str
-    column: str = "text"
+    dataset: Text
+    split: Text
+    column: Text = "text"
 
 
 class Prompts(Section):
@@ -81,15 +103,14 @@ class Prompts(Section):
     )
 
 
-Range = tuple[float, float]
-
-
 class Search(Section):
-    trials: int = Field(default=200, ge=1, description="How many edits to try.")
-    startup_trials: int = Field(
+    trials: StrictInt = Field(default=200, ge=1, description="How many edits to try.")
+    startup_trials: StrictInt = Field(
         default=60, ge=1, description="Random trials before the search starts aiming."
     )
-    seed: int = Field(default=0, description="Fixes the search's randomness, so a run can be repeated.")
+    seed: StrictInt = Field(
+        default=0, ge=0, lt=2**32, description="Fixes the search's randomness, so a run can be repeated."
+    )
     strength: Range = Field(
         default=(0.8, 3.0),
         description="Edit strength at the peak layer. 1 removes the direction; above 1 pushes past it, "
@@ -112,22 +133,21 @@ class Search(Section):
 
     @field_validator("strength", "peak_layer", "edge_strength", "reach", "direction_layer")
     @classmethod
-    def _ordered(cls, value: Range) -> Range:
-        low, high = value
-        if low > high:
+    def _ordered(cls, value: tuple[float, float]) -> tuple[float, float]:
+        if value[0] > value[1]:
             raise ValueError("the first number must not be larger than the second")
         return value
 
     @field_validator("peak_layer", "edge_strength", "reach", "direction_layer")
     @classmethod
-    def _fraction(cls, value: Range) -> Range:
+    def _fraction(cls, value: tuple[float, float]) -> tuple[float, float]:
         if not 0 <= value[0] <= value[1] <= 1:
             raise ValueError("must be fractions between 0 and 1")
         return value
 
     @field_validator("strength")
     @classmethod
-    def _positive(cls, value: Range) -> Range:
+    def _positive(cls, value: tuple[float, float]) -> tuple[float, float]:
         if value[0] <= 0:
             raise ValueError("must be above 0")
         return value
@@ -140,7 +160,7 @@ class Search(Section):
 
 
 class RunConfig(Section):
-    model: Model
+    model: Model = Field(description="The model this run edits.")
     deployment: Deployment = Field(
         default_factory=Deployment,
         description="How you actually run the model, so trials are scored that way.",
@@ -153,24 +173,63 @@ class ConfigError(Exception):
     pass
 
 
+def _optional(field: Any) -> bool:
+    return field.default is None
+
+
+def _missing(settings: BaseModel, prefix: str = "") -> list[str]:
+    """Settings the file didn't spell out. Only those whose absence means "not set" may be left out."""
+    found = []
+    for name, field in type(settings).model_fields.items():
+        if name not in settings.model_fields_set and not _optional(field):
+            found.append(f"{prefix}{name}")
+        elif isinstance(value := getattr(settings, name), Section):
+            found += _missing(value, f"{prefix}{name}.")
+    return found
+
+
+def parse(text: str, where: str) -> RunConfig:
+    try:
+        settings = RunConfig.model_validate(tomllib.loads(text))
+    except tomllib.TOMLDecodeError as error:
+        raise ConfigError(f"{where} isn't valid TOML: {error}") from None
+    except ValidationError as error:
+        problems = [f"{'.'.join(map(str, e['loc']))}: {e['msg']}" for e in error.errors()]
+        raise ConfigError(f"{where} has settings candor can't use:\n  " + "\n  ".join(problems)) from None
+    if missing := _missing(settings):
+        raise ConfigError(f"{where} is missing settings, so candor won't guess them: {', '.join(missing)}")
+    return settings
+
+
 def load(folder: Path) -> RunConfig:
     path = folder / FILE
     try:
-        return RunConfig.model_validate(tomllib.loads(path.read_text()))
+        text = path.read_bytes().decode("utf-8")
     except FileNotFoundError:
         raise ConfigError(f"{folder} has no {FILE}; create one with candor init") from None
-    except tomllib.TOMLDecodeError as error:
-        raise ConfigError(f"{path} isn't valid TOML: {error}") from None
-    except ValidationError as error:
-        problems = [f"{'.'.join(map(str, e['loc']))}: {e['msg']}" for e in error.errors()]
-        raise ConfigError(f"{path} has settings candor can't use:\n  " + "\n  ".join(problems)) from None
+    except (OSError, UnicodeDecodeError) as error:
+        raise ConfigError(f"candor couldn't read {path}: {error}") from None
+    return parse(text, str(path))
+
+
+def _string(value: str) -> str:
+    escapes = {'"': '\\"', "\\": "\\\\", "\b": "\\b", "\t": "\\t", "\n": "\\n", "\f": "\\f", "\r": "\\r"}
+    out = []
+    for char in value:
+        if char in escapes:
+            out.append(escapes[char])
+        elif ord(char) < 0x20 or ord(char) == 0x7F:
+            out.append(f"\\u{ord(char):04X}")
+        else:
+            out.append(char)
+    return '"' + "".join(out) + '"'
 
 
 def _value(value: Any) -> str:
     if isinstance(value, BaseModel):
         return "{ " + ", ".join(f"{k} = {_value(v)}" for k, v in value.model_dump().items()) + " }"
     if isinstance(value, str):
-        return json.dumps(value, ensure_ascii=False)
+        return _string(value)
     if isinstance(value, bool):
         return "true" if value else "false"
     if isinstance(value, tuple | list):
@@ -179,7 +238,7 @@ def _value(value: Any) -> str:
 
 
 def _comment(text: str | None) -> list[str]:
-    return [f"# {line}" for line in (text or "").splitlines()] if text else []
+    return [f"# {line}" for line in (text or "").splitlines()]
 
 
 def render(config: RunConfig, header: str) -> str:
@@ -195,13 +254,37 @@ def render(config: RunConfig, header: str) -> str:
     return "\n".join(lines) + "\n"
 
 
-def write(folder: Path, config: RunConfig, header: str) -> Path:
-    folder.mkdir(parents=True, exist_ok=False)
-    path = folder / FILE
-    path.write_text(render(config, header))
-    if load(folder) != config:
-        raise ConfigError(f"{path} doesn't read back as written")
-    return path
+def check_run_name(name: str) -> None:
+    if not RUN_NAME.fullmatch(name) or name in {".", ".."}:
+        raise ConfigError(
+            f"{name!r} can't be a run name: use one plain folder name of letters, digits, '.', '_' or '-'"
+        )
+
+
+def write(
+    runs: Path, name: str, config: RunConfig, header: str, extras: dict[str, str] | None = None
+) -> Path:
+    """Create runs/name holding the settings file and any extra text files. Nothing is left behind
+    if any step fails."""
+    check_run_name(name)
+    text = render(config, header)
+    if parse(text, "the new settings") != config:
+        raise ConfigError("the new settings don't read back as written")
+    folder = runs / name
+    if folder.exists():
+        raise FileExistsError(f"{folder} already exists")
+    runs.mkdir(parents=True, exist_ok=True)
+    partial = runs / f".{name}.partial-{os.getpid()}"
+    shutil.rmtree(partial, ignore_errors=True)
+    try:
+        partial.mkdir()
+        (partial / FILE).write_text(text, encoding="utf-8")
+        for file, content in (extras or {}).items():
+            (partial / file).write_text(content, encoding="utf-8")
+        partial.rename(folder)
+    finally:
+        shutil.rmtree(partial, ignore_errors=True)
+    return folder / FILE
 
 
 def today_in(format: str) -> str:
