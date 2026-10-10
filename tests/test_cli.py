@@ -1,18 +1,41 @@
+import contextlib
 import json
+import os
+import signal
+import subprocess
+import sys
+from pathlib import Path
+from types import SimpleNamespace
 
 import pytest
 import torch
 from safetensors.torch import save_file
 from typer.testing import CliRunner
 
-from candor import config
+from candor import cli, config
 from candor.cli import app
+from candor.convert import ConversionError
+from candor.run import RunError
+from candor.toolchain import ToolchainError
 
+from .custom_code import write_custom_code_model
 from .test_checks import needs_node
 from .test_targets import llama
 from .tiny_tokenizer import DATED, PINNABLE, WITH_BOS, tokenizer
 
 HIDDEN = 64
+
+
+class FakeHub:
+    """The Hub as init sees it: every dataset is at a commit named after it."""
+
+    def dataset_info(self, name):
+        return SimpleNamespace(sha=f"{name}@commit")
+
+
+@pytest.fixture(autouse=True)
+def no_network(monkeypatch):
+    monkeypatch.setattr(cli, "HfApi", FakeHub)
 
 
 def model_folder(
@@ -174,11 +197,131 @@ def test_init_expands_home_in_the_runs_folder(tmp_path, monkeypatch):
 
 
 def test_a_failure_while_writing_exits_3_and_leaves_nothing(tmp_path, monkeypatch):
-    def broken(*_args, **_kwargs):
-        raise RuntimeError("disk full")
+    folder = model_folder(tmp_path)
+    write_text = Path.write_text
 
-    monkeypatch.setattr(config, "render", broken)
-    result = init(tmp_path, model_folder(tmp_path))
+    def broken(path, *args, **kwargs):
+        if path.name == "inspect.json":
+            raise OSError("disk full")
+        return write_text(path, *args, **kwargs)
+
+    monkeypatch.setattr(Path, "write_text", broken)
+    result = init(tmp_path, folder)
     assert result.exit_code == 3
     assert "disk full" in result.output
-    assert not (tmp_path / "runs" / "first").exists()
+    assert list((tmp_path / "runs").iterdir()) == []
+
+
+def test_init_pins_the_prompt_datasets(tmp_path):
+    assert init(tmp_path, model_folder(tmp_path)).exit_code == 0
+    prompts = config.load(tmp_path / "runs" / "first").prompts
+    assert prompts.harmful.revision == "mlabonne/harmful_behaviors@commit"
+    assert prompts.harmless_test.revision == "mlabonne/harmless_alpaca@commit"
+
+
+def test_init_trusts_a_models_own_code_only_when_transformers_needs_it(tmp_path):
+    custom = write_custom_code_model(tmp_path / "custom")
+    result = init(tmp_path, custom, name="custom")
+    assert result.exit_code == 0, result.output
+    assert "transformers can only load it by running configuration_tiny.py, modeling_tiny.py" in result.output
+    assert config.load(tmp_path / "runs" / "custom").model.trust_remote_code
+    shipped = {"architectures": ["LlamaForCausalLM"], "model_type": "llama", "hidden_size": HIDDEN}
+    shipped |= {"num_hidden_layers": 2, "auto_map": {"AutoModelForCausalLM": "modeling_own.OwnForCausalLM"}}
+    result = init(tmp_path, model_folder(tmp_path, config=shipped))
+    assert result.exit_code == 0, result.output
+    assert "ships modeling_own.py, but candor uses transformers' own code for it" in result.output
+    assert not config.load(tmp_path / "runs" / "first").model.trust_remote_code
+
+
+def test_brackets_in_paths_and_errors_are_printed_as_they_are(tmp_path):
+    (tmp_path / "models [old]").mkdir()
+    result = run(model_folder(tmp_path / "models [old]"))
+    assert result.exit_code == 0, result.output
+    assert "models [old]" in result.output
+    missing = tmp_path / "runs [/x]"
+    result = candor_run(missing)
+    assert result.exit_code == 3
+    assert f"{missing} has no candor.toml" in result.output
+
+
+def candor_run(folder):
+    return CliRunner(env={"COLUMNS": "250"}).invoke(app, ["run", str(folder)])
+
+
+class Ending:
+    """A run whose stages end the way a test needs."""
+
+    def __init__(self, outcome, report):
+        self.outcome, self.report = outcome, report
+
+    def prepare(self):
+        self.report("Removing gguf/model [old].gguf, which this run no longer uses")
+        if isinstance(self.outcome, Exception):
+            raise self.outcome
+        return self.outcome
+
+
+@pytest.mark.parametrize(
+    ("outcome", "code", "message"),
+    [
+        ({"edit targets": 2, "adapters": 4}, 0, "2 edit targets, 4 adapters. The search"),
+        (RunError("no room [here]"), 1, "The run stopped: no room [here]"),
+        (ToolchainError("no llama-server"), 1, "The run stopped: no llama-server"),
+        (ConversionError("the converter failed"), 1, "The run stopped: the converter failed"),
+        (
+            ValueError("odd [/x] value"),
+            3,
+            "The run stopped on an unexpected error: ValueError: odd [/x] value",
+        ),
+    ],
+)
+def test_run_says_how_it_ended(tmp_path, monkeypatch, outcome, code, message):
+    monkeypatch.setattr(cli.Run, "open", lambda folder, report: Ending(outcome, report))
+    handlers = signal.getsignal(signal.SIGTERM), signal.getsignal(signal.SIGHUP)
+    result = candor_run(tmp_path)
+    assert result.exit_code == code, result.output
+    assert message in result.output
+    assert "Removing gguf/model [old].gguf" in result.output
+    assert (signal.getsignal(signal.SIGTERM), signal.getsignal(signal.SIGHUP)) == handlers
+
+
+STUCK = """
+import subprocess
+import sys
+import time
+
+from candor import cli
+
+
+class Stuck:
+    def prepare(self):
+        child = subprocess.Popen([sys.executable, "-c", "import time; time.sleep(60)"])
+        try:
+            print(child.pid, flush=True)
+            time.sleep(60)
+        finally:
+            child.terminate()
+            child.wait()
+
+
+cli.Run.open = lambda folder, report: Stuck()
+cli.app(["run", "anywhere"])
+"""
+
+
+@pytest.mark.parametrize("number", [signal.SIGTERM, signal.SIGHUP])
+def test_kill_or_a_closed_terminal_stops_what_the_run_started(tmp_path, number):
+    script = tmp_path / "stuck.py"
+    script.write_text(STUCK)
+    with subprocess.Popen([sys.executable, str(script)], stdout=subprocess.PIPE, text=True) as stuck:
+        assert stuck.stdout is not None
+        child = int(stuck.stdout.readline())
+        try:
+            stuck.send_signal(number)
+            assert stuck.wait(timeout=30) == 128 + number
+            with pytest.raises(ProcessLookupError):
+                os.kill(child, 0)
+        finally:
+            stuck.kill()
+            with contextlib.suppress(ProcessLookupError):
+                os.kill(child, signal.SIGKILL)
