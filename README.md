@@ -28,6 +28,7 @@ uv sync
 uv run candor inspect ~/Desktop/tune/models/rude-llama-bf16   # a local folder or a Hugging Face id
 uv run candor init rude --model ~/Desktop/tune/models/rude-llama-bf16   # writes runs/rude/candor.toml
 uv run candor run runs/rude                                    # every stage built so far
+uv run candor upgrade runs/rude                                # after updating candor: add new settings
 ```
 
 - `inspect` reads only the config, tokenizer and file headers, so it is quick and needs no GPU. Its
@@ -41,6 +42,11 @@ uv run candor run runs/rude                                    # every stage bui
 - `run` resumes where it stopped. Each result in the run folder records what it was built from,
   including the version of candor's code for its stage, so changing a setting or upgrading candor
   rebuilds what it affects and everything after it, and says so.
+- `upgrade` adds the settings a newer candor has and a run's `candor.toml` lacks, at their defaults,
+  and lists them. candor never fills in a missing setting by itself.
+- The held-out harmful prompts, which the search never sees, come from StrongREJECT without the
+  rows it took from AdvBench. It is gated: accept its terms on its Hugging Face page, then
+  `hf auth login`.
 - Reading residuals needs the model in 16 bits on the GPU. `run` checks this before downloading or
   converting anything: rude-llama fits on an 18 GB Mac; Qwen3.5-9B and K2-Horizon need a pod.
 

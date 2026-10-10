@@ -154,7 +154,8 @@ def test_init_and_run_prepare_every_stage_resume_and_follow_settings(tmp_path):
     assert created.exit_code == 0, created.output
     first = runner.invoke(app, ["run", str(run_folder)])
     assert first.exit_code == 0, first.output
-    assert "60 edit targets" in first.output and "1000 prompts" in first.output
+    assert "60 edit targets" in first.output and "1588 prompts" in first.output
+    assert "Holding out 288 harmful and 300 harmless prompts" in first.output
 
     results = [
         run_folder / "gguf" / "model-BF16.gguf",

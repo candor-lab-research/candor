@@ -26,7 +26,10 @@ def write_text(tmp_path, text: str):
 )
 def test_settings_read_back_exactly_as_written(tmp_path, source):
     written = settings(source=source, revision="abc123", date="10 Oct 2026", trust_remote_code=True)
-    written.prompts.harmful = config.PromptSet(dataset=source, split="train[:4]", revision="def456")
+    exclude = {source: [source], "plain_key": ["a", "b"]}
+    written.prompts.harmful = config.PromptSet(
+        dataset=source, split="train[:4]", revision="def456", exclude=exclude
+    )
     config.write(tmp_path, "run", written, "A header\nover two lines")
     assert config.load(tmp_path / "run") == written
 
@@ -151,6 +154,35 @@ def test_settings_that_dont_read_back_are_never_written(tmp_path, monkeypatch):
     with pytest.raises(ConfigError, match="read back"):
         config.write(tmp_path, "run", settings(), "h")
     assert list(tmp_path.iterdir()) == []
+
+
+def test_a_missing_setting_points_to_upgrade(tmp_path):
+    text = config.render(settings(), "h").replace("startup_trials = 60", "")
+    with pytest.raises(ConfigError, match="candor upgrade adds them at their defaults"):
+        config.load(write_text(tmp_path, text))
+
+
+def test_an_upgrade_fills_in_missing_settings_and_keeps_the_rest(tmp_path):
+    text = config.render(settings(source="/models/mine"), "Made by init\nfor a run")
+    held_out = next(line for line in text.splitlines() if line.startswith("harmful_held_out = "))
+    text = text.replace(held_out + "\n", "").replace("trials = 200", "trials = 123")
+    upgraded, added, header = config.load_for_upgrade(write_text(tmp_path, text))
+    assert added == ["prompts.harmful_held_out"]
+    assert header == "Made by init\nfor a run"
+    assert upgraded.prompts.harmful_held_out == config.Prompts().harmful_held_out
+    assert upgraded.search.trials == 123 and upgraded.model.source == "/models/mine"
+    config.rewrite(tmp_path, upgraded, header)
+    assert config.load(tmp_path) == upgraded
+    assert [p.name for p in tmp_path.iterdir()] == [config.FILE]
+
+
+def test_a_rewrite_that_fails_leaves_the_old_file(tmp_path, monkeypatch):
+    write_text(tmp_path, "old")
+    monkeypatch.setattr(config, "render", lambda *args: "not = [valid")
+    with pytest.raises(ConfigError):
+        config.rewrite(tmp_path, settings(), "h")
+    assert (tmp_path / config.FILE).read_text() == "old"
+    assert [p.name for p in tmp_path.iterdir()] == [config.FILE]
 
 
 def test_an_unpinned_prompt_set_is_left_floating(tmp_path):

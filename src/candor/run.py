@@ -25,16 +25,22 @@ from typing import Any
 
 import torch
 from datasets import load_dataset
+from datasets.exceptions import DatasetNotFoundError
 from huggingface_hub import constants, snapshot_download
 
 from . import checks, config, convert, directions, residuals, source, targets, toolchain
 from .adapters import write_adapter
 from .edit import RowNorm, rank_one
 from .engine import LLAMA_CPP_RELEASE, LlamaServer
+from .judge import normalise
 from .weights import ModelFiles
 
 MODEL_FILES = ["*.json", "*.safetensors", "*.jinja", "*.txt", "*.model", "*.tiktoken"]
 PROMPT_SETS = tuple(config.Prompts.model_fields)
+# Prompt sets the search never sees, kept for comparing finished edits.
+HELD_OUT = ("harmful_held_out", "harmless_held_out")
+# Prompt sets the model answers in full, so each must fit in the context with a whole answer.
+ANSWERED = ("harmful_test", *HELD_OUT)
 DATE_PROBE = "31 Dec 1999"
 CHECKED_PER_SET = 3
 # The version of each stage's code, in stage order. Bump a stage's number in any commit that changes
@@ -92,7 +98,37 @@ def _sync(path: Path) -> None:
 
 
 def load_prompts(spec: config.PromptSet) -> list[str]:
-    return list(load_dataset(spec.dataset, split=spec.split, revision=spec.revision)[spec.column])
+    try:
+        rows = load_dataset(spec.dataset, split=spec.split, revision=spec.revision)
+    except DatasetNotFoundError as error:
+        raise RunError(
+            f"{error} If it is gated, accept its terms at https://huggingface.co/datasets/{spec.dataset} "
+            "and log in with hf auth login."
+        ) from None
+    texts = list(rows[spec.column])
+    keep = [True] * len(texts)
+    for column, excluded in (spec.exclude or {}).items():
+        labels = list(rows[column])
+        if unmatched := set(excluded) - set(labels):
+            raise RunError(f"{spec.dataset} has no rows whose {column} is {', '.join(sorted(unmatched))}")
+        keep = [kept and label not in excluded for kept, label in zip(keep, labels, strict=True)]
+    return [text for text, kept in zip(texts, keep, strict=True) if kept]
+
+
+def drop_repeats(texts: dict[str, list[str]]) -> dict[str, int]:
+    """Remove from each held-out set every prompt that is also in another set, or earlier in its own,
+    so the held-out sets only hold prompts the search never saw. Returns how many each set lost."""
+    seen = {normalise(text) for name, prompts in texts.items() if name not in HELD_OUT for text in prompts}
+    dropped = {}
+    for name in HELD_OUT:
+        kept = []
+        for text in texts[name]:
+            if (key := normalise(text)) not in seen:
+                seen.add(key)
+                kept.append(text)
+        dropped[name] = len(texts[name]) - len(kept)
+        texts[name] = kept
+    return dropped
 
 
 @dataclass
@@ -338,11 +374,11 @@ class Run:
         return [[*head, {"role": "user", "content": prompt}] for prompt in prompts]
 
     def _check_lengths(self, ids: dict[str, list[list[int]]]) -> None:
-        """Harmful test prompts must fit with a whole answer; the rest need room for one token."""
+        """Prompts the model answers must fit with a whole answer; the rest need room for one token."""
         limit, answer = self.context_limit, self.settings.scoring.answer_tokens
         if not limit:
             return
-        room = {name: answer if name == "harmful_test" else 1 for name in PROMPT_SETS}
+        room = {name: answer if name in ANSWERED else 1 for name in PROMPT_SETS}
         too_long = {name: sum(len(p) + room[name] > limit for p in ids[name]) for name in PROMPT_SETS}
         if any(too_long.values()):
             counts = ", ".join(f"{count} {name}" for name, count in too_long.items() if count)
@@ -365,12 +401,17 @@ class Run:
             ids = json.loads(path.read_text())
             self._check_lengths(ids)
             return ids
-        texts = {}
+        texts = {name: load_prompts(getattr(settings.prompts, name)) for name in PROMPT_SETS}
+        dropped = drop_repeats(texts)
         for name in PROMPT_SETS:
-            spec = getattr(settings.prompts, name)
-            texts[name] = load_prompts(spec)
             if not texts[name]:
-                raise RunError(f"the {name} prompt set ({spec.dataset}, {spec.split}) is empty")
+                spec = getattr(settings.prompts, name)
+                why = ": every one of its prompts is also in another set" if dropped.get(name) else ""
+                raise RunError(f"the {name} prompt set ({spec.dataset}, {spec.split}) is empty{why}")
+        self.report(
+            f"Holding out {len(texts['harmful_held_out'])} harmful and {len(texts['harmless_held_out'])} "
+            f"harmless prompts from the search (repeats of other prompts dropped: {sum(dropped.values())})"
+        )
         self.report("Tokenizing prompts with llama-server")
         kwargs = self.template_kwargs()
         with self.server(quantized, context_per_slot=2048, parallel=2) as server:

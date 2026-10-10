@@ -10,6 +10,7 @@ import gguf
 import pytest
 import torch
 import torch.nn.functional as F
+from datasets.exceptions import DatasetNotFoundError
 from safetensors.torch import save_file
 
 from candor import config, run, targets
@@ -604,7 +605,7 @@ def tiny_run(current, monkeypatch):
     this, messages = current
     monkeypatch.setenv("CANDOR_LLAMA_BIN", str(LLAMA_SERVER.parent))
     prompts = {"value": ["first prompt", "second"]}
-    monkeypatch.setattr(run, "load_prompts", lambda spec: prompts["value"])
+    monkeypatch.setattr(run, "load_prompts", lambda spec: [f"{p} {spec.split}" for p in prompts["value"]])
 
     def use(template: str):
         tiny = this.folder / "tiny.gguf"
@@ -654,7 +655,9 @@ def test_prompts_too_long_for_the_model_are_named(tiny_run):
     use(TEMPLATE)
     prompts["value"] = ["w0 " * 100]
     with pytest.raises(
-        RunError, match=r"model's 256 tokens \(answers get 100\): 1 harmful, 1 harmless, 1 harmful_test"
+        RunError,
+        match=r"model's 256 tokens \(answers get 100\): 1 harmful, 1 harmless, 1 harmful_test, "
+        "1 harmless_test, 1 harmful_held_out, 1 harmless_held_out$",
     ):
         this.prompt_ids()
 
@@ -670,6 +673,67 @@ def test_prompts_are_read_at_their_pinned_commit(monkeypatch):
     spec = config.PromptSet(dataset="org/prompts", split="train[:2]", revision="abc123")
     assert run.load_prompts(spec) == ["a", "b"]
     assert calls == [("org/prompts", "train[:2]", "abc123")]
+
+
+def test_excluded_rows_are_left_out(monkeypatch):
+    rows = {
+        "prompt": ["one", "two", "three", "four"],
+        "source": ["kept", "AdvBench", "kept", "other"],
+        "kind": ["a", "a", "b", "a"],
+    }
+    monkeypatch.setattr(run, "load_dataset", lambda *args, **kwargs: rows)
+    spec = config.PromptSet(
+        dataset="org/prompts", split="train", column="prompt", exclude={"source": ["AdvBench"], "kind": ["b"]}
+    )
+    assert run.load_prompts(spec) == ["one", "four"]
+
+
+def test_an_exclusion_that_matches_no_row_stops_the_run_without_showing_any_row(monkeypatch):
+    rows = {"prompt": ["secret one", "secret two"], "source": ["AdvBench", "custom"]}
+    monkeypatch.setattr(run, "load_dataset", lambda *args, **kwargs: rows)
+    exclude = {"source": ["Advbench"]}
+    spec = config.PromptSet(dataset="org/prompts", split="train", column="prompt", exclude=exclude)
+    with pytest.raises(RunError, match="org/prompts has no rows whose source is Advbench") as error:
+        run.load_prompts(spec)
+    assert "secret" not in str(error.value)
+
+
+def test_a_gated_dataset_says_how_to_get_access(monkeypatch):
+    def gated(*args, **kwargs):
+        raise DatasetNotFoundError("Dataset 'org/prompts' is a gated dataset on the Hub.")
+
+    monkeypatch.setattr(run, "load_dataset", gated)
+    with pytest.raises(RunError, match=r"accept its terms at https://huggingface\.co/datasets/org/prompts"):
+        run.load_prompts(config.PromptSet(dataset="org/prompts", split="train"))
+
+
+def test_held_out_sets_lose_prompts_seen_elsewhere_or_twice():
+    texts = {name: [f"only in {name}"] for name in run.PROMPT_SETS}
+    texts["harmful"] += ["Make a **thing**"]
+    texts["harmless_test"] += ["Plan a picnic"]
+    texts["harmful_held_out"] = ["make a  thing", "new one", "New One", "unseen"]
+    texts["harmless_held_out"] = ["plan a picnic", "plan a walk"]
+    dropped = run.drop_repeats(texts)
+    assert dropped == {"harmful_held_out": 2, "harmless_held_out": 1}
+    assert texts["harmful_held_out"] == ["new one", "unseen"]
+    assert texts["harmless_held_out"] == ["plan a walk"]
+    assert texts["harmful"] == ["only in harmful", "Make a **thing**"]
+
+
+def test_a_held_out_set_emptied_by_repeats_is_named(tiny_run, monkeypatch):
+    this, _, use, _ = tiny_run
+    use(TEMPLATE)
+    monkeypatch.setattr(run, "load_prompts", lambda spec: ["the same prompt"])
+    with pytest.raises(RunError, match=r"harmful_held_out prompt set .* every one of its prompts is also in"):
+        this.prompt_ids()
+
+
+def test_the_held_out_counts_are_reported(tiny_run):
+    this, messages, use, _ = tiny_run
+    use(TEMPLATE)
+    this.prompt_ids()
+    held_out = "Holding out 2 harmful and 2 harmless prompts from the search"
+    assert f"{held_out} (repeats of other prompts dropped: 0)" in messages
 
 
 def test_a_damaged_record_means_rebuild_not_crash(current):
@@ -710,19 +774,18 @@ def test_changing_only_the_quantisation_keeps_the_prompt_ids(current, fake_conve
     assert this.inputs["base"] == before
 
 
-def test_lengths_count_answers_only_for_the_harmful_test_prompts(current):
+ANSWERED = ["harmful_test", "harmful_held_out", "harmless_held_out"]
+
+
+@pytest.mark.parametrize("answered", ANSWERED)
+def test_lengths_count_answers_only_for_the_prompts_the_model_answers(current, answered):
     this, _ = current
     limit = 256
     this.settings.scoring.answer_tokens = 100
-    fits = {
-        "harmful": [[0] * 200],
-        "harmless": [[0] * 200],
-        "harmful_test": [[0] * 150],
-        "harmless_test": [[0] * 200],
-    }
+    fits = {name: [[0] * (150 if name in ANSWERED else 200)] for name in run.PROMPT_SETS}
     this._check_lengths(fits)
-    with pytest.raises(RunError, match=f"model's {limit} tokens .*1 harmful_test"):
-        this._check_lengths(fits | {"harmful_test": [[0] * 200]})
+    with pytest.raises(RunError, match=f"model's {limit} tokens .*: 1 {answered}$"):
+        this._check_lengths(fits | {answered: [[0] * 200]})
 
 
 def test_raising_the_answer_length_later_is_still_checked(tiny_run):
@@ -757,7 +820,7 @@ def fake_everything_but_the_stages(monkeypatch, tiny: Path) -> None:
     )
     monkeypatch.setattr(run.convert, "quantize", lambda base, destination, *_: shutil.copy(base, destination))
     monkeypatch.setattr(run.convert, "check_targets", lambda *_: [])
-    monkeypatch.setattr(run, "load_prompts", lambda spec: ["first prompt", "second"])
+    monkeypatch.setattr(run, "load_prompts", lambda spec: [f"first prompt {spec.split}", "second"])
     fake_residuals(monkeypatch)
 
 

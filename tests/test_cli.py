@@ -16,7 +16,7 @@ from typer.testing import CliRunner
 from candor import cli, config
 from candor.cli import app
 from candor.convert import ConversionError
-from candor.run import RunError
+from candor.run import Run, RunError
 from candor.toolchain import ToolchainError
 
 from .custom_code import write_custom_code_model
@@ -218,6 +218,53 @@ def test_init_pins_the_prompt_datasets(tmp_path):
     prompts = config.load(tmp_path / "runs" / "first").prompts
     assert prompts.harmful.revision == "mlabonne/harmful_behaviors@commit"
     assert prompts.harmless_test.revision == "mlabonne/harmless_alpaca@commit"
+    assert prompts.harmful_held_out.revision == "walledai/StrongREJECT@commit"
+
+
+def upgrade(folder):
+    return CliRunner(env={"COLUMNS": "250"}).invoke(app, ["upgrade", str(folder)])
+
+
+def test_upgrade_adds_missing_settings_pinned_and_keeps_every_value(tmp_path):
+    assert init(tmp_path, model_folder(tmp_path)).exit_code == 0
+    folder = tmp_path / "runs" / "first"
+    text = (folder / config.FILE).read_text()
+    held_out = next(line for line in text.splitlines() if line.startswith("harmful_held_out = "))
+    text = text.replace(held_out + "\n", "").replace("trials = 200", "trials = 201")
+    (folder / config.FILE).write_text(text)
+    refused = CliRunner(env={"COLUMNS": "250"}).invoke(app, ["run", str(folder)])
+    assert refused.exit_code == 3 and "candor upgrade adds them" in refused.output
+    result = upgrade(folder)
+    assert result.exit_code == 0, result.output
+    assert 'prompts.harmful_held_out = { dataset = "walledai/StrongREJECT"' in result.output
+    assert 'revision = "walledai/StrongREJECT@commit"' in result.output
+    settings = config.load(folder)
+    assert settings.prompts.harmful_held_out.revision == "walledai/StrongREJECT@commit"
+    assert settings.search.trials == 201
+    upgraded = (folder / config.FILE).read_text()
+    assert upgraded.startswith(text.split("\n\n")[0] + "\n# Upgraded ")
+    assert "added prompts.harmful_held_out." in upgraded
+
+
+def test_upgrade_with_nothing_missing_changes_nothing(tmp_path):
+    assert init(tmp_path, model_folder(tmp_path)).exit_code == 0
+    path = tmp_path / "runs" / "first" / config.FILE
+    before = path.read_bytes()
+    result = upgrade(path.parent)
+    assert result.exit_code == 0 and "already has every setting" in result.output
+    assert path.read_bytes() == before
+
+
+def test_upgrade_waits_for_a_run_using_the_folder(tmp_path):
+    assert init(tmp_path, model_folder(tmp_path)).exit_code == 0
+    folder = tmp_path / "runs" / "first"
+    path = folder / config.FILE
+    path.write_text(path.read_text().replace("startup_trials = 60\n", ""))
+    before = path.read_bytes()
+    with Run(folder, config.load_for_upgrade(folder)[0]).locked():
+        result = upgrade(folder)
+    assert result.exit_code == 1 and "another candor command is using" in result.output
+    assert path.read_bytes() == before
 
 
 def test_init_trusts_a_models_own_code_only_when_transformers_needs_it(tmp_path):

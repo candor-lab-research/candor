@@ -40,6 +40,7 @@ QUANTIZATIONS = {
 }
 KV_CACHE_TYPES = {"f32", "f16", "bf16", "q8_0", "q5_1", "q5_0", "q4_1", "q4_0", "iq4_nl"}
 RUN_NAME = re.compile(r"[A-Za-z0-9][A-Za-z0-9._-]*")
+BARE_KEY = re.compile(r"[A-Za-z0-9_-]+")
 
 Finite = Annotated[float, Field(strict=True, allow_inf_nan=False)]
 Range = tuple[Finite, Finite]
@@ -102,6 +103,8 @@ class PromptSet(Section):
     column: Text = "text"
     # The dataset's Hugging Face commit, pinned by init so a rebuild reads the same prompts.
     revision: Text | None = None
+    # Rows to leave out, by the values of other columns, such as { source = ["AdvBench"] }.
+    exclude: dict[Text, list[Text]] | None = None
 
 
 class Prompts(Section):
@@ -120,6 +123,20 @@ class Prompts(Section):
     harmless_test: PromptSet = Field(
         default=PromptSet(dataset="mlabonne/harmless_alpaca", split="test[:100]"),
         description="Harmless prompts each trial's KL divergence is measured on.",
+    )
+    harmful_held_out: PromptSet = Field(
+        default=PromptSet(
+            dataset="walledai/StrongREJECT", split="train", column="prompt", exclude={"source": ["AdvBench"]}
+        ),
+        description="Harmful prompts the search never sees, for comparing finished edits. Prompts also "
+        "in another set are dropped, and so are StrongREJECT's prompts taken from AdvBench, which the "
+        "other harmful sets come from.",
+    )
+    harmless_held_out: PromptSet = Field(
+        default=PromptSet(dataset="mlabonne/harmless_alpaca", split="test[100:400]"),
+        description="Harmless prompts the search never sees, for comparing finished edits' KL "
+        "divergence and checking the judge on answers that aren't refusals. Prompts also in another "
+        "set are dropped.",
     )
 
 
@@ -241,33 +258,77 @@ def _missing(settings: BaseModel, prefix: str = "") -> list[str]:
     return found
 
 
-def parse(text: str, where: str) -> RunConfig:
+def _validated(text: str, where: str) -> RunConfig:
+    """The settings, with any the text leaves out at their defaults."""
     try:
-        settings = RunConfig.model_validate(tomllib.loads(text))
+        return RunConfig.model_validate(tomllib.loads(text))
     except tomllib.TOMLDecodeError as error:
         raise ConfigError(f"{where} isn't valid TOML: {error}") from None
     except ValidationError as error:
         problems = [f"{'.'.join(map(str, e['loc']))}: {e['msg']}" for e in error.errors()]
         raise ConfigError(f"{where} has settings candor can't use:\n  " + "\n  ".join(problems)) from None
+
+
+def parse(text: str, where: str) -> RunConfig:
+    settings = _validated(text, where)
     if missing := _missing(settings):
-        raise ConfigError(f"{where} is missing settings, so candor won't guess them: {', '.join(missing)}")
+        raise ConfigError(
+            f"{where} is missing settings, so candor won't guess them: {', '.join(missing)}. If this "
+            "version of candor added them, candor upgrade adds them at their defaults."
+        )
     return settings
 
 
-def load(folder: Path) -> RunConfig:
+def _read(folder: Path) -> tuple[Path, str]:
     path = folder / FILE
     try:
-        text = path.read_bytes().decode("utf-8")
+        return path, path.read_bytes().decode("utf-8")
     except FileNotFoundError:
         raise ConfigError(f"{folder} has no {FILE}; create one with candor init") from None
     except (OSError, UnicodeDecodeError) as error:
         raise ConfigError(f"candor couldn't read {path}: {error}") from None
+
+
+def load(folder: Path) -> RunConfig:
+    path, text = _read(folder)
     return parse(text, str(path))
+
+
+def load_for_upgrade(folder: Path) -> tuple[RunConfig, list[str], str]:
+    """The settings with those the file leaves out at their defaults, the names of those, and the
+    file's header."""
+    path, text = _read(folder)
+    settings = _validated(text, str(path))
+    header = []
+    for line in text.splitlines():
+        if not line.startswith("#"):
+            break
+        header.append(line.removeprefix("#").removeprefix(" "))
+    return settings, _missing(settings), "\n".join(header)
+
+
+def rewrite(folder: Path, settings: RunConfig, header: str) -> None:
+    """Replace the run's settings file in one step, so it is never left half written."""
+    text = render(settings, header)
+    if parse(text, "the new settings") != settings:
+        raise ConfigError("the new settings don't read back as written")
+    partial = folder / f".{FILE}.partial-{os.getpid()}"
+    try:
+        partial.write_text(text, encoding="utf-8")
+        partial.replace(folder / FILE)
+    finally:
+        partial.unlink(missing_ok=True)
+
+
+def _key(key: str) -> str:
+    return key if BARE_KEY.fullmatch(key) else _value(key)
 
 
 def _value(value: Any) -> str:
     if isinstance(value, BaseModel):
-        pairs = [f"{k} = {_value(v)}" for k, v in value.model_dump().items() if v is not None]
+        value = value.model_dump()
+    if isinstance(value, dict):
+        pairs = [f"{_key(k)} = {_value(v)}" for k, v in value.items() if v is not None]
         return "{ " + ", ".join(pairs) + " }"
     if isinstance(value, str):
         # JSON's string escapes are all valid in TOML, which also forbids a raw DEL character.
@@ -277,6 +338,14 @@ def _value(value: Any) -> str:
     if isinstance(value, tuple | list):
         return "[" + ", ".join(_value(v) for v in value) + "]"
     return repr(value)
+
+
+def setting(settings: RunConfig, name: str) -> str:
+    """One setting, named by its dotted path, as a line of TOML."""
+    value: Any = settings
+    for part in name.split("."):
+        value = getattr(value, part)
+    return f"{name} = {_value(value)}"
 
 
 def _comment(text: str | None) -> list[str]:

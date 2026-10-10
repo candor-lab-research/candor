@@ -2,7 +2,7 @@
 
 import json
 import signal
-from collections.abc import Iterator
+from collections.abc import Iterable, Iterator
 from contextlib import contextmanager
 from datetime import date
 from importlib.metadata import version
@@ -22,7 +22,7 @@ from transformers.utils import logging as transformers_logging
 from . import checks, config, source, targets
 from .convert import ConversionError
 from .engine import LLAMA_CPP_RELEASE, ServerError
-from .run import Run, RunError
+from .run import PROMPT_SETS, Run, RunError
 from .toolchain import ToolchainError
 
 app = typer.Typer(
@@ -246,12 +246,13 @@ def _revision(model: str) -> str | None:
     return None if source.is_local(model) else HfApi().model_info(model).sha
 
 
-def _pinned_prompts() -> config.Prompts:
-    """The prompt sets at the Hub commits their datasets are at now, so a rebuild reads the same prompts."""
-    sets = {name: getattr(config.Prompts(), name) for name in config.Prompts.model_fields}
+def _pinned(prompts: config.Prompts, names: Iterable[str]) -> config.Prompts:
+    """The named prompt sets at the Hub commits their datasets are at now, so a rebuild reads the same
+    prompts."""
+    sets = {name: getattr(prompts, name) for name in names}
     commits = {dataset: HfApi().dataset_info(dataset).sha for dataset in {s.dataset for s in sets.values()}}
-    return config.Prompts(
-        **{name: spec.model_copy(update={"revision": commits[spec.dataset]}) for name, spec in sets.items()}
+    return prompts.model_copy(
+        update={name: s.model_copy(update={"revision": commits[s.dataset]}) for name, s in sets.items()}
     )
 
 
@@ -305,7 +306,7 @@ def init(
         path = config.write(
             runs,
             name,
-            config.RunConfig(model=model_settings, prompts=_pinned_prompts()),
+            config.RunConfig(model=model_settings, prompts=_pinned(config.Prompts(), PROMPT_SETS)),
             header,
             {"inspect.json": json.dumps(record, indent=1)},
         )
@@ -321,6 +322,40 @@ def init(
             "[yellow]Bionic can't read this model's chat template.[/] candor still works, but test the "
             "result in Bionic only after pasting in a fixed template."
         )
+
+
+@app.command()
+def upgrade(folder: Annotated[Path, typer.Argument(help="A run folder made by candor init.")]) -> None:
+    """Add the settings this version of candor has and a run's candor.toml lacks, at their defaults.
+
+    Prompt sets it adds are pinned to their datasets' commits now. Every value already in the file is
+    kept, but the file is written afresh, so comments added by hand are lost.
+    """
+    console = Console()
+    folder = folder.expanduser()
+    try:
+        settings, added, header = config.load_for_upgrade(folder)
+        if not added:
+            console.print(f"{escape(str(folder / config.FILE))} already has every setting.")
+            return
+        new_sets = [name for name in PROMPT_SETS if {"prompts", f"prompts.{name}"} & set(added)]
+        settings.prompts = _pinned(settings.prompts, new_sets)
+        header += f"\nUpgraded {date.today()} by candor {version('candor')}: added {', '.join(added)}."
+        with Run(folder, settings).locked():
+            config.rewrite(folder, settings, header)
+    except config.ConfigError as error:
+        console.print(f"[red]{escape(str(error))}[/]")
+        raise typer.Exit(COULD_NOT_INSPECT) from None
+    except RunError as error:
+        console.print(f"[red]{escape(str(error))}.[/] Nothing was changed.")
+        raise typer.Exit(FAILED_CHECK) from None
+    except Exception as error:
+        failure = escape(f"{type(error).__name__}: {error}")
+        console.print(f"[red]candor couldn't upgrade the run:[/] {failure}")
+        raise typer.Exit(COULD_NOT_INSPECT) from None
+    console.print(f"[green]Added to {escape(str(folder / config.FILE))}:[/]")
+    for name in added:
+        console.print(f"  {escape(config.setting(settings, name))}", soft_wrap=True)
 
 
 @contextmanager

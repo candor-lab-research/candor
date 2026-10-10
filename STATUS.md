@@ -12,7 +12,7 @@ in Bionic's llama.cpp engine.
 | --- | --- | --- | --- |
 | 0 | Score edits as per-layer LoRA adapters in llama.cpp | Adapters match merged weights, no speed cost | Done |
 | 1 | Core maths and `candor inspect` | candor's rebuild of a heretic trial matches its refusals, and measuring heretic's saved model under heretic's conditions gives heretic's numbers exactly; `inspect` reports correctly on rude-llama, Qwen3.5-9B and K2-Horizon | Done |
-| 2 | rude-llama end to end on the Mac: measure, search, export a GGUF for Bionic | Under the decision rule written in step 4 before any search runs, candor's shipped GGUF is at least as good as heretic's Trial 170 converted and quantised the same way: fewer or equal refusals on held-out prompts, no higher KL, no maths loss. It loads in Bionic, and you prefer it in a blind A/B | In progress: steps 1-3 done |
+| 2 | rude-llama end to end on the Mac: measure, search, export a GGUF for Bionic | Under the decision rule written in step 4 before any search runs, candor's shipped GGUF is at least as good as heretic's Trial 170 converted and quantised the same way: fewer or equal refusals on held-out prompts, no higher KL, no maths loss. It loads in Bionic, and you prefer it in a blind A/B | In progress: steps 1-3 done, step 4 started |
 | 3 | Qwen3.5-9B, a thinking model: scored with thinking on at your Bionic settings; residuals read on a pod | Defined at the start of the phase, against heretic's Trial 161 | |
 | 4 | K2-Horizon at your real Bionic settings | Measured honestly with the template and reasoning level Bionic actually uses, then improved | |
 
@@ -31,7 +31,7 @@ a real model, reading residuals, a search) wait for the user's go.
 | 1 | `candor init NAME --model SOURCE`: checks the model, writes `runs/NAME/candor.toml` with every setting explained, validated on every load; pins the model's commit, the datasets' commits and the date; refuses models candor can't edit; never overwrites a run | Done, reviewed |
 | 2 | `candor run RUN` up to the search: GGUF (edit targets checked byte for byte), prompt ids from llama-server, directions, one adapter per edit target per direction set; resumable, and rebuilds whatever a settings or code change affects | Done, reviewed |
 | 3 | Fixes from the full review (see the log) | Done: every fix shown to matter by a test that fails without it; a second review was stopped as diminishing returns, so the first real rude-llama run is the check that matters |
-| 4 | Measurement, settled before any search: a held-out harmful set outside AdvBench (de-duplicated against the direction prompts, pinned); the Qwen3Guard judge with its false-refusal rate measured on answers to harmless prompts, keyword counts kept beside it; the scoring noise floor from repeat scoring; paired comparison (McNemar) with a margin; KL on 300 harmless prompts; the full GSM8K test set, paired; heretic's Trial 170 rebuilt by candor and scored as adapters, so the comparison is like for like. Written down as phase 2's decision rule | |
+| 4 | Measurement, settled before any search: a held-out harmful set outside AdvBench (de-duplicated against the direction prompts, pinned); the Qwen3Guard judge with its false-refusal rate measured on answers to harmless prompts, keyword counts kept beside it; the scoring noise floor from repeat scoring; paired comparison (McNemar) with a margin; KL on 300 harmless prompts; the full GSM8K test set, paired; heretic's Trial 170 rebuilt by candor and scored as adapters, so the comparison is like for like. Written down as phase 2's decision rule | In progress: held-out sets done (288 harmful from StrongREJECT, 300 harmless) |
 | 5 | The search: Optuna over a kernel per component (heretic's 0.8-1.5 strength range), stored resumably in the run folder, each trial scored in llama.cpp on the quantised GGUF; progress with time left, the Mac kept awake. Built on SmolLM2, then a 10-trial rude-llama pilot (time per trial, noise floor) and the full search, each with the user's go | |
 | 6 | Export: merge, convert and quantise; the final check on the exact shipped file with your KV cache type; how many begin-of-text tokens Bionic's GGUF engine sends; loading it in Bionic; the blind A/B | |
 
@@ -60,7 +60,6 @@ From the 2026-10-10 paper review, corrected after the full review read each pape
   model families (the existing mixture-of-experts, Gemma and GLM checks stay as they are).
 - Deferred to phase 3: settings for thinking models (template kwargs, reasoning level, sampling,
   longer answers) and choosing torch's CUDA build to match llama.cpp's 12.8.
-- Deferred until real runs exist: a way to upgrade an older `candor.toml` when settings are added.
 - Reporting the llama.cpp prompt-cache bug upstream: not wanted.
 - Separate tracks, outside candor: the Qwen3.5 rude fine-tune and the Mac Studio purchase.
 
@@ -157,6 +156,24 @@ Each step was reviewed independently and every finding fixed; the commit message
 - The largest process peaked at 2.9 GB of RAM; the model's 6.4 GB sits in GPU memory.
 - Fixed on the way: transformers' weight-loading progress bar leaked into candor's output, and a
   deleted result was reported as "what it was built from has changed" rather than missing.
+
+### Step 4: held-out prompt sets (2026-10-10)
+
+The user chose StrongREJECT (`walledai/StrongREJECT`, MIT, gated, pinned at `df54272b`) for the
+held-out harmful prompts. Its prompts are never read; everything below is counts.
+
+- 313 rows: 221 written by its authors, 92 taken from other sets, 25 of them from AdvBench. 23 of
+  those 25 are word for word in candor's harmful sets, which are AdvBench, so a prompt set can now
+  leave out rows by a column's value (`exclude = { source = ["AdvBench"] }`), and naming a value no
+  row has is an error, so a typo can't silently keep them.
+- Held-out sets drop any prompt also in another set. That left 288 harmful prompts (none exact
+  repeats; one shares over 60% of its word triples with a direction or test prompt, seven over
+  20%) and 300 harmless ones from `harmless_alpaca` `test[100:400]` (none over 40%).
+- Both sets are tokenized with the rest and must fit with a whole answer. On rude-llama only
+  `prompts.json` rebuilt (15 s, 1,588 prompts); the directions and adapters were reused.
+- `candor upgrade RUN` adds settings a newer candor has, at their defaults, pins any prompt sets it
+  adds and lists what it added; `runs/rude` was upgraded with it. A missing setting's error points
+  to it.
 
 ### Full review (2026-10-10)
 
