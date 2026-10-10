@@ -33,12 +33,18 @@ def test_pre_equals_none_when_every_row_has_the_same_length():
     torch.testing.assert_close(b_pre @ a_pre, b_none @ a_none)
 
 
-def test_pre_scales_each_row_by_its_length():
+def test_pre_takes_strength_times_the_direction_out_of_the_normalised_rows():
+    # With every row divided by its original length, strength s leaves (1 - s) of what the weight
+    # writes along the direction and changes nothing orthogonal to it.
     weight, direction = random_case()
     b, a = rank_one(weight, direction, RowNorm.PRE)
-    normalised = F.normalize(weight, dim=1)
-    expected = -weight.norm(dim=1, keepdim=True) * torch.outer(direction, direction @ normalised)
-    torch.testing.assert_close(b @ a, expected)
+    lengths = weight.norm(dim=1, keepdim=True)
+    before = weight / lengths
+    orthogonal = torch.eye(len(direction)) - torch.outer(direction, direction)
+    for strength in (0.5, 1.0, 1.5):
+        after = (weight + strength * b @ a) / lengths
+        torch.testing.assert_close(direction @ after, (1 - strength) * (direction @ before))
+        torch.testing.assert_close(orthogonal @ after, orthogonal @ before)
 
 
 def test_bfloat16_weights_give_float32_factors():
