@@ -1,0 +1,39 @@
+[project]
+name = "candor"
+version = "0.1.0"
+description = "Remove a model's refusal direction, scored the way you actually run the model."
+readme = "README.md"
+requires-python = ">=3.12"
+dependencies = [
+    "datasets>=4",
+    "gguf>=0.19",
+    "httpx>=0.28",
+    "numpy>=2",
+    "safetensors>=0.6",
+    "torch>=2.8",
+    "transformers>=5",
+]
+
+[dependency-groups]
+dev = [
+    "pyright>=1.1.414",
+    "pytest>=9",
+    "ruff>=0.17",
+]
+
+[build-system]
+requires = ["hatchling"]
+build-backend = "hatchling.build"
+
+[tool.ruff]
+line-length = 110
+
+[tool.ruff.lint]
+select = ["E", "F", "I", "B", "UP", "SIM", "RUF"]
+
+[tool.pyright]
+include = ["src", "tests", "spikes"]
+typeCheckingMode = "basic"
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
