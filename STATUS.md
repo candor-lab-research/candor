@@ -23,8 +23,13 @@ runs.
    every load. It pins the date for templates that write one, refuses models candor can't edit,
    and never overwrites a run. Tested on rude-llama, Qwen3.5-9B, K2-Horizon and a refused
    mixture-of-experts model.
-2. Directions: prompts rendered with the run's settings (system prompt, pinned date passed as
-   `date_string`) and tokenized by llama-server itself, then fed to transformers for the residuals,
+2. Directions. Done so far: `toolchain` fetches the pinned llama.cpp (binaries by sha256, the
+   converter's source by commit, in its own environment); `convert` makes bf16 and quantised GGUF
+   and checks every edit target arrives byte for byte (SmolLM2: 60 of 60); the engine's `chat_ids`
+   gets the exact ids a real chat request uses (SmolLM2: same length as the chat endpoint reports
+   and identical to transformers on 4 conversations, emoji and multi-turn included). Still to do:
+   prompts rendered with the run's settings (system prompt, pinned date passed as `date_string`)
+   and tokenized by llama-server itself, then fed to transformers for the residuals,
    so directions and scoring see identical input; one adapter per writer from `targets` (named by
    its GGUF tensor, since a component can have several writers) for each candidate direction; a
    check that each GGUF writer tensor equals its Hugging Face original.

@@ -138,6 +138,35 @@ class LlamaServer:
             if scale
         ]
 
+    def chat_ids(self, chats: list[list[dict[str, str]]], template_kwargs: dict[str, Any]) -> list[list[int]]:
+        """The token ids the chat endpoint feeds the model for each conversation, ready to answer.
+
+        /apply-template renders a chat with the same code /v1/chat/completions uses, which then
+        tokenizes the result with special tokens parsed and added; this does the same.
+        """
+
+        def ids(messages: list[dict[str, str]]) -> list[int]:
+            body = {"messages": messages, "chat_template_kwargs": template_kwargs}
+            rendered = self.client.post("/apply-template", json=body)
+            rendered.raise_for_status()
+            content = {"content": rendered.json()["prompt"], "add_special": True, "parse_special": True}
+            tokenized = self.client.post("/tokenize", json=content)
+            tokenized.raise_for_status()
+            return tokenized.json()["tokens"]
+
+        with ThreadPoolExecutor(self.parallel) as pool:
+            return list(pool.map(ids, chats))
+
+    def chat_prompt_length(self, messages: list[dict[str, str]], template_kwargs: dict[str, Any]) -> int:
+        """How many prompt tokens a real chat request reports, to check chat_ids against."""
+        body = {
+            "messages": messages, "chat_template_kwargs": template_kwargs, "max_tokens": 1,
+            "temperature": 0.0, "cache_prompt": False,
+        }  # fmt: skip
+        response = self.client.post("/v1/chat/completions", json=body)
+        response.raise_for_status()
+        return response.json()["usage"]["prompt_tokens"]
+
     def generate(
         self, prompts: list[list[int]], max_tokens: int, scales: Mapping[Path, float] | None = None
     ) -> list[str]:

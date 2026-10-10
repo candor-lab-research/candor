@@ -154,3 +154,14 @@ def test_a_banned_token_does_not_change_the_reported_probabilities(files):
         banned = s._complete({**payload, "logit_bias": bias})["completion_probabilities"][0]
     assert banned["id"] != plain["id"]
     assert banned["top_logprobs"] == plain["top_logprobs"]
+
+
+def test_chat_ids_are_what_a_real_chat_request_uses(files):
+    folder, _, _ = files
+    chats = [
+        [{"role": "user", "content": "hi"}],
+        [{"role": "system", "content": "be brief"}, {"role": "user", "content": "hello there"}],
+    ]
+    with server(folder, "base.gguf") as s:
+        ids = s.chat_ids(chats, {})
+        assert [len(i) for i in ids] == [s.chat_prompt_length(chat, {}) for chat in chats]

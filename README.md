@@ -37,6 +37,10 @@ uv run pytest
 uv run ruff check . && uv run ruff format --check . && uv run pyright
 ```
 
+`CANDOR_E2E=1 uv run pytest tests/test_e2e.py` also converts a small real model (SmolLM2-135M)
+with llama.cpp's converter and checks targets and tokenization end to end; the first run downloads
+about 270 MB and sets up the converter.
+
 The engine tests run a tiny random model in llama.cpp's `llama-server`, release b11524. They look
 for it at `~/Desktop/tune/llama.cpp/llama-b11524/llama-server`, or wherever `CANDOR_LLAMA_SERVER`
 points, and are skipped if it isn't there.
