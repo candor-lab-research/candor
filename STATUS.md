@@ -1,9 +1,57 @@
 # Status
 
-## Phase 0: per-layer LoRA scoring in llama.cpp (done 2026-10-10)
+This file is the single plan for candor. Anything not listed under Plan is not being worked on.
 
-The design works. On Llama-3.2-3B-Instruct with rude-llama's Trial 170 layer profile, scoring an
-edit as per-layer rank-1 adapters with per-request scales gives the same results as merging it.
+## Plan
+
+| Phase | What | Done when | State |
+| --- | --- | --- | --- |
+| 0 | Score edits as per-layer LoRA adapters in llama.cpp | Adapters match merged weights, no speed cost | Done |
+| 1 | Core maths, and `candor init` / `candor inspect` | Rebuilds heretic's numbers exactly (done); `inspect` reports correctly on rude-llama, Qwen3.5-9B and K2-Horizon | In progress |
+| 2 | `candor run` on the Mac: search scored in llama.cpp, then export | On rude-llama it finds an edit at least as good as heretic's Trial 170 measured the real way (at most 4/100 refusals, KL at most 0.038, no maths loss), and the file loads in Bionic | Next |
+| 3 | The same run on a Runpod pod with one command and a budget limit | Qwen3.5-9B end to end under a set budget, pod deleted automatically | |
+| 4 | Thinking models, scored at your real Bionic settings | K2-Horizon measured honestly at your reasoning level and sampling, then improved | |
+| 5 | Docs, `candor doctor`, live dashboard, the guide rewritten around candor | You run a new model without me | |
+
+Pods come before thinking models because K2-Horizon is too big for the Mac and needs several GPU
+runs.
+
+### Next three steps
+
+1. An engine test against a tiny model in the Mac's llama-server (seconds, no real model).
+2. `candor inspect`: begin-of-text and date checks (written), whether Bionic can parse the chat
+   template, remote code, hidden states, llama.cpp support, and edit targets found by shape.
+3. `candor init`: one TOML file per run with every setting, search ranges included.
+
+## Research changes and where they land
+
+From the 2026-10-10 paper review. Each paper gets read before its change is built.
+
+| Finding | Change | Phase |
+| --- | --- | --- |
+| Find edit targets by tensor shape, not name; Qwen3.5's linear attention needs its own | `inspect` lists targets by shape and fails if any layer is uncovered | 1 |
+| Keyword judges miscount refusals, worst on reasoning output | Judge with Qwen3Guard-Gen-0.6B on the final answer; keep keywords as a cross-check, compared by agreement counts only | 2 |
+| 100 prompts are too noisy to rank trials | Search on 100 with fixed seeds, re-score the best trials on 300-400 held-out prompts | 2 |
+| First-token KL doesn't predict lost ability | Final candidates must pass a GSM8K subset and a multiple-choice flip check | 2 |
+| Re-quantising after an edit can bring refusals back | The last check runs on the exact file you ship, with your KV cache type | 2 |
+| Thinking models decide during reasoning | Directions from thinking-on runs (averaged over reasoning, think start, think close); never score with thinking off; score at the highest level you use; allow strengths above 1 | 4 |
+| Multi-direction edits, cleaned directions | Optional, only if phase 4 falls short (most evidence is from steering, not weight edits) | Later |
+
+## Not in this plan
+
+- heretic and `tune/heretic-kit`: frozen, no new features. The guide stays as reference until phase 5.
+- `tune/abliterate.py`: parked. candor does the same job on MLX and CUDA.
+- The guide's section 14 "plan for K2": replaced by phase 4.
+- Reporting the llama.cpp prompt-cache bug upstream: not wanted.
+- Separate tracks, outside candor: the Qwen3.5 rude fine-tune, the Mac Studio purchase, and the
+  optional check of how many begin-of-text tokens Bionic's GGUF engine sends.
+
+## Log
+
+### Phase 0: per-layer LoRA scoring in llama.cpp (done 2026-10-10)
+
+On Llama-3.2-3B-Instruct with rude-llama's Trial 170 layer profile, scoring an edit as per-layer
+rank-1 adapters with per-request scales gives the same results as merging it.
 
 | | Refusals /100 | First-token KL from base |
 | --- | --- | --- |
@@ -16,30 +64,23 @@ edit as per-layer rank-1 adapters with per-request scales gives the same results
 - KL from the server's top 20 tokens is within 0.5% of the exact value.
 - 616 loaded adapters: 3.5 s startup instead of 1.5 s, no change in tokens/s, active or not.
 - The merged copy converted to GGUF with no file fixes, because merge.py never rewrites them.
-
-Two llama-server traps, both handled in `engine.py`:
-
-1. `--lora-init-without-apply` leaves every adapter's default scale at 1, so a request naming no
-   adapters gets all of them. The engine sets the defaults to 0 and reads them back.
-2. Prompt caches don't record which adapters computed a prompt, so reusing one mixes an unedited
-   prompt with an edited answer (3 refusals became 28). The engine runs with `--cache-ram 0` and
-   `cache_prompt: false`.
+- Two llama-server traps, handled in `engine.py`: `--lora-init-without-apply` leaves every
+  adapter's default scale at 1 (the engine sets them to 0 and checks), and prompt caches don't
+  record which adapters computed a prompt (the engine uses `--cache-ram 0` and
+  `cache_prompt: false`; without it 3 refusals became 28).
 
 Numbers: `runs/phase0/results.json` (not in git). Pod: A40, about 23 minutes, about $0.23.
 
-## Phase 1: core maths vs heretic (in progress)
-
-Done 2026-10-10:
+### Phase 1 so far (2026-10-10)
 
 - `candor.heretic` reads heretic's Optuna journals; `spikes/reproduce_trial.py` rebuilds a trial
   with candor's own direction finding and edit. On rude-llama Trial 170 it gets heretic's 2/100.
 - Heretic tokenizes the rendered chat with the tokenizer's own special tokens added, so Llama 3
   and K2-Horizon get two begin-of-text tokens. Proved by running heretic's own `Model.generate`
-  with a recording stub: its input is exactly one extra token in front of the canonical input.
-  transformers, mlx-lm, Bionic's MLX engine (`model_kit.py`) and llama.cpp (`chat.cpp`) all send
-  one. Qwen3.5 has none, so it is unaffected.
+  with a recording stub. transformers, mlx-lm, Bionic's MLX engine (`model_kit.py`) and llama.cpp
+  (`chat.cpp`) all send one. Qwen3.5 has none, so it is unaffected.
 - `spikes/compare_models.py` scored the saved heretic model (`models/local/rude-llama-heretic`)
-  against the original with heretic's test prompts:
+  against the original on heretic's test prompts:
 
 | Input | Date in prompt | Batch | Refusals, original | Refusals, edited | KL |
 | --- | --- | --- | --- | --- | --- |
@@ -49,11 +90,5 @@ Done 2026-10-10:
 
   The first row is exactly heretic's journal, so every difference is explained: the extra token,
   the date the Llama 3 template writes into each prompt, and batch-size noise of about 1-2
-  refusals. candor's refusal judge and heretic's agreed on all 800 saved answers.
-- `candor.checks` reports both traps for any model: `begin_of_text` (what transformers, llama.cpp
-  and heretic each send) and `writes_the_date`.
-
-Next:
-
-- An engine integration test with a tiny GGUF on the Mac's llama-server.
-- The first CLI commands: `candor init`, `candor inspect`.
+  refusals. candor's keyword judge and heretic's agreed on all 800 saved answers.
+- `candor.checks` reports both traps for any model: `begin_of_text` and `writes_the_date`.
