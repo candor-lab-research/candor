@@ -118,6 +118,19 @@ class Edit(Section):
         return value
 
 
+class Scoring(Section):
+    answer_tokens: StrictInt = Field(
+        default=100, ge=1, le=8192, description="How long an answer to each harmful test prompt may be."
+    )
+    kl_tokens: StrictInt = Field(
+        default=20,
+        ge=1,
+        le=1000,
+        description="How many of the most likely first tokens KL divergence is measured over (20 is "
+        "within 0.5% of the full vocabulary).",
+    )
+
+
 class Search(Section):
     trials: StrictInt = Field(default=200, ge=1, description="How many edits to try.")
     startup_trials: StrictInt = Field(
@@ -182,6 +195,7 @@ class RunConfig(Section):
     )
     prompts: Prompts = Field(default_factory=Prompts, description="Where the prompts come from.")
     edit: Edit = Field(default_factory=Edit, description="The weight edit itself.")
+    scoring: Scoring = Field(default_factory=Scoring, description="How each candidate edit is measured.")
     search: Search = Field(default_factory=Search, description="The search over edits.")
 
 

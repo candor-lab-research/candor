@@ -13,8 +13,10 @@ from rich.table import Table
 from transformers import AutoTokenizer
 
 from . import checks, config, source, targets
+from .convert import ConversionError
 from .engine import LLAMA_CPP_RELEASE
 from .run import Run, RunError
+from .toolchain import ToolchainError
 
 app = typer.Typer(
     no_args_is_help=True,
@@ -287,7 +289,7 @@ def run(folder: Annotated[Path, typer.Argument(help="A run folder made by candor
     except config.ConfigError as error:
         console.print(f"[red]{error}[/]")
         raise typer.Exit(COULD_NOT_INSPECT) from None
-    except RunError as error:
+    except (RunError, ToolchainError, ConversionError) as error:
         console.print(f"[red]The run stopped:[/] {error}")
         raise typer.Exit(FAILED_CHECK) from None
     except Exception as error:

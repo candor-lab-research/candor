@@ -21,30 +21,33 @@ class ConversionError(RuntimeError):
     pass
 
 
-def _run(args: list, log: Path) -> None:
+def _run(program: str, args: list, log: Path) -> None:
+    log.parent.mkdir(parents=True, exist_ok=True)
     with log.open("ab") as out:
         result = subprocess.run([str(a) for a in args], stdout=out, stderr=subprocess.STDOUT)
     if result.returncode != 0:
-        raise ConversionError(f"{Path(str(args[1])).name} failed with code {result.returncode}, see {log}")
+        raise ConversionError(f"{program} failed with code {result.returncode}, see {log}")
 
 
-def to_gguf(model_folder: Path, out: Path, quantization: str, log: Path) -> tuple[Path, Path]:
-    """The model as bf16 GGUF and in the run's quantisation. Existing files are reused."""
-    out.mkdir(parents=True, exist_ok=True)
-    bf16 = out / "model-BF16.gguf"
-    if not bf16.exists():
-        python, script = toolchain.converter()
-        partial = bf16.with_suffix(".partial")
-        _run([python, script, model_folder, "--outtype", "bf16", "--outfile", partial], log)
-        partial.rename(bf16)
-    if quantization == "BF16":
-        return bf16, bf16
-    quantized = out / f"model-{quantization}.gguf"
-    if not quantized.exists():
-        partial = quantized.with_suffix(".partial")
-        _run([toolchain.binaries() / "llama-quantize", bf16, partial, quantization], log)
-        partial.rename(quantized)
-    return bf16, quantized
+def to_bf16(model_folder: Path, destination: Path, log: Path) -> None:
+    """Convert a Hugging Face model folder to a bf16 GGUF at destination, written whole or not at all."""
+    python, script = toolchain.converter()
+    partial = destination.with_name(destination.name + ".partial")
+    partial.unlink(missing_ok=True)
+    _run(
+        "llama.cpp's converter",
+        [python, script, model_folder, "--outtype", "bf16", "--outfile", partial],
+        log,
+    )
+    partial.rename(destination)
+
+
+def quantize(bf16: Path, destination: Path, quantization: str, log: Path) -> None:
+    """Quantise a bf16 GGUF to destination, written whole or not at all."""
+    partial = destination.with_name(destination.name + ".partial")
+    partial.unlink(missing_ok=True)
+    _run("llama-quantize", [toolchain.binaries() / "llama-quantize", bf16, partial, quantization], log)
+    partial.rename(destination)
 
 
 def _as_float(tensor: gguf.ReaderTensor) -> np.ndarray:

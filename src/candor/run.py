@@ -1,18 +1,25 @@
 """The stages of a run, each saving its result in the run folder so a run can stop and resume.
 
-Every stage writes under a temporary name and renames it into place when complete, so a crash
-never leaves a half-made result that a later run would trust.
-
     model -> GGUF -> prompt ids -> directions -> adapters -> (search, next)
+
+Every result is written under a temporary name and renamed into place when complete, so a crash
+never leaves a half-made result. Beside each result is a record of what it was built from: the
+settings it used and the records of the stages before it. A result is reused only when that
+record still matches, so editing the settings rebuilds what they affect and everything after it.
 """
 
+import fcntl
+import hashlib
 import json
+import math
 import shutil
 import socket
-from collections.abc import Callable, Sequence
-from dataclasses import dataclass
+from collections.abc import Callable, Iterator, Sequence
+from contextlib import contextmanager
+from dataclasses import dataclass, field
 from functools import cached_property
 from pathlib import Path
+from typing import Any
 
 import torch
 from huggingface_hub import snapshot_download
@@ -21,23 +28,42 @@ from huggingface_hub.utils import disable_progress_bars
 from . import config, convert, directions, reference, residuals, source, targets, toolchain
 from .adapters import write_adapter
 from .edit import RowNorm, rank_one
-from .engine import LlamaServer
+from .engine import LLAMA_CPP_RELEASE, LlamaServer
 from .prompts import PromptSet
 from .weights import ModelFiles
 
 MODEL_FILES = ["*.json", "*.safetensors", "*.jinja", "*.txt", "*.model", "*.tiktoken"]
 PROMPT_SETS = ("harmful", "harmless", "harmful_test", "harmless_test")
+BITS_PER_WEIGHT = {
+    "Q4_K_S": 4.6,
+    "Q4_K_M": 4.9,
+    "Q5_K_S": 5.5,
+    "Q5_K_M": 5.7,
+    "Q6_K": 6.6,
+    "Q8_0": 8.5,
+    "F16": 16,
+}
+DATE_PROBE = "31 Dec 1999"
+CHECKED_PER_SET = 3
 
 
 class RunError(RuntimeError):
     pass
 
 
-def _replace(partial: Path, final: Path) -> None:
-    """Move a finished result into place, replacing nothing: the final name must be free."""
-    if final.exists():
-        raise RunError(f"{final} appeared while it was being made")
-    partial.rename(final)
+def _digest(value: Any) -> str:
+    return hashlib.sha256(json.dumps(value, sort_keys=True).encode()).hexdigest()[:16]
+
+
+def _record(output: Path) -> Path:
+    return output.with_name(output.name + ".inputs.json")
+
+
+def _remove(path: Path) -> None:
+    if path.is_dir() and not path.is_symlink():
+        shutil.rmtree(path)
+    else:
+        path.unlink(missing_ok=True)
 
 
 def _free_port() -> int:
@@ -51,6 +77,7 @@ class Run:
     folder: Path
     settings: config.RunConfig
     report: Callable[[str], None] = print
+    inputs: dict[str, str] = field(default_factory=dict)
 
     @classmethod
     def open(cls, folder: Path, report: Callable[[str], None] = print) -> "Run":
@@ -58,6 +85,34 @@ class Run:
 
     def path(self, *parts: str) -> Path:
         return self.folder.joinpath(*parts)
+
+    @contextmanager
+    def locked(self) -> Iterator[None]:
+        with self.path(".lock").open("w") as lock:
+            try:
+                fcntl.flock(lock, fcntl.LOCK_EX | fcntl.LOCK_NB)
+            except BlockingIOError:
+                raise RunError(f"another candor command is using {self.folder}") from None
+            yield
+
+    def _fresh(self, output: Path, inputs: dict[str, Any]) -> bool:
+        """Whether output exists and was built from exactly these inputs."""
+        record = _record(output)
+        expected = json.loads(json.dumps(inputs))
+        if output.exists() and record.exists() and json.loads(record.read_text()) == expected:
+            return True
+        if output.exists() or record.exists():
+            self.report(f"Rebuilding {output.relative_to(self.folder)}: what it was built from has changed")
+        return False
+
+    def _commit(self, partial: Path, output: Path, inputs: dict[str, Any]) -> None:
+        """Replace output with the finished partial and record what it was built from. A crash at any
+        point leaves either no record or a record that matches, never a stale one."""
+        record = _record(output)
+        record.unlink(missing_ok=True)
+        _remove(output)
+        partial.rename(output)
+        record.write_text(json.dumps(inputs, sort_keys=True))
 
     # Model
 
@@ -69,47 +124,80 @@ class Run:
         disable_progress_bars()
         return Path(snapshot_download(model.source, revision=model.revision, allow_patterns=MODEL_FILES))
 
-    def model_shape(self) -> tuple[dict, int, int, str, list[targets.Writer]]:
+    @cached_property
+    def model_fingerprint(self) -> str:
+        """Local folders by their files' names, sizes and times; Hub models by their commit."""
         folder = self.model_folder
-        model_config = source.read_config(str(folder))
+        if source.is_local(self.settings.model.source):
+            listed = [p for p in folder.iterdir() if p.is_file() and not p.name.startswith(".")]
+            files = sorted((p.name, p.stat().st_size, p.stat().st_mtime_ns) for p in listed)
+            return _digest({"folder": str(folder.resolve()), "files": files})
+        return _digest({"repo": self.settings.model.source, "commit": folder.name})
+
+    @cached_property
+    def context_limit(self) -> int | None:
+        text = source.text_config(source.read_config(str(self.model_folder)))
+        limit = text.get("max_position_embeddings")
+        return limit if isinstance(limit, int) else None
+
+    @cached_property
+    def shape(self) -> tuple[int, int, str, list[targets.Writer]]:
+        model_config = source.read_config(str(self.model_folder))
         text = source.text_config(model_config)
         hidden, layers = text["hidden_size"], text["num_hidden_layers"]
         arch = targets.gguf_architecture(model_config)
-        found = targets.find_targets(source.tensor_shapes(str(folder)), hidden, layers)
+        found = targets.find_targets(source.tensor_shapes(str(self.model_folder)), hidden, layers)
         if arch is None or not found.ok or found.experts or found.quantized:
             raise RunError("the model no longer passes candor inspect; run it to see why")
-        return model_config, hidden, layers, arch, found.writers
+        return hidden, layers, arch, found.writers
 
     # GGUF
 
-    def gguf(self) -> tuple[Path, Path]:
-        """The model as bf16 GGUF and in the deployment quantisation, with every edit target checked."""
-        out = self.path("gguf")
-        quantization = self.settings.deployment.quantization
-        bf16 = out / "model-BF16.gguf"
-        quantized = bf16 if quantization == "BF16" else out / f"model-{quantization}.gguf"
-        done = out / "checked"
-        if done.exists() and bf16.exists() and quantized.exists():
-            return bf16, quantized
-        done.unlink(missing_ok=True)
-        folder = self.model_folder
-        weights = sum(folder.joinpath(name).stat().st_size for name in source.weight_files(folder))
-        needed, free = 1.5 * weights, shutil.disk_usage(self.folder).free
+    def _check_disk(self, bf16_needed: bool, quantization: str) -> None:
+        shapes = source.tensor_shapes(str(self.model_folder))
+        weights = sum(math.prod(shape) for shape in shapes.values())
+        needed = 1.1 * weights * ((2 if bf16_needed else 0) + BITS_PER_WEIGHT.get(quantization, 0) / 8)
+        free = shutil.disk_usage(self.folder).free
         if free < needed:
             raise RunError(
-                f"converting needs about {needed / 1e9:.0f} GB free here; there is {free / 1e9:.0f} GB"
+                f"converting needs about {needed / 1e9:.1f} GB free here; there is {free / 1e9:.1f} GB"
             )
-        self.report("Converting to GGUF")
-        bf16, quantized = convert.to_gguf(folder, out, quantization, out / "convert.log")
-        _, _, layers, arch, writers = self.model_shape()
-        if problems := convert.check_targets(bf16, folder, writers, arch, layers):
-            raise RunError(
-                "the GGUF doesn't hold the edit targets unchanged:\n  " + "\n  ".join(problems[:5])
-            )
-        done.write_text(json.dumps({"targets": len(writers)}))
+
+    def gguf(self) -> tuple[Path, Path]:
+        """The model as bf16 GGUF, every edit target checked, and in the deployment quantisation."""
+        out = self.path("gguf")
+        out.mkdir(exist_ok=True)
+        quantization = self.settings.deployment.quantization
+        bf16 = out / "model-BF16.gguf"
+        bf16_inputs = {"model": self.model_fingerprint, "llama.cpp": LLAMA_CPP_RELEASE}
+        quantized = bf16 if quantization == "BF16" else out / f"model-{quantization}.gguf"
+        quantized_inputs = {"bf16": _digest(bf16_inputs), "quantization": quantization}
+        bf16_fresh = self._fresh(bf16, bf16_inputs)
+        quantized_fresh = bf16_fresh if quantized == bf16 else self._fresh(quantized, quantized_inputs)
+        if not (bf16_fresh and quantized_fresh):
+            self._check_disk(not bf16_fresh, "BF16" if quantized_fresh else quantization)
+        if not bf16_fresh:
+            self.report("Converting to GGUF")
+            partial = out / "model-BF16.gguf.building"
+            convert.to_bf16(self.model_folder, partial, out / "convert.log")
+            _, layers, arch, writers = self.shape
+            if problems := convert.check_targets(partial, self.model_folder, writers, arch, layers):
+                partial.unlink()
+                raise RunError(
+                    "the GGUF doesn't hold the edit targets unchanged:\n  " + "\n  ".join(problems[:5])
+                )
+            self._commit(partial, bf16, bf16_inputs)
+        if quantized != bf16 and not quantized_fresh:
+            self.report(f"Quantising to {quantization}")
+            partial = out / f"model-{quantization}.gguf.building"
+            convert.quantize(bf16, partial, quantization, out / "convert.log")
+            self._commit(partial, quantized, quantized_inputs)
+        self.inputs["gguf"] = _digest({"bf16": bf16_inputs, "quantized": quantized_inputs})
         return bf16, quantized
 
-    def server(self, model: Path, adapters: Sequence[Path] = ()) -> LlamaServer:
+    def server(
+        self, model: Path, adapters: Sequence[Path] = (), context_per_slot: int = 8192, parallel: int = 4
+    ) -> LlamaServer:
         cache = self.settings.deployment.kv_cache
         extra = ["--cache-type-k", cache, "--cache-type-v", cache]
         if cache not in {"f32", "f16", "bf16"}:
@@ -117,14 +205,12 @@ class Run:
         self.path("logs").mkdir(exist_ok=True)
         binary = toolchain.binaries() / "llama-server"
         log = self.path("logs", "server.log")
-        return LlamaServer(
-            binary, model, log, adapters, parallel=16, context_per_slot=1024, port=_free_port(), extra=extra
-        )
+        return LlamaServer(binary, model, log, adapters, parallel, context_per_slot, _free_port(), extra)
 
     # Prompt ids
 
-    def template_kwargs(self) -> dict[str, str]:
-        date = self.settings.model.date
+    def template_kwargs(self, date: str | None = None) -> dict[str, str]:
+        date = date or self.settings.model.date
         return {"date_string": date} if date else {}
 
     def chats(self, prompts: list[str]) -> list[list[dict[str, str]]]:
@@ -134,44 +220,71 @@ class Run:
 
     def prompt_ids(self) -> dict[str, list[list[int]]]:
         """Each prompt set as the exact token ids llama-server feeds the model for that chat."""
-        path = self.path("prompts.json")
-        if path.exists():
-            return json.loads(path.read_text())
         _, quantized = self.gguf()
+        path = self.path("prompts.json")
+        settings = self.settings
+        inputs = {
+            "gguf": self.inputs["gguf"],
+            "system_prompt": settings.deployment.system_prompt,
+            "date": settings.model.date,
+            "prompts": settings.prompts.model_dump(),
+        }
+        self.inputs["prompts"] = _digest(inputs)
+        if self._fresh(path, inputs):
+            return json.loads(path.read_text())
         texts = {}
         for name in PROMPT_SETS:
-            spec = getattr(self.settings.prompts, name)
+            spec = getattr(settings.prompts, name)
             texts[name] = PromptSet(spec.dataset, spec.split, spec.column).load()
             if not texts[name]:
                 raise RunError(f"the {name} prompt set ({spec.dataset}, {spec.split}) is empty")
         self.report("Tokenizing prompts with llama-server")
         kwargs = self.template_kwargs()
-        with self.server(quantized) as server:
-            if date := kwargs.get("date_string"):
-                body = {"messages": self.chats(["x"])[0], "chat_template_kwargs": kwargs}
+        slot = 2048
+        with self.server(quantized, context_per_slot=slot, parallel=2) as server:
+            if settings.model.date:
+                body = {
+                    "messages": self.chats(["x"])[0],
+                    "chat_template_kwargs": self.template_kwargs(DATE_PROBE),
+                }
                 rendered = server.client.post("/apply-template", json=body)
                 rendered.raise_for_status()
-                if date not in rendered.json()["prompt"]:
-                    raise RunError(f"the pinned date {date!r} doesn't appear in the rendered prompt")
+                if DATE_PROBE not in rendered.json()["prompt"]:
+                    raise RunError(
+                        "the chat template ignores the pinned date, so prompts would still change daily"
+                    )
             ids = {name: server.chat_ids(self.chats(texts[name]), kwargs) for name in PROMPT_SETS}
-            sample = self.chats(texts["harmless_test"][:3])
-            if [len(i) for i in ids["harmless_test"][:3]] != [
-                server.chat_prompt_length(c, kwargs) for c in sample
-            ]:
-                raise RunError("llama-server's prompt ids don't match what its chat endpoint uses")
-        partial = path.with_suffix(".partial")
+        longest = max(len(prompt) for prompts in ids.values() for prompt in prompts)
+        answer = settings.scoring.answer_tokens
+        if self.context_limit and longest + answer > self.context_limit:
+            too_long = {n: sum(len(p) + answer > self.context_limit for p in ids[n]) for n in PROMPT_SETS}
+            counts = ", ".join(f"{count} {name}" for name, count in too_long.items() if count)
+            limit = self.context_limit
+            raise RunError(
+                f"prompts plus a {answer}-token answer don't fit the model's {limit} tokens: {counts}"
+            )
+        slot = max(slot, longest + 16)
+        with self.server(quantized, context_per_slot=slot, parallel=2) as server:
+            for name in PROMPT_SETS:
+                sample = self.chats(texts[name][:CHECKED_PER_SET])
+                expected = [server.chat_prompt_length(chat, kwargs) for chat in sample]
+                if [len(i) for i in ids[name][:CHECKED_PER_SET]] != expected:
+                    raise RunError(f"llama-server's ids for the {name} prompts don't match its chat endpoint")
+        partial = path.with_name("prompts.json.building")
         partial.write_text(json.dumps(ids))
-        _replace(partial, path)
+        self._commit(partial, path, inputs)
         return ids
 
     # Directions
 
     def directions(self) -> torch.Tensor:
         """One refusal direction per residual index, from transformers fed the run's exact prompt ids."""
-        path = self.path("directions.pt")
-        if path.exists():
-            return torch.load(path)
         ids = self.prompt_ids()
+        path = self.path("directions.pt")
+        inputs = {"prompts": self.inputs["prompts"], "model": self.model_fingerprint}
+        self.inputs["directions"] = _digest(inputs)
+        if self._fresh(path, inputs):
+            return torch.load(path)
         reference.protect_memory()
         device, dtype = reference.device_and_dtype()
         self.report(f"Reading residuals on {device}")
@@ -184,17 +297,25 @@ class Run:
         harmless = residuals.last_token_residuals(model, ids["harmless"], pad_id)
         del model
         reference.free_memory(device)
+        if not (torch.isfinite(harmful).all() and torch.isfinite(harmless).all()):
+            raise RunError(
+                f"the model's activations overflowed in {dtype} on {device}; run on a GPU in bfloat16"
+            )
         found = directions.difference_of_means(harmful, harmless)
-        partial = path.with_suffix(".partial")
+        if not torch.isfinite(found).all():
+            raise RunError("some refusal directions aren't finite numbers")
+        partial = path.with_name("directions.pt.building")
         torch.save(found, partial)
-        _replace(partial, path)
+        self._commit(partial, path, inputs)
         return found
 
     # Adapters
 
-    def direction_sets(self, layers: int) -> dict[str, torch.Tensor]:
-        """The candidate directions: each layer's own, or one layer's for every layer."""
-        found = self.directions()
+    def direction_sets(self, found: torch.Tensor, layers: int) -> dict[str, torch.Tensor]:
+        """The candidate directions: each layer's own, or one layer's for every layer.
+
+        found[0] is the embedding output and found[i + 1] the output of layer i.
+        """
         low, high = self.settings.search.direction_layer
         last = layers - 1
         sets = {"per-layer": found[1:]}
@@ -204,35 +325,47 @@ class Run:
 
     def adapters(self) -> dict[str, dict[str, Path]]:
         """For each direction set, one rank-1 adapter per edit target, named by its GGUF tensor."""
-        _, _, layers, arch, writers = self.model_shape()
+        found = self.directions()
+        _, layers, arch, writers = self.shape
         names = {w.name: targets.gguf_name(w, arch, layers) for w in writers}
         if unmapped := [name for name, mapped in names.items() if mapped is None]:
             raise RunError(f"no llama.cpp name for {', '.join(unmapped[:3])}")
-        files = ModelFiles(self.model_folder)
         row_norm = RowNorm(self.settings.edit.row_norm)
+        inputs = {
+            "directions": self.inputs["directions"],
+            "row_norm": row_norm.value,
+            "targets": sorted([w.name, str(names[w.name])] for w in writers),
+        }
         root = self.path("adapters")
         root.mkdir(exist_ok=True)
+        sets = self.direction_sets(found, layers)
+        for leftover in root.iterdir():
+            if leftover.name.removesuffix(".inputs.json") not in sets:
+                _remove(leftover)
+        files = None
         made = {}
-        for set_name, set_directions in self.direction_sets(layers).items():
+        for set_name, set_directions in sets.items():
             folder = root / set_name
-            if not folder.exists():
-                partial = root / f".{set_name}.partial"
-                shutil.rmtree(partial, ignore_errors=True)
+            if not self._fresh(folder, inputs):
+                files = files or ModelFiles(self.model_folder)
+                self.report(f"Writing adapters for {set_name}")
+                partial = root / f"{set_name}.building"
+                _remove(partial)
                 partial.mkdir()
                 for writer in writers:
-                    factors = rank_one(files.tensor(writer.name), set_directions[writer.layer], row_norm)
                     name = str(names[writer.name])
+                    factors = rank_one(files.tensor(writer.name), set_directions[writer.layer], row_norm)
                     write_adapter(partial / f"{name}.gguf", arch, {name: factors})
-                _replace(partial, folder)
+                self._commit(partial, folder, inputs)
             made[set_name] = {str(names[w.name]): folder / f"{names[w.name]}.gguf" for w in writers}
         return made
 
     def prepare(self) -> dict[str, int]:
-        """Every stage up to the search. Finished stages are reused."""
-        self.gguf()
-        ids = self.prompt_ids()
-        found = self.directions()
-        made = self.adapters()
+        """Every stage up to the search. Results still matching their settings are reused."""
+        with self.locked():
+            ids = self.prompt_ids()
+            found = self.directions()
+            made = self.adapters()
         return {
             "edit targets": len(next(iter(made.values()))),
             "direction sets": len(made),

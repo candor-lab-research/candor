@@ -87,3 +87,16 @@ def test_a_reshaped_target_is_caught(tmp_path):
 def test_other_precisions_pass_within_bf16_rounding(tmp_path, dtype):
     folder, tensors = hf_folder(tmp_path, dtype)
     assert check(tmp_path, folder, gguf_file(tmp_path, tensors)) == []
+
+
+def test_other_precisions_still_catch_a_real_change(tmp_path):
+    folder, tensors = hf_folder(tmp_path, torch.float32)
+
+    def nudge(name, array):
+        if name != "blk.0.ffn_down.weight":
+            return array
+        changed = torch.from_numpy(array.view(np.int16).copy()).view(torch.bfloat16).float() * 1.05
+        return changed.to(torch.bfloat16).view(torch.int16).numpy().view(np.uint16)
+
+    problems = check(tmp_path, folder, gguf_file(tmp_path, tensors, nudge))
+    assert len(problems) == 1 and problems[0].startswith("blk.0.ffn_down.weight doesn't hold")

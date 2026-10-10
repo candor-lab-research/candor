@@ -33,7 +33,9 @@ CHATS = [
 def converted(tmp_path_factory):
     folder = Path(snapshot_download(MODEL, allow_patterns=["*.json", "*.safetensors", "*.jinja", "*.txt"]))
     out = tmp_path_factory.mktemp("smol")
-    bf16, quantized = convert.to_gguf(folder, out, "Q4_K_M", out / "convert.log")
+    bf16, quantized = out / "model-BF16.gguf", out / "model-Q4_K_M.gguf"
+    convert.to_bf16(folder, bf16, out / "convert.log")
+    convert.quantize(bf16, quantized, "Q4_K_M", out / "convert.log")
     return folder, bf16, quantized, out
 
 
@@ -65,19 +67,38 @@ def test_chat_ids_match_real_chat_requests_and_transformers(converted):
     ]
 
 
-def test_init_and_run_prepare_every_stage_and_resume(tmp_path):
+def test_init_and_run_prepare_every_stage_resume_and_follow_settings(tmp_path):
     from typer.testing import CliRunner
 
     from candor.cli import app
 
     runner = CliRunner(env={"COLUMNS": "250"})
+    run_folder = tmp_path / "smol"
     created = runner.invoke(app, ["init", "smol", "--model", MODEL, "--runs", str(tmp_path)])
     assert created.exit_code == 0, created.output
-    first = runner.invoke(app, ["run", str(tmp_path / "smol")])
+    first = runner.invoke(app, ["run", str(run_folder)])
     assert first.exit_code == 0, first.output
     assert "60 edit targets" in first.output and "1000 prompts" in first.output
-    stamp = (tmp_path / "smol" / "directions.pt").stat().st_mtime_ns
-    again = runner.invoke(app, ["run", str(tmp_path / "smol")])
+
+    results = [
+        run_folder / "gguf" / "model-BF16.gguf",
+        run_folder / "prompts.json",
+        run_folder / "directions.pt",
+    ]
+    results += sorted((run_folder / "adapters").rglob("*.gguf"))
+    stamps = {path: path.stat().st_mtime_ns for path in results}
+    again = runner.invoke(app, ["run", str(run_folder)])
     assert again.exit_code == 0, again.output
-    assert "Converting" not in again.output and "Reading residuals" not in again.output
-    assert (tmp_path / "smol" / "directions.pt").stat().st_mtime_ns == stamp
+    assert "Rebuilding" not in again.output and "Writing adapters" not in again.output
+    assert {path: path.stat().st_mtime_ns for path in stamps} == stamps
+
+    settings = (run_folder / "candor.toml").read_text()
+    (run_folder / "candor.toml").write_text(
+        settings.replace('system_prompt = ""', 'system_prompt = "Be brief."')
+    )
+    changed = runner.invoke(app, ["run", str(run_folder)])
+    assert changed.exit_code == 0, changed.output
+    assert "Rebuilding prompts.json" in changed.output
+    assert "Rebuilding directions.pt" in changed.output
+    assert "Converting" not in changed.output
+    assert (run_folder / "gguf" / "model-BF16.gguf").stat().st_mtime_ns == stamps[results[0]]
