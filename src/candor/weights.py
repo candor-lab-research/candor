@@ -1,21 +1,25 @@
 """Read weights straight from a Hugging Face model folder."""
 
-import json
 from pathlib import Path
 
 from safetensors import safe_open
 from torch import Tensor
 
+from .source import INDEX, weight_files
+
 
 class ModelFiles:
+    """Single weights by name, from the files a loader reads."""
+
     def __init__(self, folder: Path):
         self.folder = folder
-        index = folder / "model.safetensors.index.json"
-        if index.exists():
-            self.shard_of: dict[str, str] = json.loads(index.read_text())["weight_map"]
-        else:
-            with safe_open(folder / "model.safetensors", "pt") as f:
-                self.shard_of = dict.fromkeys(f.keys(), "model.safetensors")
+        shards = weight_files(folder)
+        if not shards:
+            raise FileNotFoundError(f"{folder} has no model.safetensors and no {INDEX}")
+        self.shard_of: dict[str, str] = {}
+        for shard in shards:
+            with safe_open(folder / shard, "pt") as f:
+                self.shard_of |= dict.fromkeys(f.keys(), shard)
 
     def tensor(self, name: str) -> Tensor:
         with safe_open(self.folder / self.shard_of[name], "pt") as f:
