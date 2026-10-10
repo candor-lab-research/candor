@@ -33,6 +33,8 @@ READERS = {
     "w1", "w3", "fc1", "c_attn", "c_fc", "wq", "wk", "wv", "wqkv", "dense_h_to_4h",
 }  # fmt: skip
 NOT_WEIGHTS = {"bias", "biases", "scales", "weight_scale", "weight_scale_inv", "input_scale"}
+QUANTIZATION = NOT_WEIGHTS - {"bias"}
+OUTPUT_NORMS = {"post_feedforward_layernorm", "post_self_attn_layernorm", "post_mlp_layernorm"}
 ATTENTION = {"self_attn", "attn", "attention", "linear_attn", "mixer", "conv"}
 MLP = {"mlp", "feed_forward", "ffn", "moe", "block_sparse_moe", "shared_mlp"}
 OTHER_STACKS = ("vision", "visual", "audio", "encoder", "mtp")
@@ -61,6 +63,7 @@ class Targets:
     missing: list[str] = field(default_factory=list)
     extra_layers: list[int] = field(default_factory=list)
     output_norms: bool = False
+    quantized: list[str] = field(default_factory=list)
 
     @property
     def experts(self) -> list[Writer]:
@@ -115,13 +118,16 @@ def find_targets(shapes: dict[str, list[int]], hidden: int, layers: int) -> Targ
         return Targets(layers, "", missing=[problem])
 
     targets = Targets(layers, stack, extra_layers=sorted(stacks[stack] - set(range(layers))))
+    scaled: set[str] = set()
     for name, shape in sorted(shapes.items()):
         match = LAYER.match(name)
         if not match or match[1] != stack or int(match[2]) >= layers:
             continue
         path = match[3].split(".")
-        if "post_feedforward_layernorm" in path:
+        if OUTPUT_NORMS & set(path):
             targets.output_norms = True
+        if path[-1] in QUANTIZATION:
+            scaled.add(name.rsplit(".", 1)[0])
         if path[-1] in NOT_WEIGHTS:
             continue
         if path[-1] == "weight":
@@ -137,6 +143,7 @@ def find_targets(shapes: dict[str, list[int]], hidden: int, layers: int) -> Targ
         else:
             targets.unclassified.append(name)
     targets.writers.sort(key=lambda w: (w.layer, w.component, w.name))
+    targets.quantized = [w.name for w in targets.writers if w.name.removesuffix(".weight") in scaled]
     for layer in range(layers):
         for component in ("attn", "mlp"):
             if not any(w.layer == layer and w.component == component for w in targets.writers):
@@ -145,17 +152,20 @@ def find_targets(shapes: dict[str, list[int]], hidden: int, layers: int) -> Targ
 
 
 @cache
-def _architectures() -> dict[str, str]:
+def _converter_table() -> dict[str, Any]:
     path = resources.files("candor") / "data" / "llama_cpp_architectures.json"
     return json.loads(path.read_text())
 
 
 def gguf_architecture(config: dict[str, Any]) -> str | None:
-    """llama.cpp's name for the model, from the architectures its converter registers."""
-    for architecture in config.get("architectures") or []:
-        if found := _architectures().get(architecture):
-            return found
-    return None
+    """llama.cpp's name for the model, chosen the way its converter chooses: the first top-level
+    architecture, replaced by text_config's unless it is one of the converter's exceptions."""
+    table = _converter_table()
+    architecture = (config.get("architectures") or [None])[0]
+    text_architectures = (config.get("text_config") or {}).get("architectures")
+    if architecture not in table["top_level_only"] and text_architectures:
+        architecture = text_architectures[0]
+    return table["architectures"].get(architecture)
 
 
 @cache

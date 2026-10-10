@@ -21,9 +21,14 @@ MARKS = {
     "fail": "[red]fail[/]",
     "skipped": "[dim]skipped[/]",
 }
-FAILED_CHECK, COULD_NOT_INSPECT = 1, 2
+# 2 is what typer uses for usage errors, so "couldn't inspect" gets its own code.
+FAILED_CHECK, COULD_NOT_INSPECT = 1, 3
 
 Row = tuple[str, str, str]
+
+
+class CannotInspect(Exception):
+    pass
 
 
 @app.callback()
@@ -66,6 +71,9 @@ def _target_rows(model: str, hidden: int, layers: int, arch: str | None) -> list
                      "a token-prediction head, and are left alone"))  # fmt: skip
     if found.experts:
         rows.append(("Experts", "fail", "candor doesn't edit mixture-of-experts models yet"))
+    if found.quantized:
+        rows.append(("Quantised", "fail", f"{_examples(found.quantized)} carry quantisation scales; "
+                     "use the unquantised original"))  # fmt: skip
     if found.output_norms:
         rows.append(("Output norms", "warn", "this model normalises each block's output before adding it "
                      "to the residual stream, so the edit can't remove the direction exactly"))  # fmt: skip
@@ -88,7 +96,10 @@ def _tokenizer_rows(model: str) -> list[Row]:
     template = checks.chat_template(tokenizer)
     if template is None:
         return [("Chat template", "fail", "the tokenizer has none, so this looks like a base model")]
-    found = checks.begin_of_text(tokenizer)
+    try:
+        found = checks.begin_of_text(tokenizer)
+    except Exception as error:
+        return [("Chat template", "fail", f"transformers can't render a one-message chat with it: {error}")]
     counts = f"apps send {found.transformers}, llama.cpp {found.llama_cpp}, heretic {found.heretic}"
     rows: list[Row] = [
         ("Begin-of-text", "warn" if found.problems() else "ok", "; ".join([counts, *found.problems()]))
@@ -97,7 +108,7 @@ def _tokenizer_rows(model: str) -> list[Row]:
         rows.append(("Date in prompt", "warn", "the chat template writes today's date, so runs pin it"))
     else:
         rows.append(("Date in prompt", "ok", "none"))
-    result = checks.app_template_parses(template)
+    result = checks.app_template_parses(tokenizer, template)
     if result.status == "fails":
         detail = f"Bionic and LM Studio can't use it and fall back to another format: {result.detail}"
         rows.append(("Bionic template", "fail", detail))
@@ -108,28 +119,18 @@ def _tokenizer_rows(model: str) -> list[Row]:
     return rows
 
 
-@app.command()
-def inspect(model: Annotated[str, typer.Argument(help="A Hugging Face model id or a local folder.")]) -> None:
-    """Check a model before spending anything on it. Reads the config, tokenizer and file headers only.
-
-    Exits with 1 when a check fails and 2 when the model can't be inspected at all.
-    """
-    console = Console()
-    if Path(model).expanduser().is_dir():
-        model = str(Path(model).expanduser().resolve())
+def _rows(model: str) -> list[Row]:
     try:
         config = source.read_config(model)
     except Exception as error:
-        console.print(f"[red]candor couldn't read {model}:[/] {error}")
-        raise typer.Exit(COULD_NOT_INSPECT) from None
+        raise CannotInspect(f"candor couldn't read {model}: {error}") from None
     text = source.text_config(config)
     hidden = _first(text, "hidden_size", "n_embd", "d_model") or _first(
         config, "hidden_size", "n_embd", "d_model"
     )
     layers = _first(text, "num_hidden_layers", "n_layer") or _first(config, "num_hidden_layers", "n_layer")
     if hidden is None or layers is None:
-        console.print(f"[red]candor couldn't find the hidden size and layer count in {model}'s config[/]")
-        raise typer.Exit(COULD_NOT_INSPECT)
+        raise CannotInspect(f"candor couldn't find the hidden size and layer count in {model}'s config")
 
     arch = targets.gguf_architecture(config)
     names = ", ".join(config.get("architectures") or [config.get("model_type", "unknown")])
@@ -141,8 +142,28 @@ def inspect(model: Annotated[str, typer.Argument(help="A Hugging Face model id o
         rows.append(("Remote code", "warn", f"loading runs {_examples(code)}, so read it first"))
     else:
         rows.append(("Remote code", "ok", "none"))
-    rows += _target_rows(model, hidden, layers, arch)
-    rows += _tokenizer_rows(model)
+    return rows + _target_rows(model, hidden, layers, arch) + _tokenizer_rows(model)
+
+
+@app.command()
+def inspect(model: Annotated[str, typer.Argument(help="A Hugging Face model id or a local folder.")]) -> None:
+    """Check a model before spending anything on it. Reads the config, tokenizer and file headers only.
+
+    Exits with 1 when a check fails and 3 when the model can't be inspected at all.
+    """
+    console = Console()
+    if Path(model).expanduser().is_dir():
+        model = str(Path(model).expanduser().resolve())
+    try:
+        rows = _rows(model)
+    except CannotInspect as error:
+        console.print(f"[red]{error}[/]")
+        raise typer.Exit(COULD_NOT_INSPECT) from None
+    except Exception as error:
+        console.print(
+            f"[red]candor hit an unexpected error inspecting {model}:[/] {type(error).__name__}: {error}"
+        )
+        raise typer.Exit(COULD_NOT_INSPECT) from None
 
     table = Table(title=f"candor inspect {model}", show_lines=True)
     table.add_column("Check")

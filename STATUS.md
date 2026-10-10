@@ -135,3 +135,21 @@ An independent review found 13 defects; all are fixed, each with a test (84 test
   `consolidated.safetensors` is never shipped unedited; FP8 weights are refused by `merge`.
 - K2's template fails in Bionic only because of its `is sameas` tests; its `{% generation %}`
   block parses fine. The guide is corrected.
+
+A second review of those fixes found one regression and five gaps, all now fixed (93 tests):
+
+- The template check rendered a system message, so templates that deliberately refuse one
+  (Gemma 2, Mistral v0.1) were reported as unreadable by Bionic. Only conversations transformers
+  can render are now tried in Bionic's parser.
+- `merge` now checks every target before writing anything: missing names, non-float dtypes and
+  quantisation scales (an INT8 weight with a `weight_scale` lost its edit silently). It also
+  leaves out weights in other formats such as `pytorch_model.bin`. `inspect` fails on quantised
+  writers.
+- GLM-4's output norms (`post_self_attn_layernorm`, `post_mlp_layernorm`) are now warned about.
+- The llama.cpp architecture is chosen exactly as the converter does: the first top-level entry,
+  replaced by `text_config.architectures` except for the five architectures the converter keeps
+  at top level (also read from its source).
+- `inspect` exits with 3, not 2 (typer's usage-error code), when it can't inspect a model,
+  reports unexpected errors as a message, and handles a template that can't render one message.
+- Known and accepted: another process could take the port in the instant between candor's check
+  and llama-server binding it; the served-model check catches that unless it serves the same file.

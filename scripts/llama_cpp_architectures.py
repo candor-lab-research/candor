@@ -3,8 +3,9 @@
     python -I scripts/llama_cpp_architectures.py PATH_TO_LLAMA_CPP
 
 Maps each Hugging Face architecture that llama.cpp's converter registers for a text model to the
-architecture name it writes into the GGUF. The converter is only parsed, never imported or run.
-Run it against the same release that candor pins (see pyproject.toml).
+architecture name it writes into the GGUF, and lists the architectures for which the converter
+ignores text_config.architectures. The converter is only parsed, never imported or run. Run it
+against the same release that candor pins (see pyproject.toml).
 """
 
 import ast
@@ -40,10 +41,28 @@ def classes(source: Path) -> dict[str, tuple[list[str], list[str], str | None]]:
     return found
 
 
+def top_level_only(source: Path) -> list[str]:
+    """The architectures get_model_architecture keeps even when text_config names another."""
+    tree = ast.parse((source / "conversion" / "base.py").read_text())
+    function = next(
+        n for n in ast.walk(tree) if isinstance(n, ast.FunctionDef) and n.name == "get_model_architecture"
+    )
+    names = []
+    for node in ast.walk(function):
+        if (
+            isinstance(node, ast.Compare)
+            and isinstance(node.ops[0], ast.In)
+            and isinstance(node.comparators[0], ast.Tuple)
+        ):
+            names += [e.value for e in node.comparators[0].elts if isinstance(e, ast.Constant)]
+    return sorted(names)
+
+
 def main() -> None:
     import gguf
 
-    found = classes(Path(sys.argv[1]))
+    source = Path(sys.argv[1])
+    found = classes(source)
 
     def ancestors(name: str) -> list[str]:
         chain, queue = [], [name]
@@ -64,9 +83,10 @@ def main() -> None:
         if arch in names:
             for hf in registered:
                 table.setdefault(hf, names[arch])
+    data = {"top_level_only": top_level_only(source), "architectures": dict(sorted(table.items()))}
     OUTPUT.parent.mkdir(exist_ok=True)
-    OUTPUT.write_text(json.dumps(dict(sorted(table.items())), indent=1) + "\n")
-    print(f"{len(table)} architectures -> {OUTPUT}")
+    OUTPUT.write_text(json.dumps(data, indent=1) + "\n")
+    print(f"{len(table)} architectures, {len(data['top_level_only'])} top-level exceptions -> {OUTPUT}")
 
 
 if __name__ == "__main__":

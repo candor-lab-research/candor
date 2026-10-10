@@ -39,11 +39,30 @@ class TemplateCheck:
     detail: str = ""
 
 
-def app_template_parses(template: str, variables: dict[str, Any] | None = None) -> TemplateCheck:
-    """Whether Bionic and LM Studio's template parser (@huggingface/jinja) can read the template.
+SYSTEM = {"role": "system", "content": "You are a helpful assistant."}
+USER = {"role": "user", "content": "hi"}
+ASSISTANT = {"role": "assistant", "content": "Hello."}
+CONVERSATIONS = [[USER], [SYSTEM, USER], [SYSTEM, USER, ASSISTANT, USER], [USER, ASSISTANT, USER]]
 
-    If it can't, those apps fall back to a prompt format the model wasn't trained on.
+
+def app_template_parses(tokenizer: PreTrainedTokenizerBase, template: str) -> TemplateCheck:
+    """Whether Bionic and LM Studio's template parser (@huggingface/jinja) can use the template.
+
+    If it can't, those apps fall back to a prompt format the model wasn't trained on. Only the
+    conversations transformers renders are tried, so a template that deliberately refuses one
+    (some reject system messages) isn't reported as unreadable.
     """
+    renderable = []
+    for conversation in CONVERSATIONS:
+        try:
+            tokenizer.apply_chat_template(
+                conversation, chat_template=template, tokenize=False, add_generation_prompt=True
+            )
+        except Exception:
+            continue
+        renderable.append(conversation)
+    if not renderable:
+        return TemplateCheck("skipped", "transformers can't render any test conversation with it either")
     node = shutil.which("node")
     if node is None:
         return TemplateCheck("skipped", "Node.js isn't installed")
@@ -52,7 +71,7 @@ def app_template_parses(template: str, variables: dict[str, Any] | None = None) 
     with tempfile.NamedTemporaryFile("w", suffix=".jinja") as file:
         file.write(template)
         file.flush()
-        args = [node, str(JS / "check_template.mjs"), file.name, json.dumps(variables or {})]
+        args = [node, str(JS / "check_template.mjs"), file.name, json.dumps(renderable)]
         try:
             run = subprocess.run(args, capture_output=True, text=True, timeout=60)
         except subprocess.TimeoutExpired:

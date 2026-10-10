@@ -107,9 +107,16 @@ def test_biases_and_scales_are_not_writers():
 
 
 def test_norms_on_block_outputs_are_flagged():
-    shapes = llama() | {f"model.layers.{i}.post_feedforward_layernorm.weight": [HIDDEN] for i in range(2)}
-    assert find_targets(shapes, HIDDEN, 2).output_norms
+    for norm in ("post_feedforward_layernorm", "post_mlp_layernorm"):
+        shapes = llama() | {f"model.layers.{i}.{norm}.weight": [HIDDEN] for i in range(2)}
+        assert find_targets(shapes, HIDDEN, 2).output_norms
     assert not find_targets(llama(), HIDDEN, 2).output_norms
+
+
+def test_quantised_writers_are_flagged():
+    shapes = llama() | {"model.layers.1.mlp.down_proj.weight_scale": [HIDDEN, 1]}
+    found = find_targets(shapes, HIDDEN, 2)
+    assert found.quantized == ["model.layers.1.mlp.down_proj.weight"]
 
 
 def test_gguf_names():
@@ -132,3 +139,13 @@ def test_gguf_architecture_comes_from_the_converter_registry():
     assert gguf_architecture({"architectures": ["K2HorizonForCausalLM"]}) == "k2-horizon"
     assert gguf_architecture({"architectures": ["NoSuchModel"]}) is None
     assert gguf_architecture({"model_type": "llama"}) is None
+
+
+def test_gguf_architecture_prefers_text_config_like_the_converter():
+    vision = {"architectures": ["SomeVisionWrapper"], "text_config": {"architectures": ["LlamaForCausalLM"]}}
+    assert gguf_architecture(vision) == "llama"
+    exception = {
+        "architectures": ["KimiK3ForConditionalGeneration"],
+        "text_config": {"architectures": ["LlamaForCausalLM"]},
+    }
+    assert gguf_architecture(exception) != "llama"

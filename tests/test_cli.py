@@ -53,13 +53,13 @@ def test_a_base_model_fails_cleanly(tmp_path):
 
 def test_a_missing_folder_or_repo_cannot_be_inspected(tmp_path):
     result = run(tmp_path / "does-not-exist")
-    assert result.exit_code == 2
+    assert result.exit_code == 3
     assert "couldn't read" in result.output
 
 
 def test_a_config_without_sizes_cannot_be_inspected(tmp_path):
     result = run(model_folder(tmp_path, config={"architectures": ["LlamaForCausalLM"], "text_config": {}}))
-    assert result.exit_code == 2
+    assert result.exit_code == 3
     assert "hidden size and layer count" in result.output
 
 
@@ -70,3 +70,16 @@ def test_settings_under_text_config_are_found(tmp_path):
     }
     result = run(model_folder(tmp_path, config=nested))
     assert result.exit_code == 0, result.output
+
+
+def test_a_template_that_cannot_render_one_message_fails_cleanly(tmp_path):
+    result = run(model_folder(tmp_path, template="{{ raise_exception('broken') }}"))
+    assert result.exit_code == 1
+    assert "can't render a one-message chat" in result.output
+
+
+def test_a_quantised_checkpoint_fails(tmp_path):
+    scales = {f"model.layers.{i}.mlp.down_proj.weight_scale": [HIDDEN, 1] for i in range(2)}
+    result = run(model_folder(tmp_path, scales))
+    assert result.exit_code == 1
+    assert "quantisation scales" in result.output

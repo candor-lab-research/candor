@@ -6,7 +6,7 @@ from pathlib import Path
 from typing import Any
 
 from huggingface_hub import get_safetensors_metadata, hf_hub_download
-from huggingface_hub.errors import EntryNotFoundError
+from huggingface_hub.errors import RemoteEntryNotFoundError
 
 INDEX = "model.safetensors.index.json"
 
@@ -22,7 +22,7 @@ def read_json(model: str, name: str) -> dict[str, Any] | None:
         return json.loads(path.read_text()) if path.exists() else None
     try:
         return json.loads(Path(hf_hub_download(model, name)).read_text())
-    except EntryNotFoundError:
+    except RemoteEntryNotFoundError:
         return None
 
 
@@ -51,6 +51,17 @@ def weight_files(folder: Path) -> list[str]:
     return []
 
 
+def local_headers(folder: Path) -> dict[str, dict[str, Any]]:
+    """Every tensor's dtype and shape in the weight files a loader reads, from the headers only."""
+    headers = {}
+    for name in weight_files(folder):
+        with (folder / name).open("rb") as f:
+            header = json.loads(f.read(struct.unpack("<Q", f.read(8))[0]))
+        header.pop("__metadata__", None)
+        headers |= header
+    return headers
+
+
 def tensor_shapes(model: str) -> dict[str, list[int]]:
     """Every tensor's shape, read from the safetensors headers only."""
     if not is_local(model):
@@ -60,11 +71,4 @@ def tensor_shapes(model: str) -> dict[str, list[int]]:
             for file in metadata.files_metadata.values()
             for name, info in file.tensors.items()
         }
-    folder = Path(model).expanduser()
-    shapes = {}
-    for name in weight_files(folder):
-        with (folder / name).open("rb") as f:
-            header = json.loads(f.read(struct.unpack("<Q", f.read(8))[0]))
-        header.pop("__metadata__", None)
-        shapes |= {tensor: info["shape"] for tensor, info in header.items()}
-    return shapes
+    return {name: info["shape"] for name, info in local_headers(Path(model).expanduser()).items()}

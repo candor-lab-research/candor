@@ -52,9 +52,10 @@ def test_keeps_safetensors_metadata(model_folder, tmp_path):
         assert f.metadata() == {"format": "pt"}
 
 
-def test_unknown_weight_is_an_error(model_folder, tmp_path):
+def test_unknown_weight_is_an_error_before_anything_is_written(model_folder, tmp_path):
     with pytest.raises(KeyError):
         merge(model_folder, tmp_path / "merged", {"missing.weight": (torch.zeros(1, 1), torch.zeros(1, 1))})
+    assert not (tmp_path / "merged").exists()
 
 
 def test_weight_files_outside_the_index_are_left_out(model_folder, tmp_path):
@@ -64,9 +65,36 @@ def test_weight_files_outside_the_index_are_left_out(model_folder, tmp_path):
     assert not (tmp_path / "merged" / "consolidated.safetensors").exists()
 
 
-def test_fp8_weights_are_refused(tmp_path):
+def test_fp8_weights_are_refused_before_anything_is_written(tmp_path):
     folder = tmp_path / "fp8"
     folder.mkdir()
     save_file({"a.weight": torch.zeros(4, 6).to(torch.float8_e4m3fn)}, folder / "model.safetensors")
-    with pytest.raises(ValueError, match="FP8"):
+    with pytest.raises(ValueError, match="F8_E4M3"):
         merge(folder, tmp_path / "merged", {"a.weight": (torch.zeros(4, 1), torch.zeros(1, 6))})
+    assert not (tmp_path / "merged").exists()
+
+
+def test_scaled_int8_weights_are_refused_before_anything_is_written(tmp_path):
+    folder = tmp_path / "int8"
+    folder.mkdir()
+    tensors = {"a.weight": torch.full((4, 6), 10, dtype=torch.int8), "a.weight_scale": torch.ones(4, 1)}
+    save_file(tensors, folder / "model.safetensors")
+    with pytest.raises(ValueError):
+        merge(folder, tmp_path / "merged", {"a.weight": (torch.zeros(4, 1), torch.zeros(1, 6))})
+    assert not (tmp_path / "merged").exists()
+
+
+def test_scales_on_a_float_weight_are_refused(tmp_path):
+    folder = tmp_path / "scaled"
+    folder.mkdir()
+    save_file(
+        {"a.weight": torch.zeros(4, 6), "a.weight_scale": torch.ones(4, 1)}, folder / "model.safetensors"
+    )
+    with pytest.raises(ValueError, match="quantisation scales"):
+        merge(folder, tmp_path / "merged", {"a.weight": (torch.zeros(4, 1), torch.zeros(1, 6))})
+
+
+def test_other_weight_formats_are_left_out(model_folder, tmp_path):
+    (model_folder / "pytorch_model.bin").write_bytes(b"old weights")
+    assert merge(model_folder, tmp_path / "merged", {}) == ["pytorch_model.bin"]
+    assert not (tmp_path / "merged" / "pytorch_model.bin").exists()
