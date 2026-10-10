@@ -11,6 +11,7 @@ import fcntl
 import hashlib
 import os
 import platform
+import re
 import shutil
 import subprocess
 import tarfile
@@ -53,12 +54,6 @@ ASSETS = {
             "3286cf2eefefc4ebda4c21a215fca38e65732dd14d6a7ba6a8ab8d6aae6dcb99",
         ),
     ],
-    "linux-cpu": [
-        Asset(
-            f"llama-{LLAMA_CPP_RELEASE}-bin-ubuntu-x64.tar.gz",
-            "2f44f8e794a9e6290bacb2b811e6a83019a106c057473682aeeb445bd49c5083",
-        )
-    ],
 }
 
 
@@ -85,7 +80,7 @@ def this_platform() -> str:
     if system == "Darwin" and machine == "arm64":
         return "macos-arm64"
     if system == "Linux" and machine == "x86_64":
-        return "linux-cuda" if shutil.which("nvidia-smi") else "linux-cpu"
+        return "linux-cuda"
     raise ToolchainError(f"no llama.cpp {LLAMA_CPP_RELEASE} build is set up for {system} {machine}")
 
 
@@ -105,7 +100,10 @@ def _download(url: str, destination: Path) -> None:
 def _fetch(asset: Asset, folder: Path) -> Path:
     """Download and unpack one archive into its own folder, and return that folder."""
     archive = folder / asset.name
-    _download(f"{RELEASES}/{asset.name}", archive)
+    try:
+        _download(f"{RELEASES}/{asset.name}", archive)
+    except OSError as error:
+        raise ToolchainError(f"couldn't download {asset.name}: {error}") from None
     found = sha256(archive)
     if found != asset.sha256:
         raise ToolchainError(f"{asset.name} has sha256 {found}, expected {asset.sha256}")
@@ -200,11 +198,24 @@ def binaries() -> Path:
         except ToolchainError as error:
             raise ToolchainError(f"{error}; delete {target} to fetch it again") from None
     if name == "linux-cuda":
-        server = str(folder / "llama-server")
-        devices = subprocess.run([server, "--list-devices"], capture_output=True, text=True, timeout=120)
-        if "CUDA" not in devices.stdout + devices.stderr:
-            raise ToolchainError("llama-server can't see the GPU, so it would silently run on the CPU")
+        _check_gpu(folder)
     return folder
+
+
+def _check_gpu(folder: Path) -> None:
+    """Refuse a llama-server that lists no CUDA device: it would silently run on the CPU."""
+    try:
+        devices = subprocess.run(
+            [str(folder / "llama-server"), "--list-devices"], capture_output=True, text=True, timeout=120
+        )
+    except (OSError, subprocess.TimeoutExpired) as error:
+        raise ToolchainError(f"llama-server couldn't list the GPUs: {error}") from None
+    # The devices are listed on stdout. When CUDA fails to start, stderr says so, naming CUDA too.
+    if not re.search(r"^\s*CUDA\d+: ", devices.stdout, re.MULTILINE):
+        said = devices.stderr.strip().splitlines()[-3:] or ["no CUDA device listed"]
+        raise ToolchainError(
+            f"llama-server can't see the GPU, so it would silently run on the CPU: {' / '.join(said)}"
+        )
 
 
 def _git(source: Path, *args: str) -> str:
