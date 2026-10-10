@@ -5,3 +5,4 @@ __pycache__/
 runs/
 *.gguf
 .DS_Store
+src/candor/js/node_modules/

@@ -7,8 +7,8 @@ This file is the single plan for candor. Anything not listed under Plan is not b
 | Phase | What | Done when | State |
 | --- | --- | --- | --- |
 | 0 | Score edits as per-layer LoRA adapters in llama.cpp | Adapters match merged weights, no speed cost | Done |
-| 1 | Core maths, and `candor init` / `candor inspect` | Rebuilds heretic's numbers exactly (done); `inspect` reports correctly on rude-llama, Qwen3.5-9B and K2-Horizon | In progress |
-| 2 | `candor run` on the Mac: search scored in llama.cpp, then export | On rude-llama it finds an edit at least as good as heretic's Trial 170 measured the real way (at most 4/100 refusals, KL at most 0.038, no maths loss), and the file loads in Bionic | Next |
+| 1 | Core maths and `candor inspect` | Rebuilds heretic's numbers exactly; `inspect` reports correctly on rude-llama, Qwen3.5-9B and K2-Horizon | Done |
+| 2 | `candor init` and `candor run` on the Mac: search scored in llama.cpp, then export | On rude-llama it finds an edit at least as good as heretic's Trial 170 measured the real way (at most 4/100 refusals, KL at most 0.038, no maths loss), and the file loads in Bionic | In progress |
 | 3 | The same run on a Runpod pod with one command and a budget limit | Qwen3.5-9B end to end under a set budget, pod deleted automatically | |
 | 4 | Thinking models, scored at your real Bionic settings | K2-Horizon measured honestly at your reasoning level and sampling, then improved | |
 | 5 | Docs, `candor doctor`, live dashboard, the guide rewritten around candor | You run a new model without me | |
@@ -18,10 +18,13 @@ runs.
 
 ### Next three steps
 
-1. An engine test against a tiny model in the Mac's llama-server (seconds, no real model).
-2. `candor inspect`: begin-of-text and date checks (written), whether Bionic can parse the chat
-   template, remote code, hidden states, llama.cpp support, and edit targets found by shape.
-3. `candor init`: one TOML file per run with every setting, search ranges included.
+1. `candor init`: one TOML file per run holding every setting the run uses, search ranges included.
+2. Directions: prompts tokenized by llama-server itself and fed to transformers for the residuals,
+   so directions and scoring see identical input; per-layer adapters for each candidate direction;
+   a check that each GGUF writer tensor equals its Hugging Face original.
+3. The search loop scored in llama.cpp (Optuna over the per-layer strengths), with the classifier
+   judge and keyword cross-check; then the held-out re-score, the maths gate, export and the final
+   check on the shipped file.
 
 ## Research changes and where they land
 
@@ -29,7 +32,7 @@ From the 2026-10-10 paper review. Each paper gets read before its change is buil
 
 | Finding | Change | Phase |
 | --- | --- | --- |
-| Find edit targets by tensor shape, not name; Qwen3.5's linear attention needs its own | `inspect` lists targets by shape and fails if any layer is uncovered | 1 |
+| Matching targets by name silently misses most of the effect on mixture-of-experts models (2609.09793) | `inspect` lists every per-layer tensor that outputs the hidden size and fails on any it can't place or any layer without a writer (done) | 1 |
 | Keyword judges miscount refusals, worst on reasoning output | Judge with Qwen3Guard-Gen-0.6B on the final answer; keep keywords as a cross-check, compared by agreement counts only | 2 |
 | 100 prompts are too noisy to rank trials | Search on 100 with fixed seeds, re-score the best trials on 300-400 held-out prompts | 2 |
 | First-token KL doesn't predict lost ability | Final candidates must pass a GSM8K subset and a multiple-choice flip check | 2 |
@@ -92,3 +95,15 @@ Numbers: `runs/phase0/results.json` (not in git). Pod: A40, about 23 minutes, ab
   the date the Llama 3 template writes into each prompt, and batch-size noise of about 1-2
   refusals. candor's keyword judge and heretic's agreed on all 800 saved answers.
 - `candor.checks` reports both traps for any model: `begin_of_text` and `writes_the_date`.
+- The engine test (`tests/test_engine.py`) runs a tiny random GGUF in llama-server and fails if
+  either Phase 0 workaround is removed.
+- `candor inspect MODEL` reads the config, tokenizer and file headers only. On the three models:
+  rude-llama passes (warns: doubled token, date); Qwen3.5-9B passes and finds all 64 writers,
+  including 24 linear-attention `out_proj` (llama.cpp's `ssm_out`); K2-Horizon fails because Bionic
+  can't parse its chat template (lines 89, 91, 127, 129, 628), and warns about remote code and
+  the doubled token.
+- `gguf` now comes from the same llama.cpp release as the engine (PyPI's 0.19.0 doesn't know
+  K2-Horizon), and candor mirrors the converter's `language_model.` prefix stripping.
+- Reading the papers corrected the review: 2609.04721 doesn't cover Qwen3.5 (its linear-attention
+  writer is known from heretic's code), and 2609.09793 argues against name matching without
+  prescribing shape matching.

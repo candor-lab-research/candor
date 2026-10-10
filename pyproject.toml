@@ -6,13 +6,19 @@ readme = "README.md"
 requires-python = ">=3.12"
 dependencies = [
     "datasets>=4",
-    "gguf>=0.19",
+    # The same llama.cpp release as the engine, so tensor and architecture names always agree.
+    "gguf @ git+https://github.com/ggml-org/llama.cpp@b11524#subdirectory=gguf-py",
     "httpx>=0.28",
     "numpy>=2",
+    "rich>=15",
     "safetensors>=0.6",
     "torch>=2.8",
     "transformers>=5",
+    "typer>=0.27",
 ]
+
+[project.scripts]
+candor = "candor.cli:app"
 
 [dependency-groups]
 dev = [
@@ -24,6 +30,12 @@ dev = [
 [build-system]
 requires = ["hatchling"]
 build-backend = "hatchling.build"
+
+[tool.hatch.metadata]
+allow-direct-references = true
+
+[tool.hatch.build]
+exclude = ["src/candor/js/node_modules"]
 
 [tool.ruff]
 line-length = 110

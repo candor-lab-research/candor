@@ -1,9 +1,53 @@
 """Checks on a model's tokenizer and chat template that decide whether a measurement means anything."""
 
+import json
+import shutil
+import subprocess
+import tempfile
 from dataclasses import dataclass
-from typing import cast
+from pathlib import Path
+from typing import Any, cast
 
 from transformers import PreTrainedTokenizerBase
+
+JS = Path(__file__).parent / "js"
+
+
+def remote_code(config: dict[str, Any]) -> list[str]:
+    """The Python files a model ships and runs when loaded, listed in its config's auto_map."""
+    modules = set()
+    for value in config.get("auto_map", {}).values():
+        for reference in value if isinstance(value, list) else [value]:
+            if reference:
+                modules.add(reference.split("--")[-1].rsplit(".", 1)[0] + ".py")
+    return sorted(modules)
+
+
+@dataclass(frozen=True)
+class TemplateCheck:
+    status: str
+    detail: str = ""
+
+
+def app_template_parses(template: str, variables: dict[str, Any] | None = None) -> TemplateCheck:
+    """Whether Bionic and LM Studio's template parser (@huggingface/jinja) can read the template.
+
+    If it can't, those apps fall back to a prompt format the model wasn't trained on.
+    """
+    node = shutil.which("node")
+    if node is None:
+        return TemplateCheck("skipped", "Node.js isn't installed")
+    if not (JS / "node_modules" / "@huggingface" / "jinja").exists():
+        return TemplateCheck("skipped", f"run once: npm install --prefix {JS}")
+    with tempfile.NamedTemporaryFile("w", suffix=".jinja") as file:
+        file.write(template)
+        file.flush()
+        args = [node, str(JS / "check_template.mjs"), file.name, json.dumps(variables or {})]
+        result = json.loads(subprocess.run(args, capture_output=True, text=True, check=True).stdout)
+    if result["ok"]:
+        return TemplateCheck("ok")
+    lines = ", ".join(map(str, result["lines"])) or "unknown"
+    return TemplateCheck("fails", f"{result['error']} (statements on lines {lines})")
 
 
 def _leading(ids: list[int], token: int) -> int:
