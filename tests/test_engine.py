@@ -1,38 +1,47 @@
-"""llama-server with per-layer adapters, on a tiny random model. Skipped when no llama-server is found."""
+"""llama-server with per-layer adapters, on a tiny random model.
 
+The tests that need a real llama-server use the one candor would: CANDOR_LLAMA_BIN's, or the one
+in candor's own cache. They never download it, and are skipped when neither is there.
+"""
+
+import csv
 import os
 import random
+import shutil
+import signal
 import socket
+import subprocess
 from pathlib import Path
 
 import pytest
 import torch
 import torch.nn.functional as F
 
-from candor import kl
+from candor import engine, kl, toolchain
 from candor.adapters import write_adapter
 from candor.edit import RowNorm, rank_one
-from candor.engine import LlamaServer, ServerError
+from candor.engine import MAX_ARGUMENT, LlamaServer, ServerError
 
 from .tiny_gguf import FIRST_WORD, HIDDEN, SPECIAL, random_weights, write_model
 
-LLAMA_SERVER = Path(
-    os.environ.get("CANDOR_LLAMA_SERVER", "~/Desktop/tune/llama.cpp/llama-b11524/llama-server")
-).expanduser()
-pytestmark = pytest.mark.skipif(not LLAMA_SERVER.exists(), reason=f"no llama-server at {LLAMA_SERVER}")
+
+def installed_server() -> Path:
+    if folder := os.environ.get("CANDOR_LLAMA_BIN"):
+        return Path(folder).expanduser() / "llama-server"
+    return toolchain.cache() / toolchain.this_platform() / "bin" / "llama-server"
+
+
+LLAMA_SERVER = installed_server()
 
 PROMPTS = [[1, FIRST_WORD + i, FIRST_WORD + 2 * i + 1, FIRST_WORD + 3] for i in range(6)]
 STRENGTHS = {"blk.0.attn_output.weight": 1.5, "blk.1.ffn_down.weight": 0.8}
 
 
-def free_port() -> int:
-    with socket.socket() as s:
-        s.bind(("127.0.0.1", 0))
-        return s.getsockname()[1]
-
-
 @pytest.fixture(scope="module")
 def files(tmp_path_factory):
+    if not LLAMA_SERVER.exists():
+        pytest.skip(f"no llama-server at {LLAMA_SERVER}; run candor to install it or set CANDOR_LLAMA_BIN")
+    toolchain._check(LLAMA_SERVER.parent)
     folder = tmp_path_factory.mktemp("engine")
     weights = random_weights()
     write_model(folder / "base.gguf", weights)
@@ -57,9 +66,25 @@ def files(tmp_path_factory):
 
 def server(folder: Path, model: str, adapters=()) -> LlamaServer:
     return LlamaServer(
-        LLAMA_SERVER, folder / model, folder / "server.log", adapters, parallel=2, context_per_slot=64,
-        port=free_port(),
-    )  # fmt: skip
+        LLAMA_SERVER, folder / model, folder / "server.log", adapters, parallel=2, context_per_slot=64
+    )
+
+
+def stub(folder: Path, script: str) -> Path:
+    """A shell script standing in for llama-server."""
+    path = folder / "llama-server"
+    path.write_text(f"#!/bin/sh\n{script}\n")
+    path.chmod(0o755)
+    return path
+
+
+@pytest.fixture
+def stop_later():
+    """Stops the servers given to it when the test ends, even one that started when it shouldn't."""
+    servers: list[LlamaServer] = []
+    yield servers.append
+    for s in servers:
+        s.stop()
 
 
 def assert_same(a: list[dict[int, float]], b: list[dict[int, float]]) -> None:
@@ -78,6 +103,7 @@ def test_adapters_are_off_unless_a_request_names_them(files, references):
     folder, scales, unused = files
     base, _ = references
     with server(folder, "base.gguf", [*scales, unused]) as s:
+        assert set(s.adapter_ids) == {*scales, unused}
         assert all(adapter["scale"] == 0 for adapter in s.client.get("/lora-adapters").json())
         assert_same(s.top_logprobs(PROMPTS, 50), base)
 
@@ -91,6 +117,37 @@ def test_adapters_at_their_strengths_match_the_merged_model(files, references):
     assert kl.mean_from_top(base, merged) > 1e-3
 
 
+def test_adapters_load_from_folders_with_commas_and_quotes(files, references, tmp_path):
+    folder, scales, _ = files
+    _, merged = references
+    moved = {}
+    for i, (path, strength) in enumerate(scales.items()):
+        target = tmp_path / "runs, old" / f'set,"{i}"' / path.name
+        target.parent.mkdir(parents=True)
+        shutil.copy(path, target)
+        moved[target] = strength
+    with server(folder, "base.gguf", list(moved)) as s:
+        assert set(s.adapter_ids) == set(moved)
+        assert_same(s.top_logprobs(PROMPTS, 50, moved), merged)
+
+
+def test_adapters_left_on_by_default_are_refused(files, monkeypatch, stop_later):
+    folder, scales, _ = files
+    s = server(folder, "base.gguf", list(scales))
+    stop_later(s)
+    call = s._call
+
+    def ignoring_new_scales(method, endpoint, *args, **kwargs):
+        if method == "POST" and endpoint == "/lora-adapters":
+            return []
+        return call(method, endpoint, *args, **kwargs)
+
+    monkeypatch.setattr(s, "_call", ignoring_new_scales)
+    with pytest.raises(ServerError, match="default scale to 0"):
+        s.start()
+    assert s.process is not None and s.process.poll() is not None
+
+
 def test_cached_prompts_are_not_shared_between_adapter_settings(files, references):
     folder, scales, _ = files
     base, merged = references
@@ -101,10 +158,23 @@ def test_cached_prompts_are_not_shared_between_adapter_settings(files, reference
         assert_same(s.top_logprobs(PROMPTS, 50), base)
 
 
-def test_throughput_counts_tokens(files):
+def test_the_prompt_cache_and_context_checkpoints_are_off(files, tmp_path):
     folder, _, _ = files
+    log = tmp_path / "server.log"
+    with LlamaServer(LLAMA_SERVER, folder / "base.gguf", log, parallel=1, extra=["-lv", "4"]):
+        pass
+    text = log.read_text()
+    assert "prompt cache is disabled" in text and "context checkpoints disabled" in text
+
+
+def test_an_answer_cut_short_by_the_context_is_refused(files):
+    folder, _, _ = files
+    prompt = PROMPTS[1]  # the tiny model never ends this one, so it runs until the slot is full
     with server(folder, "base.gguf") as s:
-        assert s.throughput(PROMPTS, 8) > 0
+        room = s.client.get("/props").json()["default_generation_settings"]["n_ctx"] - len(prompt)
+        assert len(s.generate([prompt], room)) == 1
+        with pytest.raises(ServerError, match=f"a slot of at least {len(prompt) + room + 1} tokens"):
+            s.generate([prompt], room + 1)
 
 
 def test_a_busy_port_is_refused(files):
@@ -118,9 +188,33 @@ def test_a_busy_port_is_refused(files):
         assert s.process is None
 
 
-def test_a_failed_start_leaves_no_server_running(files, monkeypatch):
+def test_a_server_serving_another_model_is_refused(files, tmp_path, monkeypatch, stop_later):
+    folder, _, _ = files
+    with server(folder, "base.gguf") as running:
+        monkeypatch.setattr(engine, "_port_in_use", lambda _: False)
+        sleeper = stub(tmp_path, "exec sleep 60")
+        other = LlamaServer(sleeper, folder / "merged.gguf", tmp_path / "server.log", port=running.port)
+        stop_later(other)
+        with pytest.raises(ServerError, match="is serving"):
+            other.start()
+        assert other.process is not None and other.process.poll() is not None
+
+
+def test_a_port_that_never_answers_cannot_hold_up_the_start(tmp_path, monkeypatch):
+    monkeypatch.setattr(engine, "_port_in_use", lambda _: False)
+    with socket.socket() as silent:
+        silent.bind(("127.0.0.1", 0))
+        silent.listen()
+        sleeper, port = stub(tmp_path, "exec sleep 60"), silent.getsockname()[1]
+        s = LlamaServer(sleeper, tmp_path / "model.gguf", tmp_path / "server.log", port=port)
+        with pytest.raises(ServerError, match="wasn't ready after 1 s"):
+            s.start(timeout=1)
+
+
+def test_a_failed_start_leaves_no_server_running(files, monkeypatch, stop_later):
     folder, scales, _ = files
     s = server(folder, "base.gguf", list(scales))
+    stop_later(s)
 
     def fail() -> None:
         raise ServerError("injected")
@@ -129,6 +223,58 @@ def test_a_failed_start_leaves_no_server_running(files, monkeypatch):
     with pytest.raises(ServerError, match="injected"):
         s.start()
     assert s.process is not None and s.process.poll() is not None
+
+
+def test_a_server_that_dies_is_reported_with_its_log(files):
+    folder, _, _ = files
+    with server(folder, "base.gguf") as s:
+        assert s.process is not None
+        s.process.kill()
+        s.process.wait()
+        with pytest.raises(ServerError, match=r"didn't answer /completion .* code -9, see .*server\.log"):
+            s.generate(PROMPTS, 8)
+
+
+def test_a_server_that_ignores_terminate_is_killed(tmp_path):
+    binary = stub(tmp_path, "trap '' TERM\necho ready\nexec sleep 60")
+    s = LlamaServer(binary, tmp_path / "model.gguf", tmp_path / "server.log")
+    with subprocess.Popen([binary], stdout=subprocess.PIPE, text=True) as process:
+        s.process = process
+        try:
+            assert process.stdout is not None and process.stdout.readline() == "ready\n"
+            s.stop(timeout=0.5)
+            assert process.returncode == -signal.SIGKILL
+        finally:
+            process.kill()
+
+
+def test_thousands_of_adapters_fit_in_one_argument(tmp_path):
+    # K2-Horizon's 72 edit targets for every direction set, in a long run folder on a pod.
+    root = tmp_path / "workspace" / "candor" / "runs" / "k2-horizon-high-effort" / "adapters"
+    root.mkdir(parents=True)
+    adapters = [
+        root / f"layer-{s}" / f"blk.{layer}.{target}.weight.gguf"
+        for s in range(37)
+        for layer in range(36)
+        for target in ("attn_output", "ffn_down")
+    ]
+    binary = stub(tmp_path, f'pwd > "{tmp_path}/cwd"\nprintf "%s\\n" "$@" > "{tmp_path}/args"\nexit 1')
+    s = LlamaServer(binary, tmp_path / "model.gguf", tmp_path / "server.log", adapters)
+    with pytest.raises(ServerError, match="exited with code 1"):
+        s.start()
+    args = (tmp_path / "args").read_text().splitlines()
+    assert max(len(arg.encode()) for arg in args) < MAX_ARGUMENT
+    workdir = Path((tmp_path / "cwd").read_text().strip())
+    listed = next(csv.reader([args[args.index("--lora") + 1]]))
+    assert [(workdir / path).resolve() for path in listed] == adapters
+
+
+def test_more_adapters_than_one_argument_holds_are_refused(tmp_path):
+    adapters = [tmp_path / "set" / f"{i:05d}-{'x' * 40}.gguf" for i in range(3000)]
+    s = LlamaServer(tmp_path / "llama-server", tmp_path / "model.gguf", tmp_path / "server.log", adapters)
+    with pytest.raises(ServerError, match="more than Linux allows in one argument"):
+        s.start()
+    assert s.process is None
 
 
 def test_every_prompt_gets_first_token_probabilities(files):

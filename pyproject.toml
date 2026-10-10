@@ -9,6 +9,7 @@ dependencies = [
     # The same llama.cpp release as the engine, so tensor and architecture names always agree.
     "gguf @ git+https://github.com/ggml-org/llama.cpp@b11524#subdirectory=gguf-py",
     "httpx>=0.28",
+    "huggingface-hub>=2.2",
     "numpy>=2",
     "pydantic>=2.10",
     "rich>=15",

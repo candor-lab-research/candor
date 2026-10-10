@@ -1,14 +1,22 @@
+import importlib.metadata
 import io
+import json
 import os
 import shutil
+import socket
 import subprocess
 import sys
 import tarfile
+import threading
 import time
+import tomllib
+from importlib import resources
+from pathlib import Path
 
 import pytest
 
 from candor import toolchain
+from candor.engine import LLAMA_CPP_RELEASE
 from candor.toolchain import Asset, ToolchainError
 
 SERVER = "#!/bin/sh\necho 'version: 0.6.0-dev (build {build}, commit 86a2835)'\n"
@@ -79,9 +87,10 @@ def test_a_download_with_the_wrong_checksum_is_refused_and_leaves_nothing(releas
     assert not list(toolchain.cache().rglob("llama-server"))
 
 
-def test_a_different_release_is_refused(release, monkeypatch):
+@pytest.mark.parametrize("build", ["9999", "115240", "1152"])
+def test_a_different_release_is_refused(release, monkeypatch, build):
     add, _, _ = release
-    monkeypatch.setitem(toolchain.ASSETS, "test", [binaries_release(add, build="9999")])
+    monkeypatch.setitem(toolchain.ASSETS, "test", [binaries_release(add, build=build)])
     with pytest.raises(ToolchainError) as raised:
         toolchain.binaries()
     message = str(raised.value)
@@ -111,6 +120,44 @@ def test_a_folder_missing_a_tool_is_refused(tmp_path, monkeypatch):
 
 def test_this_platform_is_known():
     assert toolchain.this_platform() in toolchain.ASSETS
+
+
+def test_linux_always_takes_the_cuda_build(monkeypatch):
+    monkeypatch.setattr(toolchain.platform, "system", lambda: "Linux")
+    monkeypatch.setattr(toolchain.platform, "machine", lambda: "x86_64")
+    monkeypatch.setattr(toolchain.shutil, "which", lambda _: None)
+    assert toolchain.this_platform() == "linux-cuda"
+
+
+def listing_devices(stdout: str, stderr: str) -> str:
+    """A llama-server whose --list-devices prints the given text."""
+    listing = f"if [ \"$1\" = --list-devices ]; then printf '{stdout}'; printf '{stderr}' >&2; exit; fi\n"
+    return SERVER.format(build="11524").replace("\n", "\n" + listing, 1)
+
+
+@pytest.mark.parametrize(
+    ("stdout", "stderr", "refused"),
+    [
+        ("Available devices:\n  CUDA0: NVIDIA A40 (45498 MiB, 45229 MiB free)\n", "", None),
+        (
+            "Available devices:\n  (none)\n",
+            "ggml_cuda_init: failed to initialize CUDA: no CUDA-capable device is detected\n",
+            "failed to initialize CUDA",
+        ),
+        ("Available devices:\n  (none)\n", "", "no CUDA device listed"),
+    ],
+)
+def test_a_cuda_build_must_list_a_cuda_device(release, monkeypatch, stdout, stderr, refused):
+    add, _, _ = release
+    monkeypatch.setattr(toolchain, "this_platform", lambda: "linux-cuda")
+    server = listing_devices(stdout, stderr)
+    archive = add("cuda.tar.gz", {"llama-b0/llama-server": server, "llama-b0/llama-quantize": "#!/bin/sh\n"})
+    monkeypatch.setitem(toolchain.ASSETS, "linux-cuda", [archive])
+    if refused is None:
+        assert (toolchain.binaries() / "llama-server").exists()
+    else:
+        with pytest.raises(ToolchainError, match=f"can't see the GPU.*{refused}"):
+            toolchain.binaries()
 
 
 @pytest.fixture
@@ -151,6 +198,29 @@ def test_a_converter_whose_install_failed_is_installed_again(converter_source, m
     assert len(calls.read_text().splitlines()) == 2
     toolchain.converter()
     assert len(calls.read_text().splitlines()) == 2
+
+
+def test_the_converter_is_installed_again_when_its_pins_change(converter_source, monkeypatch, tmp_path):
+    _, calls = converter_source
+    toolchain.converter()
+    assert f"-c {toolchain.CONSTRAINTS}" in calls.read_text()
+    changed = tmp_path / "constraints.txt"
+    changed.write_text("numpy==2.2.6\n")
+    monkeypatch.setattr(toolchain, "CONSTRAINTS", changed)
+    toolchain.converter()
+    toolchain.converter()
+    assert calls.read_text().count(f"-c {changed}") == 1
+
+
+def test_every_pin_of_llama_cpp_is_the_same_commit():
+    table = json.loads((resources.files("candor") / "data" / "llama_cpp_architectures.json").read_text())
+    installed = json.loads(importlib.metadata.distribution("gguf").read_text("direct_url.json") or "{}")
+    project = tomllib.loads((Path(__file__).parents[1] / "pyproject.toml").read_text())
+    gguf = next(spec for spec in project["project"]["dependencies"] if spec.startswith("gguf "))
+    assert gguf.endswith(f"@{LLAMA_CPP_RELEASE}#subdirectory=gguf-py")
+    assert installed["vcs_info"]["requested_revision"] == LLAMA_CPP_RELEASE
+    assert installed["vcs_info"]["commit_id"] == toolchain.COMMIT
+    assert table["commit"] == toolchain.COMMIT
 
 
 def test_a_changed_converter_checkout_is_refused(converter_source):
@@ -204,6 +274,45 @@ def test_a_file_in_two_archives_must_be_identical(release, monkeypatch):
     monkeypatch.setitem(toolchain.ASSETS, "test", [binaries_release(add), clash])
     with pytest.raises(ToolchainError, match="differs between two of the release archives"):
         toolchain.binaries()
+
+
+def test_an_install_of_other_archives_is_replaced(release, monkeypatch):
+    add, downloads, _ = release
+    monkeypatch.setitem(toolchain.ASSETS, "test", [binaries_release(add)])
+    toolchain.binaries()
+    runtime = add("cudart.tar.gz", {"cudart-b0/libcudart.so.12": "lib"})
+    monkeypatch.setitem(toolchain.ASSETS, "test", [binaries_release(add), runtime])
+    assert (toolchain.binaries() / "libcudart.so.12").exists()
+    assert len(downloads) == 3
+
+
+def test_binaries_wait_for_another_setup(release, monkeypatch):
+    add, downloads, _ = release
+    monkeypatch.setitem(toolchain.ASSETS, "test", [binaries_release(add)])
+    with toolchain._locked("bin-test"):
+        waiting = threading.Thread(target=toolchain.binaries)
+        waiting.start()
+        waiting.join(0.5)
+        assert waiting.is_alive() and not downloads
+    waiting.join(10)
+    assert len(downloads) == 1
+
+
+def test_a_stalled_download_fails_instead_of_hanging(tmp_path, monkeypatch):
+    previous = socket.getdefaulttimeout()
+    socket.setdefaulttimeout(5)  # so a download without its own timeout shows up as slow, not as a hang
+    try:
+        with socket.socket() as silent:
+            silent.bind(("127.0.0.1", 0))
+            silent.listen()
+            monkeypatch.setattr(toolchain, "RELEASES", f"http://127.0.0.1:{silent.getsockname()[1]}")
+            monkeypatch.setattr(toolchain, "TIMEOUT", 0.2)
+            started = time.perf_counter()
+            with pytest.raises(ToolchainError, match=r"couldn't download x\.tar\.gz"):
+                toolchain._fetch(Asset("x.tar.gz", "0"), tmp_path)
+            assert time.perf_counter() - started < 2
+    finally:
+        socket.setdefaulttimeout(previous)
 
 
 def test_a_damaged_install_is_fetched_again(release, monkeypatch):

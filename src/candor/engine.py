@@ -3,6 +3,7 @@
 Generated text is handed back to the caller. Nothing here prints or logs it.
 """
 
+import os
 import socket
 import subprocess
 import time
@@ -14,6 +15,10 @@ from typing import Any
 import httpx
 
 LLAMA_CPP_RELEASE = "b11524"
+# Linux refuses one command-line argument this long or longer (MAX_ARG_STRLEN counts the closing NUL).
+MAX_ARGUMENT = 128 * 1024
+# For requests that only read or change a setting; answers get _answering's longer limit.
+QUICK = httpx.Timeout(30, connect=5)
 
 
 class ServerError(RuntimeError):
@@ -29,21 +34,22 @@ class LlamaServer:
         adapters: Iterable[Path] = (),
         parallel: int = 16,
         context_per_slot: int = 1024,
-        port: int = 8080,
+        port: int | None = None,
         extra: Iterable[str] = (),
     ):
-        self.binary = binary
-        self.model = model
+        self.binary = binary.absolute()
+        self.model = model.absolute()
         self.log = log
         self.adapters = [path.resolve() for path in adapters]
+        # llama-server runs in the folder holding every adapter, so it can name each one briefly.
+        self.workdir = Path(os.path.commonpath([p.parent for p in self.adapters])) if self.adapters else None
         self.parallel = parallel
         self.context = parallel * context_per_slot
-        self.port = port
+        self.port = port or _free_port()
         self.extra = list(extra)
-        self.client = httpx.Client(base_url=f"http://127.0.0.1:{port}", timeout=None)
+        self.client = httpx.Client(base_url=f"http://127.0.0.1:{self.port}", timeout=QUICK)
         self.process: subprocess.Popen | None = None
         self.adapter_ids: dict[Path, int] = {}
-        self.startup_seconds = 0.0
 
     def __enter__(self) -> "LlamaServer":
         self.start()
@@ -53,18 +59,22 @@ class LlamaServer:
         self.stop()
 
     def start(self, timeout: float = 600) -> None:
+        """Start llama-server and wait until it serves the model. Paths in extra must be absolute."""
         if _port_in_use(self.port):
             raise ServerError(f"port {self.port} is already in use, so another server would answer instead")
+        # Every request starts from position 0 (see _complete), so the RAM prompt cache and context
+        # checkpoints are never used. Turning them off saves copying slot states to and from up to
+        # 8 GiB of RAM, and on recurrent models such as Qwen3.5 an extra decode for every prompt.
         args = [
             str(self.binary), "-m", str(self.model), "--host", "127.0.0.1", "--port", str(self.port),
             "-np", str(self.parallel), "-c", str(self.context), "-ngl", "999", "--no-webui",
-            "--cache-ram", "0", *self.extra,
+            "--cache-ram", "0", "--ctx-checkpoints", "0", *self.extra,
         ]  # fmt: skip
         if self.adapters:
-            args += ["--lora", ",".join(map(str, self.adapters)), "--lora-init-without-apply"]
+            args += ["--lora", self._lora_list(), "--lora-init-without-apply"]
         started = time.perf_counter()
         with self.log.open("ab") as log:
-            self.process = subprocess.Popen(args, stdout=log, stderr=subprocess.STDOUT)
+            self.process = subprocess.Popen(args, cwd=self.workdir, stdout=log, stderr=subprocess.STDOUT)
         try:
             self._wait_until_ready(started, timeout)
             self._check_model()
@@ -72,7 +82,22 @@ class LlamaServer:
         except BaseException:
             self.stop()
             raise
-        self.startup_seconds = time.perf_counter() - started
+
+    def _lora_list(self) -> str:
+        """Every adapter in the one --lora argument llama.cpp wants, as a comma-separated list.
+
+        The paths are relative to the server's folder, because Linux limits the argument's length.
+        Each is quoted, so a comma in a folder name can't split it.
+        """
+        assert self.workdir is not None
+        value = ",".join(_quoted(str(path.relative_to(self.workdir))) for path in self.adapters)
+        size = len(value.encode())
+        if size >= MAX_ARGUMENT:
+            raise ServerError(
+                f"the paths of {len(self.adapters)} adapters take {size} bytes, more than Linux allows in"
+                f" one argument ({MAX_ARGUMENT - 1}), so load fewer adapters into one server"
+            )
+        return value
 
     def _wait_until_ready(self, started: float, timeout: float) -> None:
         assert self.process is not None
@@ -86,45 +111,58 @@ class LlamaServer:
             time.sleep(0.5)
 
     def _check_model(self) -> None:
-        served = self.client.get("/props").json().get("model_path", "")
+        served = self._call("GET", "/props").get("model_path", "")
         if Path(served).resolve() != self.model.resolve():
             raise ServerError(f"the server on port {self.port} is serving {served}, not {self.model}")
 
     def _zero_default_scales(self) -> None:
-        listed = self.client.get("/lora-adapters").json()
-        self.adapter_ids = {Path(adapter["path"]).resolve(): adapter["id"] for adapter in listed}
+        listed = self._call("GET", "/lora-adapters")
+        workdir = self.workdir or Path.cwd()
+        self.adapter_ids = {(workdir / adapter["path"]).resolve(): adapter["id"] for adapter in listed}
         if listed:
             # --lora-init-without-apply leaves every adapter's default scale at 1, and a request that
             # names no adapters gets the defaults, so set them to 0 and check.
-            zeros = [{"id": adapter["id"], "scale": 0.0} for adapter in listed]
-            self.client.post("/lora-adapters", json=zeros).raise_for_status()
-            if any(adapter["scale"] for adapter in self.client.get("/lora-adapters").json()):
+            self._call("POST", "/lora-adapters", json=[{"id": a["id"], "scale": 0.0} for a in listed])
+            if any(adapter["scale"] for adapter in self._call("GET", "/lora-adapters")):
                 raise ServerError("couldn't set the adapters' default scale to 0")
 
-    def stop(self) -> None:
+    def stop(self, timeout: float = 60) -> None:
         if self.process and self.process.poll() is None:
             self.process.terminate()
             try:
-                self.process.wait(timeout=60)
+                self.process.wait(timeout=timeout)
             except subprocess.TimeoutExpired:
                 self.process.kill()
                 self.process.wait()
+        self.client.close()
 
     def _healthy(self) -> bool:
         try:
-            return self.client.get("/health").status_code == 200
+            return self.client.get("/health", timeout=2).status_code == 200
         except httpx.TransportError:
             return False
 
-    def _complete(self, payload: dict[str, Any]) -> dict[str, Any]:
-        # Cached prompt states don't record which adapters computed them, so reusing one can mix
-        # an unedited prompt with an edited answer. cache_prompt false stops a slot reusing its own
-        # cache, which the engine test checks. --cache-ram 0 also turns off the cache that slots
-        # share; no test has shown it is needed on top, so it is kept only as a second guard.
-        response = self.client.post("/completion", json={**payload, "cache_prompt": False})
-        if response.status_code != 200:
-            raise ServerError(f"/completion returned HTTP {response.status_code}, see {self.log}")
+    def _call(self, method: str, endpoint: str, timeout: httpx.Timeout = QUICK, **request: Any) -> Any:
+        """The JSON the server answers with. A failure names the endpoint and points at the log."""
+        try:
+            response = self.client.request(method, endpoint, timeout=timeout, **request)
+        except httpx.TransportError as error:
+            raise self._failed(f"didn't answer {endpoint} ({type(error).__name__})") from None
+        if response.is_error:
+            raise self._failed(f"answered {endpoint} with HTTP {response.status_code}")
         return response.json()
+
+    def _failed(self, what: str) -> ServerError:
+        code = self.process.poll() if self.process else None
+        state = "is still running" if code is None else f"has exited with code {code}"
+        return ServerError(f"llama-server {what} and {state}, see {self.log}")
+
+    def _complete(self, payload: dict[str, Any]) -> dict[str, Any]:
+        # Cached prompt states don't record which adapters computed them, so reusing one can mix an
+        # unedited prompt with an edited answer. cache_prompt false makes every request start from
+        # position 0, which the engine test checks.
+        body = {**payload, "cache_prompt": False}
+        return self._call("POST", "/completion", _answering(payload["n_predict"]), json=body)
 
     def _complete_all(self, payloads: list[dict[str, Any]]) -> list[dict[str, Any]]:
         with ThreadPoolExecutor(self.parallel) as pool:
@@ -138,6 +176,11 @@ class LlamaServer:
             if scale
         ]
 
+    def apply_template(self, messages: list[dict[str, str]], template_kwargs: dict[str, Any]) -> str:
+        """The prompt the chat endpoint renders for a conversation, ready for the answer."""
+        body = {"messages": messages, "chat_template_kwargs": template_kwargs}
+        return self._call("POST", "/apply-template", json=body)["prompt"]
+
     def chat_ids(self, chats: list[list[dict[str, str]]], template_kwargs: dict[str, Any]) -> list[list[int]]:
         """The token ids the chat endpoint feeds the model for each conversation, ready to answer.
 
@@ -146,13 +189,9 @@ class LlamaServer:
         """
 
         def ids(messages: list[dict[str, str]]) -> list[int]:
-            body = {"messages": messages, "chat_template_kwargs": template_kwargs}
-            rendered = self.client.post("/apply-template", json=body)
-            rendered.raise_for_status()
-            content = {"content": rendered.json()["prompt"], "add_special": True, "parse_special": True}
-            tokenized = self.client.post("/tokenize", json=content)
-            tokenized.raise_for_status()
-            return tokenized.json()["tokens"]
+            prompt = self.apply_template(messages, template_kwargs)
+            body = {"content": prompt, "add_special": True, "parse_special": True}
+            return self._call("POST", "/tokenize", json=body)["tokens"]
 
         with ThreadPoolExecutor(self.parallel) as pool:
             return list(pool.map(ids, chats))
@@ -163,9 +202,7 @@ class LlamaServer:
             "messages": messages, "chat_template_kwargs": template_kwargs, "max_tokens": 1,
             "temperature": 0.0, "cache_prompt": False,
         }  # fmt: skip
-        response = self.client.post("/v1/chat/completions", json=body)
-        response.raise_for_status()
-        return response.json()["usage"]["prompt_tokens"]
+        return self._call("POST", "/v1/chat/completions", _answering(1), json=body)["usage"]["prompt_tokens"]
 
     def generate(
         self, prompts: list[list[int]], max_tokens: int, scales: Mapping[Path, float] | None = None
@@ -173,7 +210,15 @@ class LlamaServer:
         """Greedy answers to prompts given as token ids."""
         lora = self.lora(scales)
         payloads = [{"prompt": p, "n_predict": max_tokens, "temperature": 0.0, "lora": lora} for p in prompts]
-        return [result["content"] for result in self._complete_all(payloads)]
+        results = self._complete_all(payloads)
+        for prompt, result in zip(prompts, results, strict=True):
+            # The server also flags an answer that fills its slot exactly, so only a short one counts.
+            if result["truncated"] and result["tokens_predicted"] < max_tokens:
+                raise ServerError(
+                    f"the server's context cut an answer short: a prompt of {len(prompt)} tokens needs"
+                    f" a slot of at least {len(prompt) + max_tokens} tokens"
+                )
+        return [result["content"] for result in results]
 
     def top_logprobs(
         self, prompts: list[list[int]], k: int, scales: Mapping[Path, float] | None = None
@@ -212,18 +257,22 @@ class LlamaServer:
             entry["id"]: entry["logprob"] for entry in result["completion_probabilities"][0]["top_logprobs"]
         }
 
-    def throughput(
-        self, prompts: list[list[int]], tokens: int, scales: Mapping[Path, float] | None = None
-    ) -> float:
-        """Generated tokens per second with every answer forced to full length. The text is discarded."""
-        lora = self.lora(scales)
-        payloads = [
-            {"prompt": p, "n_predict": tokens, "ignore_eos": True, "temperature": 0.0, "lora": lora}
-            for p in prompts
-        ]
-        started = time.perf_counter()
-        results = self._complete_all(payloads)
-        return sum(result["tokens_predicted"] for result in results) / (time.perf_counter() - started)
+
+def _quoted(field: str) -> str:
+    """A field of a llama.cpp comma-separated list, kept whole whatever commas or quotes it holds."""
+    return '"' + field.replace('"', '""') + '"'
+
+
+def _answering(tokens: int) -> httpx.Timeout:
+    """A limit for a request that answers only once its whole answer is ready: 10 minutes plus a
+    second per token, so only a server that has stopped working can reach it."""
+    return httpx.Timeout(600 + tokens, connect=5)
+
+
+def _free_port() -> int:
+    with socket.socket() as s:
+        s.bind(("127.0.0.1", 0))
+        return s.getsockname()[1]
 
 
 def _port_in_use(port: int) -> bool:
