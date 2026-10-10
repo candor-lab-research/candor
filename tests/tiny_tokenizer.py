@@ -7,6 +7,11 @@ BOS = "<|begin_of_text|>"
 WITH_BOS = "{{ bos_token }}{% for m in messages %}{{ m['content'] }}{% endfor %}"
 WITHOUT_BOS = "{% for m in messages %}{{ m['content'] }}{% endfor %}"
 DATED = WITH_BOS + "{{ strftime_now('%d %b %Y') }}"
+PINNABLE = (
+    "{%- if not date_string is defined %}{%- set date_string = strftime_now('%d %b %Y') %}{%- endif %}"
+    + WITH_BOS
+    + "{{ date_string }}"
+)
 
 
 def tokenizer(

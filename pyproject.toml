@@ -10,6 +10,7 @@ dependencies = [
     "gguf @ git+https://github.com/ggml-org/llama.cpp@b11524#subdirectory=gguf-py",
     "httpx>=0.28",
     "numpy>=2",
+    "pydantic>=2.10",
     "rich>=15",
     "safetensors>=0.6",
     "torch>=2.8",

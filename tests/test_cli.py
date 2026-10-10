@@ -4,10 +4,12 @@ import torch
 from safetensors.torch import save_file
 from typer.testing import CliRunner
 
+from candor import config
 from candor.cli import app
 
+from .test_checks import needs_node
 from .test_targets import llama
-from .tiny_tokenizer import WITH_BOS, tokenizer
+from .tiny_tokenizer import DATED, PINNABLE, WITH_BOS, tokenizer
 
 HIDDEN = 64
 
@@ -83,3 +85,57 @@ def test_a_quantised_checkpoint_fails(tmp_path):
     result = run(model_folder(tmp_path, scales))
     assert result.exit_code == 1
     assert "quantisation scales" in result.output
+
+
+def init(tmp_path, folder, name="first"):
+    return CliRunner(env={"COLUMNS": "250"}).invoke(
+        app, ["init", name, "--model", str(folder), "--runs", str(tmp_path / "runs")]
+    )
+
+
+def test_init_writes_settings_that_load(tmp_path):
+    folder = model_folder(tmp_path)
+    result = init(tmp_path, folder)
+    assert result.exit_code == 0, result.output
+    settings = config.load(tmp_path / "runs" / "first")
+    assert settings.model.source == str(folder.resolve())
+    assert settings.model.date is None
+    assert (tmp_path / "runs" / "first" / "inspect.json").exists()
+
+
+def test_init_pins_the_date_when_the_template_can_take_one(tmp_path):
+    result = init(tmp_path, model_folder(tmp_path, template=PINNABLE))
+    assert result.exit_code == 0, result.output
+    assert config.load(tmp_path / "runs" / "first").model.date == config.today_in("%d %b %Y")
+
+
+def test_init_warns_when_the_date_cannot_be_pinned(tmp_path):
+    result = init(tmp_path, model_folder(tmp_path, template=DATED))
+    assert result.exit_code == 0, result.output
+    assert "finish each run on the day it starts" in result.output
+    assert config.load(tmp_path / "runs" / "first").model.date is None
+
+
+def test_init_refuses_a_model_candor_cannot_edit(tmp_path):
+    result = init(tmp_path, model_folder(tmp_path, {"model.layers.1.mlp.mystery.weight": [HIDDEN, 128]}))
+    assert result.exit_code == 1
+    assert "Nothing was written" in result.output
+    assert not (tmp_path / "runs" / "first").exists()
+
+
+def test_init_never_overwrites_a_run(tmp_path):
+    folder = model_folder(tmp_path)
+    assert init(tmp_path, folder).exit_code == 0
+    before = (tmp_path / "runs" / "first" / "candor.toml").read_text()
+    result = init(tmp_path, folder)
+    assert result.exit_code == 1
+    assert "already exists" in result.output
+    assert (tmp_path / "runs" / "first" / "candor.toml").read_text() == before
+
+
+@needs_node
+def test_init_goes_ahead_when_only_bionic_cannot_read_the_template(tmp_path):
+    template = "{% if messages[0]['content'] is sameas true %}x{% endif %}{{ messages[0]['content'] }}"
+    result = init(tmp_path, model_folder(tmp_path, template=template))
+    assert result.exit_code == 0, result.output
+    assert "Bionic can't read this model's chat template" in result.output

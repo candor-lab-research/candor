@@ -1,6 +1,7 @@
 """Checks on a model's tokenizer and chat template that decide whether a measurement means anything."""
 
 import json
+import re
 import shutil
 import subprocess
 import tempfile
@@ -137,6 +138,17 @@ def begin_of_text(tokenizer: PreTrainedTokenizerBase) -> BeginOfText:
     template = _leading(tokenizer(text, add_special_tokens=False)["input_ids"], bos)
     with_special = _leading(tokenizer(text)["input_ids"], bos)
     return BeginOfText(template=template, tokenizer_adds=with_special - template)
+
+
+def date_format(template: str) -> str | None:
+    """The strftime format the template writes today's date in, if it writes one."""
+    match = re.search(r"strftime_now\(\s*[\"']([^\"']+)[\"']", template)
+    return match[1] if match else None
+
+
+def date_can_be_pinned(template: str) -> bool:
+    """Llama 3 style templates only call strftime_now when no date_string is passed in."""
+    return "date_string is defined" in template or "date_string is not defined" in template
 
 
 def writes_the_date(tokenizer: PreTrainedTokenizerBase) -> bool:

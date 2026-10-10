@@ -18,8 +18,13 @@ runs.
 
 ### Next three steps
 
-1. `candor init`: one TOML file per run holding every setting the run uses, search ranges included.
-2. Directions: prompts tokenized by llama-server itself and fed to transformers for the residuals,
+1. Done: `candor init NAME --model SOURCE` checks the model, then writes `runs/NAME/candor.toml`
+   with every setting the run uses, each with its explanation as a comment, and validates it on
+   every load. It pins the date for templates that write one, refuses models candor can't edit,
+   and never overwrites a run. Tested on rude-llama, Qwen3.5-9B, K2-Horizon and a refused
+   mixture-of-experts model.
+2. Directions: prompts rendered with the run's settings (system prompt, pinned date passed as
+   `date_string`) and tokenized by llama-server itself, then fed to transformers for the residuals,
    so directions and scoring see identical input; one adapter per writer from `targets` (named by
    its GGUF tensor, since a component can have several writers) for each candidate direction; a
    check that each GGUF writer tensor equals its Hugging Face original.

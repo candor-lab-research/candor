@@ -13,6 +13,8 @@ from typing import Any
 
 import httpx
 
+LLAMA_CPP_RELEASE = "b11524"
+
 
 class ServerError(RuntimeError):
     pass

@@ -1,5 +1,8 @@
 """The candor command line."""
 
+import json
+from datetime import date
+from importlib.metadata import version
 from pathlib import Path
 from typing import Annotated
 
@@ -8,7 +11,8 @@ from rich.console import Console
 from rich.table import Table
 from transformers import AutoTokenizer
 
-from . import checks, source, targets
+from . import checks, config, source, targets
+from .engine import LLAMA_CPP_RELEASE
 
 app = typer.Typer(
     no_args_is_help=True,
@@ -145,6 +149,34 @@ def _rows(model: str) -> list[Row]:
     return rows + _target_rows(model, hidden, layers, arch) + _tokenizer_rows(model)
 
 
+def _resolved(model: str) -> str:
+    """Local folders are stored as absolute paths; anything else is a Hugging Face id."""
+    folder = Path(model).expanduser()
+    return str(folder.resolve()) if folder.is_dir() else model
+
+
+def _checked_rows(console: Console, model: str) -> list[Row]:
+    try:
+        return _rows(model)
+    except CannotInspect as error:
+        console.print(f"[red]{error}[/]")
+    except Exception as error:
+        console.print(
+            f"[red]candor hit an unexpected error inspecting {model}:[/] {type(error).__name__}: {error}"
+        )
+    raise typer.Exit(COULD_NOT_INSPECT)
+
+
+def _print_table(console: Console, title: str, rows: list[Row]) -> None:
+    table = Table(title=title, show_lines=True)
+    table.add_column("Check")
+    table.add_column("Result")
+    table.add_column("Detail", overflow="fold")
+    for check, status, detail in rows:
+        table.add_row(check, MARKS[status], detail)
+    console.print(table)
+
+
 @app.command()
 def inspect(model: Annotated[str, typer.Argument(help="A Hugging Face model id or a local folder.")]) -> None:
     """Check a model before spending anything on it. Reads the config, tokenizer and file headers only.
@@ -152,25 +184,72 @@ def inspect(model: Annotated[str, typer.Argument(help="A Hugging Face model id o
     Exits with 1 when a check fails and 3 when the model can't be inspected at all.
     """
     console = Console()
-    if Path(model).expanduser().is_dir():
-        model = str(Path(model).expanduser().resolve())
-    try:
-        rows = _rows(model)
-    except CannotInspect as error:
-        console.print(f"[red]{error}[/]")
-        raise typer.Exit(COULD_NOT_INSPECT) from None
-    except Exception as error:
-        console.print(
-            f"[red]candor hit an unexpected error inspecting {model}:[/] {type(error).__name__}: {error}"
-        )
-        raise typer.Exit(COULD_NOT_INSPECT) from None
-
-    table = Table(title=f"candor inspect {model}", show_lines=True)
-    table.add_column("Check")
-    table.add_column("Result")
-    table.add_column("Detail", overflow="fold")
-    for check, status, detail in rows:
-        table.add_row(check, MARKS[status], detail)
-    console.print(table)
+    model = _resolved(model)
+    rows = _checked_rows(console, model)
+    _print_table(console, f"candor inspect {model}", rows)
     if any(status == "fail" for _, status, _ in rows):
         raise typer.Exit(FAILED_CHECK)
+
+
+# Failures that matter for using the model in an app but don't stop candor from editing it.
+NOT_BLOCKING = {"Bionic template"}
+
+
+def _pinned_date(console: Console, model: str) -> str | None:
+    tokenizer = AutoTokenizer.from_pretrained(model, trust_remote_code=False)
+    template = checks.chat_template(tokenizer) or ""
+    date_format = checks.date_format(template)
+    if date_format is None:
+        return None
+    if not checks.date_can_be_pinned(template):
+        console.print(
+            "[yellow]The chat template writes today's date and can't be given a fixed one, so finish "
+            "each run on the day it starts.[/]"
+        )
+        return None
+    return config.today_in(date_format)
+
+
+@app.command()
+def init(
+    name: Annotated[
+        str, typer.Argument(help="A name for the run. Its settings go in RUNS/NAME/candor.toml.")
+    ],
+    model: Annotated[str, typer.Option("--model", "-m", help="A Hugging Face model id or a local folder.")],
+    runs: Annotated[Path, typer.Option(help="The folder that holds run folders.")] = Path("runs"),
+) -> None:
+    """Start a run: check the model, then write a settings file holding everything the run will use.
+
+    Nothing is written if the model fails a check candor can't work around.
+    """
+    console = Console()
+    folder = runs / name
+    if folder.exists():
+        console.print(f"[red]{folder} already exists.[/] Pick another name, or delete that folder first.")
+        raise typer.Exit(FAILED_CHECK)
+    model = _resolved(model)
+    rows = _checked_rows(console, model)
+    _print_table(console, f"candor init {name}: checking {model}", rows)
+    blocking = [check for check, status, _ in rows if status == "fail" and check not in NOT_BLOCKING]
+    if blocking:
+        failed = ", ".join(blocking)
+        console.print(
+            f"[red]candor can't edit this model until these pass: {failed}.[/] Nothing was written."
+        )
+        raise typer.Exit(FAILED_CHECK)
+
+    settings = config.RunConfig(model=config.Model(source=model, date=_pinned_date(console, model)))
+    header = (
+        f"Settings for the candor run {name!r}, created {date.today()} by candor {version('candor')} "
+        f"for llama.cpp {LLAMA_CPP_RELEASE}.\nEdit freely: every later command reads and checks this file."
+    )
+    path = config.write(folder, settings, header)
+    (folder / "inspect.json").write_text(
+        json.dumps([dict(zip(("check", "result", "detail"), r, strict=True)) for r in rows], indent=1)
+    )
+    console.print(f"[green]Created {path}[/]")
+    if any(check in NOT_BLOCKING and status == "fail" for check, status, _ in rows):
+        console.print(
+            "[yellow]Bionic can't read this model's chat template.[/] candor still works, but test the "
+            "result in Bionic only after pasting in a fixed template."
+        )
