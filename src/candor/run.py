@@ -397,6 +397,7 @@ class Run:
             if leftover.name.removesuffix(".inputs.json") not in sets:
                 _remove(leftover)
         files = None
+        model_config = source.read_config(str(self.model_folder))
         made = {}
         for set_name, set_directions in sets.items():
             folder = root / set_name
@@ -408,7 +409,8 @@ class Run:
                 partial.mkdir()
                 for writer in writers:
                     name = str(names[writer.name])
-                    factors = rank_one(files.tensor(writer.name), set_directions[writer.layer], row_norm)
+                    weight = convert.as_converted(files.tensor(writer.name), writer.name, arch, model_config)
+                    factors = rank_one(weight, set_directions[writer.layer], row_norm)
                     write_adapter(partial / f"{name}.gguf", arch, {name: factors})
                 self._commit(partial, folder, inputs)
             made[set_name] = {str(names[w.name]): folder / f"{names[w.name]}.gguf" for w in writers}

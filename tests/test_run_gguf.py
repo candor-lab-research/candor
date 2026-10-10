@@ -1,16 +1,21 @@
-"""A run's GGUF stage for models stored as F16, and the disk it checks for."""
+"""A run's GGUF stage for models stored as F16, and its adapters for a model the converter reorders."""
 
 import json
 import math
 import shutil
 
+import gguf
 import pytest
 import torch
+import torch.nn.functional as F
 from safetensors.torch import save_file
 
 from candor import config, run
+from candor.edit import RowNorm, rank_one
 from candor.run import Run, RunError
+from candor.weights import ModelFiles
 
+from .test_convert import CONVERTER_ORDER, OUT_PROJ, QWEN35, qwen35
 from .test_targets import llama
 
 HIDDEN, LAYERS = 64, 2
@@ -81,3 +86,35 @@ def test_the_disk_check_counts_only_the_files_it_will_write(
     else:
         with pytest.raises(RunError, match="GB free"):
             this.gguf()
+
+
+def adapter_factors(path):
+    tensors = {t.name: torch.from_numpy(t.data.copy()) for t in gguf.GGUFReader(path).tensors}
+    a = next(v for k, v in tensors.items() if k.endswith("lora_a"))
+    b = next(v for k, v in tensors.items() if k.endswith("lora_b"))
+    return b, a
+
+
+@pytest.mark.parametrize("row_norm", list(RowNorm))
+def test_qwen35_adapters_are_built_in_the_gguf_layout(tmp_path, monkeypatch, row_norm):
+    this = make_run(tmp_path, qwen35(), QWEN35, torch.bfloat16)
+    this.settings.edit.row_norm = row_norm.value
+    found = F.normalize(torch.randn(LAYERS + 1, HIDDEN), dim=-1)
+
+    def fake_directions(self):
+        self.inputs["directions"] = "fixed"
+        return found
+
+    monkeypatch.setattr(Run, "directions", fake_directions)
+    made = this.adapters()["per-layer"]
+    files = ModelFiles(this.model_folder)
+
+    weight = files.tensor(OUT_PROJ).float()
+    b, a = adapter_factors(made["blk.0.ssm_out.weight"])
+    hf_b, hf_a = rank_one(weight, found[1], row_norm)
+    merged_then_converted = (weight + hf_b @ hf_a)[:, CONVERTER_ORDER]
+    torch.testing.assert_close(weight[:, CONVERTER_ORDER] + b @ a, merged_then_converted)
+
+    unchanged = files.tensor("model.language_model.layers.1.self_attn.o_proj.weight")
+    b, a = adapter_factors(made["blk.1.attn_output.weight"])
+    torch.testing.assert_close((b, a), rank_one(unchanged, found[2], row_norm))

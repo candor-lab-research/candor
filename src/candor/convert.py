@@ -1,19 +1,22 @@
 """Turn a Hugging Face model into the GGUF files llama.cpp runs, and check the edit targets survived.
 
-The adapters are built from the Hugging Face weights but applied to the GGUF's, so every target
-must reach the GGUF unchanged: same name, same shape, same values. llama.cpp's converter
-reorders some tensors for some architectures; check_targets catches that before anything is
-scored.
+The adapters are applied to the GGUF's weights, so every target must reach the GGUF exactly as
+candor expects it: same name, same shape, same values. llama.cpp's converter reorders some tensors
+for some architectures. The one reorder of an edit target it is known to make is reproduced by
+as_converted, which both the check and the adapters use; check_targets catches anything else
+before anything is scored.
 """
 
 import json
 import subprocess
 import tempfile
 from pathlib import Path
+from typing import Any
 
 import gguf
 import numpy as np
 import torch
+from torch import Tensor
 
 from . import source, targets, toolchain
 from .weights import ModelFiles
@@ -88,6 +91,25 @@ def quantize(base: Path, destination: Path, quantization: str, log: Path) -> Non
     _run("llama-quantize", [toolchain.binaries() / "llama-quantize", base, destination, quantization], log)
 
 
+def as_converted(weight: Tensor, name: str, arch: str, config: dict[str, Any]) -> Tensor:
+    """The weight as llama.cpp b11524's converter writes it into the GGUF.
+
+    For Qwen3.5 with more linear-attention value heads than key heads, the converter stores the
+    value heads tiled across key heads instead of grouped by them (_LinearAttentionVReorderBase in
+    conversion/qwen.py), so it reorders the input columns of linear_attn.out_proj to match. The
+    rows, which are what the edit changes, keep their order. Every other target is written as is.
+    """
+    hparams = config | config.get("text_config", {})
+    keys, values = hparams.get("linear_num_key_heads", 0), hparams.get("linear_num_value_heads", 0)
+    if arch != "qwen35" or "linear_attn." not in name or ".out_proj." not in name:
+        return weight
+    if keys <= 0 or values <= 0 or keys == values:
+        return weight
+    head = hparams["linear_value_head_dim"]
+    order = torch.arange(values * head).reshape(keys, values // keys, head).transpose(0, 1).reshape(-1)
+    return weight[:, order]
+
+
 def _as_float(tensor: gguf.ReaderTensor) -> np.ndarray:
     if tensor.tensor_type == gguf.GGMLQuantizationType.BF16:
         raw = np.ascontiguousarray(tensor.data).view(np.uint16).astype(np.uint32) << 16
@@ -98,7 +120,7 @@ def _as_float(tensor: gguf.ReaderTensor) -> np.ndarray:
 def check_targets(
     model_gguf: Path, model_folder: Path, writers: list[targets.Writer], arch: str, layers: int
 ) -> list[str]:
-    """Problems with how the edit targets arrived in the GGUF; empty when every one is identical.
+    """Problems with how the edit targets arrived in the GGUF; empty when each is as_converted says.
 
     Weights stored in the GGUF's own type must match byte for byte. Others are compared within bf16
     rounding.
@@ -106,6 +128,7 @@ def check_targets(
     reader = gguf.GGUFReader(model_gguf)
     in_gguf = {tensor.name: tensor for tensor in reader.tensors}
     files = ModelFiles(model_folder)
+    config = json.loads((model_folder / "config.json").read_text())
     problems = []
     for writer in writers:
         name = targets.gguf_name(writer, arch, layers)
@@ -113,18 +136,18 @@ def check_targets(
         if tensor is None:
             problems.append(f"{writer.name} has no tensor {name} in the GGUF")
             continue
-        original = files.tensor(writer.name)
+        expected = as_converted(files.tensor(writer.name), writer.name, arch, config)
         shape = list(reversed(tensor.shape.tolist()))
-        if shape != list(original.shape):
-            problems.append(f"{writer.name} is {list(original.shape)} but {name} is {shape}")
+        if shape != list(expected.shape):
+            problems.append(f"{writer.name} is {list(expected.shape)} but {name} is {shape}")
             continue
-        if STORED_AS.get(tensor.tensor_type) == original.dtype:
+        if STORED_AS.get(tensor.tensor_type) == expected.dtype:
             same = np.array_equal(
-                original.view(torch.uint8).numpy().reshape(-1),
+                expected.contiguous().view(torch.uint8).numpy().reshape(-1),
                 np.asarray(tensor.data).view(np.uint8).reshape(-1),
             )
         else:
-            same = np.allclose(_as_float(tensor), original.float().numpy(), rtol=1 / 128, atol=1e-6)
+            same = np.allclose(_as_float(tensor), expected.float().numpy(), rtol=1 / 128, atol=1e-6)
         if not same:
             problems.append(f"{name} doesn't hold the same values as {writer.name}; the converter changed it")
     return problems

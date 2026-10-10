@@ -4,10 +4,12 @@ import gguf
 import numpy as np
 import pytest
 import torch
+import torch.nn.functional as F
 from safetensors.torch import save_file
 
 from candor import convert
-from candor.convert import check_targets, float_type
+from candor.convert import as_converted, check_targets, float_type
+from candor.edit import RowNorm, rank_one
 from candor.targets import find_targets, gguf_name
 
 from .test_targets import llama
@@ -15,25 +17,52 @@ from .tiny_tokenizer import tokenizer
 
 HIDDEN = 64
 GGUF_TYPE = {torch.bfloat16: gguf.GGMLQuantizationType.BF16, torch.float16: gguf.GGMLQuantizationType.F16}
+LLAMA = {"architectures": ["LlamaForCausalLM"], "hidden_size": HIDDEN, "num_hidden_layers": 2}
+
+# A tiny Qwen3.5: layer 0 is linear attention with 2 key heads and 4 value heads of 8 dims, layer 1 is
+# full attention. llama.cpp b11524's converter writes the value heads in the order 0, 2, 1, 3, tiled
+# across the key heads (checked against its own _reorder_v_heads).
+QWEN35 = {
+    "architectures": ["Qwen3_5ForConditionalGeneration"],
+    "text_config": {
+        "hidden_size": HIDDEN,
+        "num_hidden_layers": 2,
+        "linear_num_key_heads": 2,
+        "linear_num_value_heads": 4,
+        "linear_value_head_dim": 8,
+    },
+}
+CONVERTER_ORDER = [*range(0, 8), *range(16, 24), *range(8, 16), *range(24, 32)]
+OUT_PROJ = "model.language_model.layers.0.linear_attn.out_proj.weight"
 
 
-def hf_folder(tmp_path, dtype=torch.bfloat16):
+def qwen35() -> dict[str, list[int]]:
+    prefix = "model.language_model.layers"
+    return {
+        f"{prefix}.0.linear_attn.out_proj.weight": [HIDDEN, 32],
+        f"{prefix}.1.self_attn.o_proj.weight": [HIDDEN, HIDDEN],
+        **{f"{prefix}.{i}.mlp.down_proj.weight": [HIDDEN, 128] for i in range(2)},
+    }
+
+
+def hf_folder(tmp_path, dtype=torch.bfloat16, shapes=None, model_config=LLAMA):
     folder = tmp_path / "hf"
     folder.mkdir()
     torch.manual_seed(6)
-    tensors = {name: torch.randn(shape).to(dtype) for name, shape in llama().items()}
+    tensors = {name: torch.randn(shape).to(dtype) for name, shape in (shapes or llama()).items()}
     save_file(tensors, folder / "model.safetensors")
+    (folder / "config.json").write_text(json.dumps(model_config))
     return folder, tensors
 
 
-def gguf_file(tmp_path, tensors, change=lambda name, bits: bits, drop=(), dtype=torch.bfloat16):
+def gguf_file(tmp_path, tensors, change=lambda name, bits: bits, drop=(), dtype=torch.bfloat16, arch="llama"):
     """The targets written as a converter that changes nothing would, then passed through change."""
     path = tmp_path / "model.gguf"
-    writer = gguf.GGUFWriter(path, "llama")
+    writer = gguf.GGUFWriter(path, arch)
     for target in find_targets({n: list(t.shape) for n, t in tensors.items()}, HIDDEN, 2).writers:
         if target.name in drop:
             continue
-        name = str(gguf_name(target, "llama", 2))
+        name = str(gguf_name(target, arch, 2))
         bits = tensors[target.name].to(dtype).view(torch.int16).numpy().view(np.uint16)
         writer.add_tensor(name, change(name, bits), raw_dtype=GGUF_TYPE[dtype])
     writer.write_header_to_file()
@@ -43,9 +72,9 @@ def gguf_file(tmp_path, tensors, change=lambda name, bits: bits, drop=(), dtype=
     return path
 
 
-def check(folder, path):
-    writers = find_targets(llama(), HIDDEN, 2).writers
-    return check_targets(path, folder, writers, "llama", 2)
+def check(folder, path, shapes=None, arch="llama"):
+    writers = find_targets(shapes or llama(), HIDDEN, 2).writers
+    return check_targets(path, folder, writers, arch, 2)
 
 
 @pytest.mark.parametrize("dtype", [torch.bfloat16, torch.float16])
@@ -119,6 +148,62 @@ def test_other_precisions_still_catch_a_real_change(tmp_path):
 
     problems = check(folder, gguf_file(tmp_path, tensors, nudge))
     assert len(problems) == 1 and problems[0].startswith("blk.0.ffn_down.weight doesn't hold")
+
+
+def test_qwen35_out_proj_in_the_converters_order_passes(tmp_path):
+    folder, tensors = hf_folder(tmp_path, shapes=qwen35(), model_config=QWEN35)
+
+    def reorder(name, bits):
+        return bits[:, CONVERTER_ORDER].copy() if name == "blk.0.ssm_out.weight" else bits
+
+    path = gguf_file(tmp_path, tensors, reorder, arch="qwen35")
+    assert check(folder, path, qwen35(), "qwen35") == []
+
+
+@pytest.mark.parametrize("order", [list(range(32)), list(range(31, -1, -1))], ids=["unchanged", "reversed"])
+def test_qwen35_out_proj_in_any_other_order_is_caught(tmp_path, order):
+    folder, tensors = hf_folder(tmp_path, shapes=qwen35(), model_config=QWEN35)
+
+    def reorder(name, bits):
+        return bits[:, order].copy() if name == "blk.0.ssm_out.weight" else bits
+
+    path = gguf_file(tmp_path, tensors, reorder, arch="qwen35")
+    assert check(folder, path, qwen35(), "qwen35") == [
+        f"blk.0.ssm_out.weight doesn't hold the same values as {OUT_PROJ}; the converter changed it"
+    ]
+
+
+def test_qwen35_value_heads_are_tiled_like_the_converter():
+    weight = torch.arange(32.0)[None, :]
+    assert as_converted(weight, OUT_PROJ, "qwen35", QWEN35)[0].tolist() == CONVERTER_ORDER
+
+
+@pytest.mark.parametrize(
+    ("arch", "name", "model_config"),
+    [
+        ("llama", "model.layers.0.self_attn.o_proj.weight", LLAMA),
+        ("llama", "model.layers.0.mlp.down_proj.weight", LLAMA),
+        ("k2-horizon", "model.layers.0.self_attn.o_proj.weight", {}),
+        ("k2-horizon", "model.layers.0.mlp.down_proj.weight", {}),
+        ("qwen35", "model.language_model.layers.3.self_attn.o_proj.weight", QWEN35),
+        ("qwen35", "model.language_model.layers.0.mlp.down_proj.weight", QWEN35),
+        ("qwen35", OUT_PROJ, {"text_config": QWEN35["text_config"] | {"linear_num_key_heads": 4}}),
+        ("qwen3next", "model.layers.0.linear_attn.out_proj.weight", QWEN35["text_config"]),
+    ],
+)
+def test_every_other_target_is_converted_unchanged(arch, name, model_config):
+    weight = torch.randn(HIDDEN, 32)
+    assert torch.equal(as_converted(weight, name, arch, model_config), weight)
+
+
+@pytest.mark.parametrize("row_norm", list(RowNorm))
+def test_an_adapter_on_the_reordered_weight_gives_the_reordered_edit(row_norm):
+    torch.manual_seed(3)
+    weight, direction = torch.randn(HIDDEN, 32), F.normalize(torch.randn(HIDDEN), dim=0)
+    b, a = rank_one(weight, direction, row_norm)
+    merged_then_converted = (weight + 0.8 * b @ a)[:, CONVERTER_ORDER]
+    b_gguf, a_gguf = rank_one(as_converted(weight, OUT_PROJ, "qwen35", QWEN35), direction, row_norm)
+    torch.testing.assert_close(weight[:, CONVERTER_ORDER] + 0.8 * b_gguf @ a_gguf, merged_then_converted)
 
 
 @pytest.mark.parametrize(
