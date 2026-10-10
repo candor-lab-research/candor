@@ -40,7 +40,7 @@ From the 2026-10-10 paper review. Each paper gets read before its change is buil
 ## Not in this plan
 
 - heretic and `tune/heretic-kit`: frozen, no new features. The guide stays as reference until phase 5.
-- `tune/abliterate.py`: parked. candor does the same job on MLX and CUDA.
+- `tune/abliterate.py`: deleted 2026-10-10. candor does the same job.
 - The guide's section 14 "plan for K2": replaced by phase 4.
 - Reporting the llama.cpp prompt-cache bug upstream: not wanted.
 - Separate tracks, outside candor: the Qwen3.5 rude fine-tune, the Mac Studio purchase, and the

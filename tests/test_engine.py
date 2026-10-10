@@ -1,0 +1,106 @@
+"""llama-server with per-layer adapters, on a tiny random model. Skipped when no llama-server is found."""
+
+import os
+import socket
+from pathlib import Path
+
+import pytest
+import torch
+import torch.nn.functional as F
+
+from candor import kl
+from candor.adapters import write_adapter
+from candor.edit import RowNorm, rank_one
+from candor.engine import LlamaServer
+
+from .tiny_gguf import FIRST_WORD, HIDDEN, random_weights, write_model
+
+LLAMA_SERVER = Path(
+    os.environ.get("CANDOR_LLAMA_SERVER", "~/Desktop/tune/llama.cpp/llama-b11524/llama-server")
+).expanduser()
+pytestmark = pytest.mark.skipif(not LLAMA_SERVER.exists(), reason=f"no llama-server at {LLAMA_SERVER}")
+
+PROMPTS = [[1, FIRST_WORD + i, FIRST_WORD + 2 * i + 1, FIRST_WORD + 3] for i in range(6)]
+STRENGTHS = {"blk.0.attn_output.weight": 1.5, "blk.1.ffn_down.weight": 0.8}
+
+
+def free_port() -> int:
+    with socket.socket() as s:
+        s.bind(("127.0.0.1", 0))
+        return s.getsockname()[1]
+
+
+@pytest.fixture(scope="module")
+def files(tmp_path_factory):
+    folder = tmp_path_factory.mktemp("engine")
+    weights = random_weights()
+    write_model(folder / "base.gguf", weights)
+    torch.manual_seed(5)
+    direction = F.normalize(torch.randn(HIDDEN), dim=0)
+    merged = dict(weights)
+    scales = {}
+    for name, strength in STRENGTHS.items():
+        b, a = rank_one(torch.from_numpy(weights[name]), direction, RowNorm.PRE)
+        path = folder / f"{name}.gguf"
+        write_adapter(path, "llama", {name: (b, a)})
+        scales[path] = strength
+        merged[name] = weights[name] + strength * (b @ a).numpy()
+    write_model(folder / "merged.gguf", merged)
+    unused = folder / "unused.gguf"
+    name = "blk.1.attn_output.weight"
+    write_adapter(
+        unused, "llama", {name: rank_one(torch.from_numpy(weights[name]), -direction, RowNorm.NONE)}
+    )
+    return folder, scales, unused
+
+
+def server(folder: Path, model: str, adapters=()) -> LlamaServer:
+    return LlamaServer(
+        LLAMA_SERVER, folder / model, folder / "server.log", adapters, parallel=2, context_per_slot=64,
+        port=free_port(),
+    )  # fmt: skip
+
+
+def assert_same(a: list[dict[int, float]], b: list[dict[int, float]]) -> None:
+    assert kl.mean_from_top(a, b) < 1e-4
+    assert [max(x, key=x.__getitem__) for x in a] == [max(y, key=y.__getitem__) for y in b]
+
+
+@pytest.fixture(scope="module")
+def references(files):
+    folder, _, _ = files
+    with server(folder, "base.gguf") as base, server(folder, "merged.gguf") as merged:
+        return base.top_logprobs(PROMPTS, 50), merged.top_logprobs(PROMPTS, 50)
+
+
+def test_adapters_are_off_unless_a_request_names_them(files, references):
+    folder, scales, unused = files
+    base, _ = references
+    with server(folder, "base.gguf", [*scales, unused]) as s:
+        assert all(adapter["scale"] == 0 for adapter in s.client.get("/lora-adapters").json())
+        assert_same(s.top_logprobs(PROMPTS, 50), base)
+
+
+def test_adapters_at_their_strengths_match_the_merged_model(files, references):
+    folder, scales, unused = files
+    base, merged = references
+    with server(folder, "base.gguf", [*scales, unused]) as s:
+        edited = s.top_logprobs(PROMPTS, 50, scales)
+    assert_same(edited, merged)
+    assert kl.mean_from_top(base, merged) > 1e-3
+
+
+def test_cached_prompts_are_not_shared_between_adapter_settings(files, references):
+    folder, scales, _ = files
+    base, merged = references
+    with server(folder, "base.gguf", list(scales)) as s:
+        s.generate(PROMPTS, 8)
+        assert_same(s.top_logprobs(PROMPTS, 50, scales), merged)
+        s.generate(PROMPTS, 8, scales)
+        assert_same(s.top_logprobs(PROMPTS, 50), base)
+
+
+def test_throughput_counts_tokens(files):
+    folder, _, _ = files
+    with server(folder, "base.gguf") as s:
+        assert s.throughput(PROMPTS, 8) > 0
