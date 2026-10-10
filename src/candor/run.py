@@ -43,6 +43,7 @@ BITS_PER_WEIGHT = {
     "Q6_K": 6.6,
     "Q8_0": 8.5,
     "F16": 16,
+    "BF16": 16,
 }
 DATE_PROBE = "31 Dec 1999"
 CHECKED_PER_SET = 3
@@ -189,10 +190,11 @@ class Run:
 
     # GGUF
 
-    def _check_disk(self, bf16_needed: bool, quantization: str) -> None:
+    def _check_disk(self, base_needed: bool, quantized_needed: bool) -> None:
         shapes = source.tensor_shapes(str(self.model_folder))
         weights = sum(math.prod(shape) for shape in shapes.values())
-        needed = 1.1 * weights * ((2 if bf16_needed else 0) + BITS_PER_WEIGHT.get(quantization, 0) / 8)
+        quantized = BITS_PER_WEIGHT[self.settings.deployment.quantization] / 8 if quantized_needed else 0
+        needed = 1.1 * weights * ((2 if base_needed else 0) + quantized)
         free = shutil.disk_usage(self.folder).free
         if free < needed:
             raise RunError(
@@ -200,26 +202,28 @@ class Run:
             )
 
     def gguf(self) -> tuple[Path, Path]:
-        """The model as bf16 GGUF, every edit target checked, and in the deployment quantisation."""
+        """The model as an unquantised GGUF of its own float type, every edit target checked, and in
+        the deployment quantisation."""
         out = self.path("gguf")
         out.mkdir(exist_ok=True)
         quantization = self.settings.deployment.quantization
-        bf16 = out / "model-BF16.gguf"
-        bf16_inputs = {"model": self.model_fingerprint, "llama.cpp": LLAMA_CPP_RELEASE}
-        quantized = bf16 if quantization == "BF16" else out / f"model-{quantization}.gguf"
-        quantized_inputs = {"bf16": _digest(bf16_inputs), "quantization": quantization}
+        base_type = convert.float_type(self.model_folder)
+        base = out / f"model-{base_type}.gguf"
+        base_inputs = {"model": self.model_fingerprint, "llama.cpp": LLAMA_CPP_RELEASE}
+        quantized = base if quantization == base_type else out / f"model-{quantization}.gguf"
+        quantized_inputs = {"base": _digest(base_inputs), "quantization": quantization}
         for leftover in out.iterdir():
-            kept = {bf16.name, quantized.name, _record(bf16).name, _record(quantized).name, "convert.log"}
+            kept = {base.name, quantized.name, _record(base).name, _record(quantized).name, "convert.log"}
             if leftover.name not in kept:
                 self.report(f"Removing {leftover.relative_to(self.folder)}, which this run no longer uses")
                 _remove(leftover)
-        bf16_fresh = self._fresh(bf16, bf16_inputs)
-        quantized_fresh = bf16_fresh if quantized == bf16 else self._fresh(quantized, quantized_inputs)
-        if not (bf16_fresh and quantized_fresh):
-            self._check_disk(not bf16_fresh, "BF16" if quantized_fresh else quantization)
-        if not bf16_fresh:
+        base_fresh = self._fresh(base, base_inputs)
+        quantized_fresh = base_fresh if quantized == base else self._fresh(quantized, quantized_inputs)
+        if not (base_fresh and quantized_fresh):
+            self._check_disk(not base_fresh, quantized != base and not quantized_fresh)
+        if not base_fresh:
             self.report("Converting to GGUF")
-            partial = out / "model-BF16.gguf.building"
+            partial = base.with_name(base.name + ".building")
             convert.to_bf16(self.model_folder, partial, out / "convert.log")
             _, layers, arch, writers = self.shape
             if problems := convert.check_targets(partial, self.model_folder, writers, arch, layers):
@@ -227,15 +231,15 @@ class Run:
                 raise RunError(
                     "the GGUF doesn't hold the edit targets unchanged:\n  " + "\n  ".join(problems[:5])
                 )
-            self._commit(partial, bf16, bf16_inputs)
-        if quantized != bf16 and not quantized_fresh:
+            self._commit(partial, base, base_inputs)
+        if quantized != base and not quantized_fresh:
             self.report(f"Quantising to {quantization}")
-            partial = out / f"model-{quantization}.gguf.building"
-            convert.quantize(bf16, partial, quantization, out / "convert.log")
+            partial = quantized.with_name(quantized.name + ".building")
+            convert.quantize(base, partial, quantization, out / "convert.log")
             self._commit(partial, quantized, quantized_inputs)
-        # Quantising keeps the vocabulary and chat template, so prompt ids depend on the bf16 file alone.
-        self.inputs["bf16"] = _digest(bf16_inputs)
-        return bf16, quantized
+        # Quantising keeps the vocabulary and chat template, so prompt ids depend on the base file alone.
+        self.inputs["bf16"] = _digest(base_inputs)
+        return base, quantized
 
     def server(
         self, model: Path, adapters: Sequence[Path] = (), context_per_slot: int = 8192, parallel: int = 4

@@ -13,8 +13,10 @@ import gguf
 import numpy as np
 import torch
 
-from . import targets, toolchain
+from . import source, targets, toolchain
 from .weights import ModelFiles
+
+STORED_AS = {gguf.GGMLQuantizationType.BF16: torch.bfloat16, gguf.GGMLQuantizationType.F16: torch.float16}
 
 
 class ConversionError(RuntimeError):
@@ -29,25 +31,27 @@ def _run(program: str, args: list, log: Path) -> None:
         raise ConversionError(f"{program} failed with code {result.returncode}, see {log}")
 
 
+def float_type(model_folder: Path) -> str:
+    """The GGUF type a model converts to without rounding: F16 when every weight matrix is stored
+    as F16, otherwise BF16, which also holds the range of F32 weights."""
+    stored = {info["dtype"] for info in source.local_headers(model_folder).values() if len(info["shape"]) > 1}
+    return "F16" if stored == {"F16"} else "BF16"
+
+
 def to_bf16(model_folder: Path, destination: Path, log: Path) -> None:
-    """Convert a Hugging Face model folder to a bf16 GGUF at destination, written whole or not at all."""
+    """Convert a Hugging Face model folder to an unquantised GGUF of its float_type at destination."""
     python, script = toolchain.converter()
-    partial = destination.with_name(destination.name + ".partial")
-    partial.unlink(missing_ok=True)
+    outtype = float_type(model_folder).lower()
     _run(
         "llama.cpp's converter",
-        [python, script, model_folder, "--outtype", "bf16", "--outfile", partial],
+        [python, script, model_folder, "--outtype", outtype, "--outfile", destination],
         log,
     )
-    partial.rename(destination)
 
 
-def quantize(bf16: Path, destination: Path, quantization: str, log: Path) -> None:
-    """Quantise a bf16 GGUF to destination, written whole or not at all."""
-    partial = destination.with_name(destination.name + ".partial")
-    partial.unlink(missing_ok=True)
-    _run("llama-quantize", [toolchain.binaries() / "llama-quantize", bf16, partial, quantization], log)
-    partial.rename(destination)
+def quantize(base: Path, destination: Path, quantization: str, log: Path) -> None:
+    """Quantise an unquantised GGUF to destination."""
+    _run("llama-quantize", [toolchain.binaries() / "llama-quantize", base, destination, quantization], log)
 
 
 def _as_float(tensor: gguf.ReaderTensor) -> np.ndarray:
@@ -58,13 +62,14 @@ def _as_float(tensor: gguf.ReaderTensor) -> np.ndarray:
 
 
 def check_targets(
-    bf16_gguf: Path, model_folder: Path, writers: list[targets.Writer], arch: str, layers: int
+    model_gguf: Path, model_folder: Path, writers: list[targets.Writer], arch: str, layers: int
 ) -> list[str]:
     """Problems with how the edit targets arrived in the GGUF; empty when every one is identical.
 
-    Weights stored as bf16 must match byte for byte. Others are compared within bf16 rounding.
+    Weights stored in the GGUF's own type must match byte for byte. Others are compared within bf16
+    rounding.
     """
-    reader = gguf.GGUFReader(bf16_gguf)
+    reader = gguf.GGUFReader(model_gguf)
     in_gguf = {tensor.name: tensor for tensor in reader.tensors}
     files = ModelFiles(model_folder)
     problems = []
@@ -79,10 +84,10 @@ def check_targets(
         if shape != list(original.shape):
             problems.append(f"{writer.name} is {list(original.shape)} but {name} is {shape}")
             continue
-        if original.dtype == torch.bfloat16 and tensor.tensor_type == gguf.GGMLQuantizationType.BF16:
+        if STORED_AS.get(tensor.tensor_type) == original.dtype:
             same = np.array_equal(
-                original.view(torch.int16).numpy().view(np.uint8).reshape(-1),
-                np.asarray(tensor.data).reshape(-1),
+                original.view(torch.uint8).numpy().reshape(-1),
+                np.asarray(tensor.data).view(np.uint8).reshape(-1),
             )
         else:
             same = np.allclose(_as_float(tensor), original.float().numpy(), rtol=1 / 128, atol=1e-6)
