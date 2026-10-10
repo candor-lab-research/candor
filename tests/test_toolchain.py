@@ -1,4 +1,6 @@
+import importlib.metadata
 import io
+import json
 import os
 import shutil
 import socket
@@ -7,10 +9,14 @@ import sys
 import tarfile
 import threading
 import time
+import tomllib
+from importlib import resources
+from pathlib import Path
 
 import pytest
 
 from candor import toolchain
+from candor.engine import LLAMA_CPP_RELEASE
 from candor.toolchain import Asset, ToolchainError
 
 SERVER = "#!/bin/sh\necho 'version: 0.6.0-dev (build {build}, commit 86a2835)'\n"
@@ -204,6 +210,17 @@ def test_the_converter_is_installed_again_when_its_pins_change(converter_source,
     toolchain.converter()
     toolchain.converter()
     assert calls.read_text().count(f"-c {changed}") == 1
+
+
+def test_every_pin_of_llama_cpp_is_the_same_commit():
+    table = json.loads((resources.files("candor") / "data" / "llama_cpp_architectures.json").read_text())
+    installed = json.loads(importlib.metadata.distribution("gguf").read_text("direct_url.json") or "{}")
+    project = tomllib.loads((Path(__file__).parents[1] / "pyproject.toml").read_text())
+    gguf = next(spec for spec in project["project"]["dependencies"] if spec.startswith("gguf "))
+    assert gguf.endswith(f"@{LLAMA_CPP_RELEASE}#subdirectory=gguf-py")
+    assert installed["vcs_info"]["requested_revision"] == LLAMA_CPP_RELEASE
+    assert installed["vcs_info"]["commit_id"] == toolchain.COMMIT
+    assert table["commit"] == toolchain.COMMIT
 
 
 def test_a_changed_converter_checkout_is_refused(converter_source):

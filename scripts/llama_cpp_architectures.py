@@ -4,12 +4,14 @@
 
 Maps each Hugging Face architecture that llama.cpp's converter registers for a text model to the
 architecture name it writes into the GGUF, and lists the architectures for which the converter
-ignores text_config.architectures. The converter is only parsed, never imported or run. Run it
-against the same release that candor pins (see pyproject.toml).
+ignores text_config.architectures. The converter is only parsed, never imported or run. The
+checkout must be at the commit candor pins (toolchain.COMMIT), which the table records; candor
+keeps one at ~/.cache/candor/llama.cpp-RELEASE/source.
 """
 
 import ast
 import json
+import subprocess
 import sys
 from pathlib import Path
 
@@ -61,7 +63,12 @@ def top_level_only(source: Path) -> list[str]:
 def main() -> None:
     import gguf
 
+    from candor.toolchain import COMMIT
+
     source = Path(sys.argv[1])
+    head = subprocess.run(["git", "-C", str(source), "rev-parse", "HEAD"], capture_output=True, text=True)
+    if head.stdout.strip() != COMMIT:
+        sys.exit(f"{source} isn't at the llama.cpp commit candor pins, {COMMIT}")
     found = classes(source)
 
     def ancestors(name: str) -> list[str]:
@@ -83,7 +90,11 @@ def main() -> None:
         if arch in names:
             for hf in registered:
                 table.setdefault(hf, names[arch])
-    data = {"top_level_only": top_level_only(source), "architectures": dict(sorted(table.items()))}
+    data = {
+        "commit": COMMIT,
+        "top_level_only": top_level_only(source),
+        "architectures": dict(sorted(table.items())),
+    }
     OUTPUT.parent.mkdir(exist_ok=True)
     OUTPUT.write_text(json.dumps(data, indent=1) + "\n")
     print(f"{len(table)} architectures, {len(data['top_level_only'])} top-level exceptions -> {OUTPUT}")
