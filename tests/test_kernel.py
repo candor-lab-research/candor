@@ -25,3 +25,9 @@ def test_fractional_peak():
     assert kernel.at(2) == pytest.approx(0.5)
     assert kernel.at(3) == pytest.approx(0.5)
     assert kernel.at(4) == 0.0
+
+
+def test_zero_distance_edits_only_the_peak():
+    kernel = Kernel(1.0, 3.0, 0.5, 0.0)
+    assert kernel.at(3) == 1.0
+    assert kernel.at(2) == 0.0

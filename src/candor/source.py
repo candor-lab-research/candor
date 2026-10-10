@@ -5,20 +5,32 @@ import struct
 from pathlib import Path
 from typing import Any
 
-from huggingface_hub import get_safetensors_metadata, hf_hub_download, list_repo_files
+from huggingface_hub import get_safetensors_metadata, hf_hub_download
+from huggingface_hub.errors import EntryNotFoundError
+
+INDEX = "model.safetensors.index.json"
 
 
 def is_local(model: str) -> bool:
     return Path(model).expanduser().is_dir()
 
 
+def read_json(model: str, name: str) -> dict[str, Any] | None:
+    """A JSON file from the model, or None if it has none by that name."""
+    if is_local(model):
+        path = Path(model).expanduser() / name
+        return json.loads(path.read_text()) if path.exists() else None
+    try:
+        return json.loads(Path(hf_hub_download(model, name)).read_text())
+    except EntryNotFoundError:
+        return None
+
+
 def read_config(model: str) -> dict[str, Any]:
-    path = (
-        Path(model).expanduser() / "config.json"
-        if is_local(model)
-        else Path(hf_hub_download(model, "config.json"))
-    )
-    return json.loads(path.read_text())
+    config = read_json(model, "config.json")
+    if config is None:
+        raise FileNotFoundError(f"{model} has no config.json")
+    return config
 
 
 def text_config(config: dict[str, Any]) -> dict[str, Any]:
@@ -26,10 +38,17 @@ def text_config(config: dict[str, Any]) -> dict[str, Any]:
     return config.get("text_config", config)
 
 
-def files(model: str) -> list[str]:
-    if is_local(model):
-        return sorted(p.name for p in Path(model).expanduser().iterdir())
-    return list_repo_files(model)
+def weight_files(folder: Path) -> list[str]:
+    """The safetensors files a loader reads: those in the index, or the single model.safetensors.
+
+    Other .safetensors files, such as Mistral's consolidated.safetensors, are a different format.
+    """
+    index = folder / INDEX
+    if index.exists():
+        return sorted(set(json.loads(index.read_text())["weight_map"].values()))
+    if (folder / "model.safetensors").exists():
+        return ["model.safetensors"]
+    return []
 
 
 def tensor_shapes(model: str) -> dict[str, list[int]]:
@@ -41,10 +60,11 @@ def tensor_shapes(model: str) -> dict[str, list[int]]:
             for file in metadata.files_metadata.values()
             for name, info in file.tensors.items()
         }
+    folder = Path(model).expanduser()
     shapes = {}
-    for path in sorted(Path(model).expanduser().glob("*.safetensors")):
-        with path.open("rb") as f:
+    for name in weight_files(folder):
+        with (folder / name).open("rb") as f:
             header = json.loads(f.read(struct.unpack("<Q", f.read(8))[0]))
         header.pop("__metadata__", None)
-        shapes |= {name: info["shape"] for name, info in header.items()}
+        shapes |= {tensor: info["shape"] for tensor, info in header.items()}
     return shapes

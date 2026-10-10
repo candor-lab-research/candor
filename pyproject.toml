@@ -44,7 +44,7 @@ line-length = 110
 select = ["E", "F", "I", "B", "UP", "SIM", "RUF"]
 
 [tool.pyright]
-include = ["src", "tests", "spikes"]
+include = ["src", "tests", "spikes", "scripts"]
 typeCheckingMode = "basic"
 
 [tool.pytest.ini_options]

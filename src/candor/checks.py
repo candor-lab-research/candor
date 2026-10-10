@@ -13,14 +13,24 @@ from transformers import PreTrainedTokenizerBase
 JS = Path(__file__).parent / "js"
 
 
-def remote_code(config: dict[str, Any]) -> list[str]:
-    """The Python files a model ships and runs when loaded, listed in its config's auto_map."""
+def remote_code(*configs: dict[str, Any] | None) -> list[str]:
+    """The Python files a model ships and runs when loaded, from the auto_map of each config given
+    (config.json and tokenizer_config.json)."""
     modules = set()
-    for value in config.get("auto_map", {}).values():
-        for reference in value if isinstance(value, list) else [value]:
-            if reference:
-                modules.add(reference.split("--")[-1].rsplit(".", 1)[0] + ".py")
+    for config in configs:
+        for value in (config or {}).get("auto_map", {}).values():
+            for reference in value if isinstance(value, list) else [value]:
+                if reference:
+                    modules.add(reference.split("--")[-1].rsplit(".", 1)[0] + ".py")
     return sorted(modules)
+
+
+def chat_template(tokenizer: PreTrainedTokenizerBase) -> str | None:
+    """The template apps use: the only one, or the one named default when there are several."""
+    template = tokenizer.chat_template
+    if isinstance(template, dict):
+        template = template.get("default")
+    return template if isinstance(template, str) else None
 
 
 @dataclass(frozen=True)
@@ -43,7 +53,15 @@ def app_template_parses(template: str, variables: dict[str, Any] | None = None) 
         file.write(template)
         file.flush()
         args = [node, str(JS / "check_template.mjs"), file.name, json.dumps(variables or {})]
-        result = json.loads(subprocess.run(args, capture_output=True, text=True, check=True).stdout)
+        try:
+            run = subprocess.run(args, capture_output=True, text=True, timeout=60)
+        except subprocess.TimeoutExpired:
+            return TemplateCheck("skipped", "the checker timed out")
+    try:
+        result = json.loads(run.stdout)
+    except json.JSONDecodeError:
+        last_line = run.stderr.strip().splitlines()[-1:] or ["no output"]
+        return TemplateCheck("skipped", f"the checker itself failed: {last_line[0]}")
     if result["ok"]:
         return TemplateCheck("ok")
     lines = ", ".join(map(str, result["lines"])) or "unknown"
@@ -107,5 +125,4 @@ def writes_the_date(tokenizer: PreTrainedTokenizerBase) -> bool:
 
     Pin it for a run by passing the template a fixed date_string.
     """
-    template = tokenizer.chat_template
-    return isinstance(template, str) and "strftime_now" in template
+    return "strftime_now" in (chat_template(tokenizer) or "")

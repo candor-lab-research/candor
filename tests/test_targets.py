@@ -62,24 +62,73 @@ def test_layer_without_an_mlp_writer_is_reported():
     assert found.missing == ["layer 1 has no mlp writer"]
 
 
-def test_wrong_layer_count_is_reported():
-    assert not find_targets(llama(3), HIDDEN, 2).ok
+def test_too_few_layers_is_reported():
+    assert not find_targets(llama(2), HIDDEN, 3).ok
+
+
+def test_extra_layers_beyond_the_model_are_left_alone():
+    found = find_targets(llama(3), HIDDEN, 2)
+    assert found.ok
+    assert found.extra_layers == [2]
+    assert all(w.layer < 2 for w in found.writers)
+
+
+def test_two_stacks_that_both_fit_are_reported():
+    shapes = llama() | llama(prefix="model.other.layers")
+    found = find_targets(shapes, HIDDEN, 2)
+    assert not found.ok
+    assert "several layer stacks" in found.missing[0]
+
+
+def test_a_vision_stack_of_the_same_depth_is_ignored():
+    shapes = llama() | llama(prefix="model.vision_tower.layers")
+    found = find_targets(shapes, HIDDEN, 2)
+    assert found.ok
+    assert found.stack == "model.layers"
+
+
+def test_fused_experts_without_a_weight_suffix_are_found():
+    shapes = llama() | {
+        f"model.layers.{i}.feed_forward.experts.down_proj": [8, 128, HIDDEN] for i in range(2)
+    }
+    found = find_targets(shapes, HIDDEN, 2)
+    assert [w.name for w in found.experts] == [
+        "model.layers.0.feed_forward.experts.down_proj",
+        "model.layers.1.feed_forward.experts.down_proj",
+    ]
+
+
+def test_biases_and_scales_are_not_writers():
+    shapes = llama() | {
+        "model.layers.0.mlp.down_proj.bias": [HIDDEN, 1],
+        "model.layers.0.mlp.down_proj.weight_scale_inv": [HIDDEN, 1],
+    }
+    assert find_targets(shapes, HIDDEN, 2).ok
+
+
+def test_norms_on_block_outputs_are_flagged():
+    shapes = llama() | {f"model.layers.{i}.post_feedforward_layernorm.weight": [HIDDEN] for i in range(2)}
+    assert find_targets(shapes, HIDDEN, 2).output_norms
+    assert not find_targets(llama(), HIDDEN, 2).output_norms
 
 
 def test_gguf_names():
     found = find_targets(llama(), HIDDEN, 2)
-    names = {w.name: gguf_name(w, "llama") for w in found.writers}
+    names = {w.name: gguf_name(w, "llama", 2) for w in found.writers}
     assert names["model.layers.1.self_attn.o_proj.weight"] == "blk.1.attn_output.weight"
     assert names["model.layers.0.mlp.down_proj.weight"] == "blk.0.ffn_down.weight"
 
 
 def test_gguf_names_strip_language_model_like_the_converter():
     found = find_targets(llama(prefix="model.language_model.layers"), HIDDEN, 2)
-    assert gguf_name(found.writers[0], "llama") is not None
+    assert gguf_name(found.writers[0], "llama", 2) == "blk.0.attn_output.weight"
 
 
-def test_gguf_architecture():
-    assert gguf_architecture("llama") == "llama"
-    assert gguf_architecture("qwen3_5") == "qwen35"
-    assert gguf_architecture("k2_horizon") == "k2-horizon"
-    assert gguf_architecture("no_such_model") is None
+def test_gguf_architecture_comes_from_the_converter_registry():
+    assert gguf_architecture({"architectures": ["LlamaForCausalLM"]}) == "llama"
+    assert gguf_architecture({"architectures": ["MistralForCausalLM"]}) == "llama"
+    assert gguf_architecture({"architectures": ["Gemma3ForCausalLM"]}) == "gemma3"
+    assert gguf_architecture({"architectures": ["Qwen3_5ForConditionalGeneration"]}) == "qwen35"
+    assert gguf_architecture({"architectures": ["K2HorizonForCausalLM"]}) == "k2-horizon"
+    assert gguf_architecture({"architectures": ["NoSuchModel"]}) is None
+    assert gguf_architecture({"model_type": "llama"}) is None

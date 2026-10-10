@@ -1,5 +1,6 @@
 """The candor command line."""
 
+from pathlib import Path
 from typing import Annotated
 
 import typer
@@ -20,6 +21,9 @@ MARKS = {
     "fail": "[red]fail[/]",
     "skipped": "[dim]skipped[/]",
 }
+FAILED_CHECK, COULD_NOT_INSPECT = 1, 2
+
+Row = tuple[str, str, str]
 
 
 @app.callback()
@@ -32,7 +36,16 @@ def _examples(names: list[str], limit: int = 3) -> str:
     return shown + (f" and {len(names) - limit} more" if len(names) > limit else "")
 
 
-def _targets_row(found: targets.Targets, arch: str | None) -> list[tuple[str, str, str]]:
+def _first(config: dict, *keys: str) -> int | None:
+    return next((config[key] for key in keys if isinstance(config.get(key), int)), None)
+
+
+def _target_rows(model: str, hidden: int, layers: int, arch: str | None) -> list[Row]:
+    try:
+        shapes = source.tensor_shapes(model)
+    except Exception as error:
+        return [("Edit targets", "fail", f"couldn't read the tensor shapes: {error}")]
+    found = targets.find_targets(shapes, hidden, layers)
     if not found.ok:
         problems = []
         if found.unclassified:
@@ -42,72 +55,94 @@ def _targets_row(found: targets.Targets, arch: str | None) -> list[tuple[str, st
         if found.missing:
             problems.append(_examples(found.missing))
         return [("Edit targets", "fail", "; ".join(problems))]
-    parts = []
-    for component, kinds in found.summary().items():
-        parts.append(f"{component}: " + ", ".join(f"{count} {kind}" for kind, count in kinds.items()))
-    rows = [("Edit targets", "ok", f"{len(found.writers)} writers, every layer covered ({'; '.join(parts)})")]
-    if arch:
-        unmapped = [w.name for w in found.writers if targets.gguf_name(w, arch) is None]
+    parts = [
+        f"{c}: " + ", ".join(f"{n} {k}" for k, n in kinds.items()) for c, kinds in found.summary().items()
+    ]
+    covered = f"{len(found.writers)} writers, every layer covered ({'; '.join(parts)})"
+    rows: list[Row] = [("Edit targets", "ok", covered)]
+    if found.extra_layers:
+        extra = _examples([str(i) for i in found.extra_layers])
+        rows.append(("Extra layers", "ok", f"layers {extra} sit beyond the {layers} the model runs, such as "
+                     "a token-prediction head, and are left alone"))  # fmt: skip
+    if found.experts:
+        rows.append(("Experts", "fail", "candor doesn't edit mixture-of-experts models yet"))
+    if found.output_norms:
+        rows.append(("Output norms", "warn", "this model normalises each block's output before adding it "
+                     "to the residual stream, so the edit can't remove the direction exactly"))  # fmt: skip
+    if arch and not found.experts:
+        unmapped = [w.name for w in found.writers if targets.gguf_name(w, arch, layers) is None]
         if unmapped:
             rows.append(("GGUF names", "fail", f"no llama.cpp name for {_examples(unmapped)}"))
         else:
             first = found.writers[0]
-            rows.append(
-                ("GGUF names", "ok", f"all map, e.g. {first.name} -> {targets.gguf_name(first, arch)}")
-            )
+            example = f"{first.name} -> {targets.gguf_name(first, arch, layers)}"
+            rows.append(("GGUF names", "ok", f"all map, e.g. {example}"))
+    return rows
+
+
+def _tokenizer_rows(model: str) -> list[Row]:
+    try:
+        tokenizer = AutoTokenizer.from_pretrained(model, trust_remote_code=False)
+    except Exception as error:
+        return [("Tokenizer", "fail", f"couldn't load it without running remote code: {error}")]
+    template = checks.chat_template(tokenizer)
+    if template is None:
+        return [("Chat template", "fail", "the tokenizer has none, so this looks like a base model")]
+    found = checks.begin_of_text(tokenizer)
+    counts = f"apps send {found.transformers}, llama.cpp {found.llama_cpp}, heretic {found.heretic}"
+    rows: list[Row] = [
+        ("Begin-of-text", "warn" if found.problems() else "ok", "; ".join([counts, *found.problems()]))
+    ]
+    if checks.writes_the_date(tokenizer):
+        rows.append(("Date in prompt", "warn", "the chat template writes today's date, so runs pin it"))
+    else:
+        rows.append(("Date in prompt", "ok", "none"))
+    result = checks.app_template_parses(template)
+    if result.status == "fails":
+        detail = f"Bionic and LM Studio can't use it and fall back to another format: {result.detail}"
+        rows.append(("Bionic template", "fail", detail))
+    elif result.status == "skipped":
+        rows.append(("Bionic template", "skipped", result.detail))
+    else:
+        rows.append(("Bionic template", "ok", "parses and renders in Bionic and LM Studio"))
     return rows
 
 
 @app.command()
 def inspect(model: Annotated[str, typer.Argument(help="A Hugging Face model id or a local folder.")]) -> None:
-    """Check a model before spending anything on it. Reads the config, tokenizer and file headers only."""
-    config = source.read_config(model)
-    text = source.text_config(config)
-    hidden, layers = text["hidden_size"], text["num_hidden_layers"]
-    model_type = text.get("model_type", config["model_type"])
-    arch = targets.gguf_architecture(model_type) or targets.gguf_architecture(config["model_type"])
-    rows = [
-        (
-            "Architecture",
-            "ok" if arch else "fail",
-            f"{model_type}, {layers} layers, hidden size {hidden}; "
-            + (f"llama.cpp calls it {arch}" if arch else "the pinned llama.cpp doesn't support it"),
-        )
-    ]
+    """Check a model before spending anything on it. Reads the config, tokenizer and file headers only.
 
-    code = checks.remote_code(config)
-    rows.append(
-        ("Remote code", "warn", f"loading runs {_examples(code)}, so read it first")
-        if code
-        else ("Remote code", "ok", "none")
-    )
-
-    rows += _targets_row(targets.find_targets(source.tensor_shapes(model), hidden, layers), arch)
-
+    Exits with 1 when a check fails and 2 when the model can't be inspected at all.
+    """
+    console = Console()
+    if Path(model).expanduser().is_dir():
+        model = str(Path(model).expanduser().resolve())
     try:
-        tokenizer = AutoTokenizer.from_pretrained(model, trust_remote_code=False)
+        config = source.read_config(model)
     except Exception as error:
-        rows.append(("Tokenizer", "fail", f"couldn't load without running remote code: {error}"))
+        console.print(f"[red]candor couldn't read {model}:[/] {error}")
+        raise typer.Exit(COULD_NOT_INSPECT) from None
+    text = source.text_config(config)
+    hidden = _first(text, "hidden_size", "n_embd", "d_model") or _first(
+        config, "hidden_size", "n_embd", "d_model"
+    )
+    layers = _first(text, "num_hidden_layers", "n_layer") or _first(config, "num_hidden_layers", "n_layer")
+    if hidden is None or layers is None:
+        console.print(f"[red]candor couldn't find the hidden size and layer count in {model}'s config[/]")
+        raise typer.Exit(COULD_NOT_INSPECT)
+
+    arch = targets.gguf_architecture(config)
+    names = ", ".join(config.get("architectures") or [config.get("model_type", "unknown")])
+    converts = f"llama.cpp calls it {arch}" if arch else "the pinned llama.cpp can't convert it"
+    summary = f"{names}, {layers} layers, hidden size {hidden}; {converts}"
+    rows: list[Row] = [("Architecture", "ok" if arch else "fail", summary)]
+    code = checks.remote_code(config, source.read_json(model, "tokenizer_config.json"))
+    if code:
+        rows.append(("Remote code", "warn", f"loading runs {_examples(code)}, so read it first"))
     else:
-        found = checks.begin_of_text(tokenizer)
-        counts = f"apps send {found.transformers}, llama.cpp {found.llama_cpp}, heretic {found.heretic}"
-        rows.append(
-            ("Begin-of-text", "warn" if found.problems() else "ok", "; ".join([counts, *found.problems()]))
-        )
-        if checks.writes_the_date(tokenizer):
-            rows.append(("Date in prompt", "warn", "the chat template writes today's date, so runs pin it"))
-        else:
-            rows.append(("Date in prompt", "ok", "none"))
-        template = tokenizer.chat_template
-        if isinstance(template, str):
-            result = checks.app_template_parses(template)
-            status = {"ok": "ok", "fails": "fail", "skipped": "skipped"}[result.status]
-            detail = result.detail or "parses in Bionic and LM Studio"
-            if result.status == "fails":
-                detail = f"Bionic and LM Studio can't parse it and will use another format: {detail}"
-            rows.append(("Bionic template", status, detail))
-        else:
-            rows.append(("Bionic template", "fail", "the tokenizer has no single chat template"))
+        rows.append(("Remote code", "ok", "none"))
+    rows += _target_rows(model, hidden, layers, arch)
+    rows += _tokenizer_rows(model)
 
     table = Table(title=f"candor inspect {model}", show_lines=True)
     table.add_column("Check")
@@ -115,6 +150,6 @@ def inspect(model: Annotated[str, typer.Argument(help="A Hugging Face model id o
     table.add_column("Detail", overflow="fold")
     for check, status, detail in rows:
         table.add_row(check, MARKS[status], detail)
-    Console().print(table)
+    console.print(table)
     if any(status == "fail" for _, status, _ in rows):
-        raise typer.Exit(1)
+        raise typer.Exit(FAILED_CHECK)

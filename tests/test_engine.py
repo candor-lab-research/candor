@@ -1,6 +1,7 @@
 """llama-server with per-layer adapters, on a tiny random model. Skipped when no llama-server is found."""
 
 import os
+import random
 import socket
 from pathlib import Path
 
@@ -11,9 +12,9 @@ import torch.nn.functional as F
 from candor import kl
 from candor.adapters import write_adapter
 from candor.edit import RowNorm, rank_one
-from candor.engine import LlamaServer
+from candor.engine import LlamaServer, ServerError
 
-from .tiny_gguf import FIRST_WORD, HIDDEN, random_weights, write_model
+from .tiny_gguf import FIRST_WORD, HIDDEN, SPECIAL, random_weights, write_model
 
 LLAMA_SERVER = Path(
     os.environ.get("CANDOR_LLAMA_SERVER", "~/Desktop/tune/llama.cpp/llama-b11524/llama-server")
@@ -104,3 +105,52 @@ def test_throughput_counts_tokens(files):
     folder, _, _ = files
     with server(folder, "base.gguf") as s:
         assert s.throughput(PROMPTS, 8) > 0
+
+
+def test_a_busy_port_is_refused(files):
+    folder, _, _ = files
+    with socket.socket() as busy:
+        busy.bind(("127.0.0.1", 0))
+        busy.listen()
+        s = LlamaServer(LLAMA_SERVER, folder / "base.gguf", folder / "server.log", port=busy.getsockname()[1])
+        with pytest.raises(ServerError, match="already in use"):
+            s.start()
+        assert s.process is None
+
+
+def test_a_failed_start_leaves_no_server_running(files, monkeypatch):
+    folder, scales, _ = files
+    s = server(folder, "base.gguf", list(scales))
+
+    def fail() -> None:
+        raise ServerError("injected")
+
+    monkeypatch.setattr(s, "_zero_default_scales", fail)
+    with pytest.raises(ServerError, match="injected"):
+        s.start()
+    assert s.process is not None and s.process.poll() is not None
+
+
+def test_every_prompt_gets_first_token_probabilities(files):
+    folder, _, _ = files
+    rng = random.Random(0)
+    prompts = [[1, *(rng.randrange(FIRST_WORD - 256, FIRST_WORD + 29) for _ in range(5))] for _ in range(60)]
+    with server(folder, "base.gguf") as s:
+        assert all(s.top_logprobs(prompts, 20))
+
+
+def test_a_banned_token_does_not_change_the_reported_probabilities(files):
+    folder, _, _ = files
+    with server(folder, "base.gguf") as s:
+        for prompt in PROMPTS:
+            payload = {"prompt": prompt, "n_predict": 1, "n_probs": 20, "temperature": 0.0}
+            if probabilities := s._complete(payload).get("completion_probabilities"):
+                plain = probabilities[0]
+                break
+        else:
+            pytest.fail("every prompt's first token was an incomplete UTF-8 sequence")
+        partial_bytes = range(len(SPECIAL) + 0x80, len(SPECIAL) + 0x100)
+        bias = [[token, False] for token in [plain["id"], *partial_bytes]]
+        banned = s._complete({**payload, "logit_bias": bias})["completion_probabilities"][0]
+    assert banned["id"] != plain["id"]
+    assert banned["top_logprobs"] == plain["top_logprobs"]

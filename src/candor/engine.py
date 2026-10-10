@@ -3,6 +3,7 @@
 Generated text is handed back to the caller. Nothing here prints or logs it.
 """
 
+import socket
 import subprocess
 import time
 from collections.abc import Iterable, Mapping
@@ -50,6 +51,8 @@ class LlamaServer:
         self.stop()
 
     def start(self, timeout: float = 600) -> None:
+        if _port_in_use(self.port):
+            raise ServerError(f"port {self.port} is already in use, so another server would answer instead")
         args = [
             str(self.binary), "-m", str(self.model), "--host", "127.0.0.1", "--port", str(self.port),
             "-np", str(self.parallel), "-c", str(self.context), "-ngl", "999", "--no-webui",
@@ -60,14 +63,32 @@ class LlamaServer:
         started = time.perf_counter()
         with self.log.open("ab") as log:
             self.process = subprocess.Popen(args, stdout=log, stderr=subprocess.STDOUT)
-        while not self._healthy():
+        try:
+            self._wait_until_ready(started, timeout)
+            self._check_model()
+            self._zero_default_scales()
+        except BaseException:
+            self.stop()
+            raise
+        self.startup_seconds = time.perf_counter() - started
+
+    def _wait_until_ready(self, started: float, timeout: float) -> None:
+        assert self.process is not None
+        while True:
             if self.process.poll() is not None:
                 raise ServerError(f"llama-server exited with code {self.process.returncode}, see {self.log}")
+            if self._healthy():
+                return
             if time.perf_counter() - started > timeout:
-                self.stop()
                 raise ServerError(f"llama-server wasn't ready after {timeout:.0f} s, see {self.log}")
             time.sleep(0.5)
-        self.startup_seconds = time.perf_counter() - started
+
+    def _check_model(self) -> None:
+        served = self.client.get("/props").json().get("model_path", "")
+        if Path(served).resolve() != self.model.resolve():
+            raise ServerError(f"the server on port {self.port} is serving {served}, not {self.model}")
+
+    def _zero_default_scales(self) -> None:
         listed = self.client.get("/lora-adapters").json()
         self.adapter_ids = {Path(adapter["path"]).resolve(): adapter["id"] for adapter in listed}
         if listed:
@@ -76,13 +97,16 @@ class LlamaServer:
             zeros = [{"id": adapter["id"], "scale": 0.0} for adapter in listed]
             self.client.post("/lora-adapters", json=zeros).raise_for_status()
             if any(adapter["scale"] for adapter in self.client.get("/lora-adapters").json()):
-                self.stop()
                 raise ServerError("couldn't set the adapters' default scale to 0")
 
     def stop(self) -> None:
         if self.process and self.process.poll() is None:
             self.process.terminate()
-            self.process.wait(timeout=60)
+            try:
+                self.process.wait(timeout=60)
+            except subprocess.TimeoutExpired:
+                self.process.kill()
+                self.process.wait()
 
     def _healthy(self) -> bool:
         try:
@@ -92,7 +116,9 @@ class LlamaServer:
 
     def _complete(self, payload: dict[str, Any]) -> dict[str, Any]:
         # Cached prompt states don't record which adapters computed them, so reusing one can mix
-        # an unedited prompt with an edited answer. --cache-ram 0 covers the cache shared by slots.
+        # an unedited prompt with an edited answer. cache_prompt false stops a slot reusing its own
+        # cache, which the engine test checks. --cache-ram 0 also turns off the cache that slots
+        # share; no test has shown it is needed on top, so it is kept only as a second guard.
         response = self.client.post("/completion", json={**payload, "cache_prompt": False})
         if response.status_code != 200:
             raise ServerError(f"/completion returned HTTP {response.status_code}, see {self.log}")
@@ -124,12 +150,36 @@ class LlamaServer:
         """The k most likely first answer tokens for each prompt, as {token id: log probability}."""
         lora = self.lora(scales)
         payloads = [
-            {"prompt": p, "n_predict": 1, "n_probs": k, "temperature": 0.0, "lora": lora} for p in prompts
+            {
+                "prompt": p,
+                "n_predict": 1,
+                "n_probs": k,
+                "temperature": 0.0,
+                "lora": lora,
+                "return_tokens": True,
+            }
+            for p in prompts
         ]
         return [
-            {entry["id"]: entry["logprob"] for entry in result["completion_probabilities"][0]["top_logprobs"]}
-            for result in self._complete_all(payloads)
+            self._first_token(payload, result)
+            for payload, result in zip(payloads, self._complete_all(payloads), strict=True)
         ]
+
+    def _first_token(self, payload: dict[str, Any], result: dict[str, Any]) -> dict[int, float]:
+        # The server records no probabilities for a token that is an incomplete UTF-8 sequence.
+        # Forbidding the tokens it picked makes it pick a complete one. The probabilities it then
+        # reports come from the raw logits, before the bias, so they are still the model's own.
+        banned: list[int] = []
+        while not result.get("completion_probabilities"):
+            if len(banned) == 20 or not result.get("tokens"):
+                raise ServerError(
+                    f"no first-token probabilities for a prompt of {len(payload['prompt'])} tokens"
+                )
+            banned.append(result["tokens"][0])
+            result = self._complete({**payload, "logit_bias": [[token, False] for token in banned]})
+        return {
+            entry["id"]: entry["logprob"] for entry in result["completion_probabilities"][0]["top_logprobs"]
+        }
 
     def throughput(
         self, prompts: list[list[int]], tokens: int, scales: Mapping[Path, float] | None = None
@@ -143,3 +193,8 @@ class LlamaServer:
         started = time.perf_counter()
         results = self._complete_all(payloads)
         return sum(result["tokens_predicted"] for result in results) / (time.perf_counter() - started)
+
+
+def _port_in_use(port: int) -> bool:
+    with socket.socket() as s:
+        return s.connect_ex(("127.0.0.1", port)) == 0

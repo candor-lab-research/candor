@@ -20,4 +20,6 @@ class Kernel:
         distance = abs(layer - self.max_weight_position)
         if distance > self.min_weight_distance:
             return 0.0
+        if self.min_weight_distance == 0:
+            return self.max_weight
         return self.max_weight + distance / self.min_weight_distance * (self.min_weight - self.max_weight)

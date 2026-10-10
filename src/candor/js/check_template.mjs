@@ -1,4 +1,4 @@
-// Whether a chat template parses in @huggingface/jinja, the parser Bionic and LM Studio use.
+// Whether a chat template parses and renders in @huggingface/jinja, the parser Bionic and LM Studio use.
 // Usage: node check_template.mjs <chat_template.jinja> [template variables as JSON]
 // Prints JSON: {"ok": true}, or {"ok": false, "error": ..., "lines": [line numbers of rejected statements]}.
 import { Template } from "@huggingface/jinja";
@@ -7,14 +7,23 @@ import fs from "fs";
 const [file, variables] = process.argv.slice(2);
 const source = fs.readFileSync(file, "utf8");
 
+// Templates often break only in one branch, so render the shapes of conversation apps send.
+const system = { role: "system", content: "You are a helpful assistant." };
+const user = { role: "user", content: "hi" };
+const assistant = { role: "assistant", content: "Hello." };
+const conversations = [[user], [system, user], [system, user, assistant, user]];
+
 try {
-  new Template(source).render({
-    messages: [{ role: "user", content: "hi" }],
-    add_generation_prompt: true,
-    bos_token: "",
-    eos_token: "",
-    ...(variables ? JSON.parse(variables) : {}),
-  });
+  const template = new Template(source);
+  for (const messages of conversations) {
+    template.render({
+      messages,
+      add_generation_prompt: true,
+      bos_token: "",
+      eos_token: "",
+      ...(variables ? JSON.parse(variables) : {}),
+    });
+  }
   console.log(JSON.stringify({ ok: true }));
 } catch (error) {
   const closers = { if: "{% endif %}", for: "{% endfor %}", macro: "{% endmacro %}" };

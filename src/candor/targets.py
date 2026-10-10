@@ -6,9 +6,13 @@ gate projection of the same shape). Anything the names can't place is reported r
 skipped, because a writer that is silently left out weakens the edit without any error.
 """
 
+import json
 import re
 from collections import Counter, defaultdict
 from dataclasses import dataclass, field
+from functools import cache
+from importlib import resources
+from typing import Any
 
 import gguf
 
@@ -28,9 +32,11 @@ READERS = {
     "q_proj", "k_proj", "v_proj", "qkv_proj", "query_key_value", "gate_proj", "up_proj", "gate_up_proj",
     "w1", "w3", "fc1", "c_attn", "c_fc", "wq", "wk", "wv", "wqkv", "dense_h_to_4h",
 }  # fmt: skip
+NOT_WEIGHTS = {"bias", "biases", "scales", "weight_scale", "weight_scale_inv", "input_scale"}
 ATTENTION = {"self_attn", "attn", "attention", "linear_attn", "mixer", "conv"}
 MLP = {"mlp", "feed_forward", "ffn", "moe", "block_sparse_moe", "shared_mlp"}
-LAYER = re.compile(r"^(.*?layers)\.(\d+)\.(.+)\.weight$")
+OTHER_STACKS = ("vision", "visual", "audio", "encoder", "mtp")
+LAYER = re.compile(r"^(.*?layers)\.(\d+)\.(.+)$")
 
 
 @dataclass(frozen=True)
@@ -39,6 +45,11 @@ class Writer:
     layer: int
     component: str
     shape: tuple[int, ...]
+    expert: bool = False
+
+    @property
+    def kind(self) -> str:
+        return self.name.split(f".{self.layer}.", 1)[1].removesuffix(".weight")
 
 
 @dataclass
@@ -48,6 +59,12 @@ class Targets:
     writers: list[Writer] = field(default_factory=list)
     unclassified: list[str] = field(default_factory=list)
     missing: list[str] = field(default_factory=list)
+    extra_layers: list[int] = field(default_factory=list)
+    output_norms: bool = False
+
+    @property
+    def experts(self) -> list[Writer]:
+        return [w for w in self.writers if w.expert]
 
     @property
     def ok(self) -> bool:
@@ -57,7 +74,7 @@ class Targets:
         """For each component, how many layers use each kind of writer."""
         kinds: dict[str, Counter] = defaultdict(Counter)
         for writer in self.writers:
-            kinds[writer.component][writer.name.split(f".{writer.layer}.", 1)[1].removesuffix(".weight")] += 1
+            kinds[writer.component][re.sub(r"experts\.\d+\.", "experts.N.", writer.kind)] += 1
         return dict(kinds)
 
 
@@ -77,29 +94,46 @@ def _component(path: list[str]) -> str | None:
     return None
 
 
+def _choose_stack(stacks: dict[str, set[int]], layers: int) -> tuple[str | None, str]:
+    fits = [prefix for prefix, found in stacks.items() if set(range(layers)) <= found]
+    if len(fits) > 1:
+        fits = [prefix for prefix in fits if not any(word in prefix for word in OTHER_STACKS)] or fits
+    if len(fits) == 1:
+        return fits[0], ""
+    if fits:
+        return None, f"several layer stacks fit {layers} layers: {', '.join(sorted(fits))}"
+    return None, f"no stack holds layers 0 to {layers - 1}; found {', '.join(sorted(stacks)) or 'none'}"
+
+
 def find_targets(shapes: dict[str, list[int]], hidden: int, layers: int) -> Targets:
     stacks: dict[str, set[int]] = defaultdict(set)
     for name in shapes:
         if match := LAYER.match(name):
             stacks[match[1]].add(int(match[2]))
-    stack = next((prefix for prefix, found in stacks.items() if found == set(range(layers))), None)
+    stack, problem = _choose_stack(stacks, layers)
     if stack is None:
-        return Targets(layers, "", missing=[f"no stack of exactly {layers} layers among {sorted(stacks)}"])
+        return Targets(layers, "", missing=[problem])
 
-    targets = Targets(layers, stack)
+    targets = Targets(layers, stack, extra_layers=sorted(stacks[stack] - set(range(layers))))
     for name, shape in sorted(shapes.items()):
         match = LAYER.match(name)
-        if not match or match[1] != stack:
+        if not match or match[1] != stack or int(match[2]) >= layers:
             continue
+        path = match[3].split(".")
+        if "post_feedforward_layernorm" in path:
+            targets.output_norms = True
+        if path[-1] in NOT_WEIGHTS:
+            continue
+        if path[-1] == "weight":
+            path = path[:-1]
         writes_hidden = (len(shape) == 2 and shape[0] == hidden) or (len(shape) == 3 and hidden in shape[1:])
         if not writes_hidden:
             continue
-        path = match[3].split(".")
         role, component = _role(path[-1]), _component(path[:-1])
         if role == "reader":
             continue
         if role == "writer" and component:
-            targets.writers.append(Writer(name, int(match[2]), component, tuple(shape)))
+            targets.writers.append(Writer(name, int(match[2]), component, tuple(shape), "experts" in path))
         else:
             targets.unclassified.append(name)
     targets.writers.sort(key=lambda w: (w.layer, w.component, w.name))
@@ -110,18 +144,28 @@ def find_targets(shapes: dict[str, list[int]], hidden: int, layers: int) -> Targ
     return targets
 
 
-def gguf_architecture(model_type: str) -> str | None:
-    """llama.cpp's name for a Hugging Face model_type, if the pinned gguf package knows it."""
-    wanted = model_type.replace("_", "").replace("-", "")
-    for name in gguf.MODEL_ARCH_NAMES.values():
-        if name.replace("_", "").replace("-", "") == wanted:
-            return name
+@cache
+def _architectures() -> dict[str, str]:
+    path = resources.files("candor") / "data" / "llama_cpp_architectures.json"
+    return json.loads(path.read_text())
+
+
+def gguf_architecture(config: dict[str, Any]) -> str | None:
+    """llama.cpp's name for the model, from the architectures its converter registers."""
+    for architecture in config.get("architectures") or []:
+        if found := _architectures().get(architecture):
+            return found
     return None
 
 
-def gguf_name(writer: Writer, arch: str) -> str | None:
-    """The name llama.cpp's converter will give this weight, mirroring how it strips language_model."""
+@cache
+def _name_map(arch: str, layers: int) -> gguf.TensorNameMap:
     arch_enum = next(a for a, n in gguf.MODEL_ARCH_NAMES.items() if n == arch)
+    return gguf.get_tensor_name_map(arch_enum, layers)
+
+
+def gguf_name(writer: Writer, arch: str, layers: int) -> str | None:
+    """The name llama.cpp's converter will give this weight, mirroring how it strips language_model."""
     module = writer.name.removesuffix(".weight").replace("language_model.", "")
-    mapped = gguf.get_tensor_name_map(arch_enum, writer.layer + 1).get_name(module)
+    mapped = _name_map(arch, layers).get_name(module)
     return f"{mapped}.weight" if mapped else None

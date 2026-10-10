@@ -55,3 +55,18 @@ def test_keeps_safetensors_metadata(model_folder, tmp_path):
 def test_unknown_weight_is_an_error(model_folder, tmp_path):
     with pytest.raises(KeyError):
         merge(model_folder, tmp_path / "merged", {"missing.weight": (torch.zeros(1, 1), torch.zeros(1, 1))})
+
+
+def test_weight_files_outside_the_index_are_left_out(model_folder, tmp_path):
+    save_file({"layers.0.attention.wo.weight": torch.zeros(2, 2)}, model_folder / "consolidated.safetensors")
+    left_out = merge(model_folder, tmp_path / "merged", {})
+    assert left_out == ["consolidated.safetensors"]
+    assert not (tmp_path / "merged" / "consolidated.safetensors").exists()
+
+
+def test_fp8_weights_are_refused(tmp_path):
+    folder = tmp_path / "fp8"
+    folder.mkdir()
+    save_file({"a.weight": torch.zeros(4, 6).to(torch.float8_e4m3fn)}, folder / "model.safetensors")
+    with pytest.raises(ValueError, match="FP8"):
+        merge(folder, tmp_path / "merged", {"a.weight": (torch.zeros(4, 1), torch.zeros(1, 6))})

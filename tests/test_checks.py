@@ -1,6 +1,16 @@
+import shutil
+
 import pytest
 
-from candor.checks import BeginOfText, begin_of_text, writes_the_date
+from candor.checks import (
+    JS,
+    BeginOfText,
+    app_template_parses,
+    begin_of_text,
+    chat_template,
+    remote_code,
+    writes_the_date,
+)
 
 from .tiny_tokenizer import DATED, WITH_BOS, WITHOUT_BOS, tokenizer
 
@@ -32,3 +42,47 @@ def test_model_without_a_bos_token():
 def test_writes_the_date():
     assert writes_the_date(tokenizer(DATED, adds_bos=False))
     assert not writes_the_date(tokenizer(WITH_BOS, adds_bos=False))
+
+
+def test_several_named_templates_resolve_to_the_default():
+    named = tokenizer({"default": DATED, "tool_use": WITH_BOS}, adds_bos=False)
+    assert chat_template(named) == DATED
+    assert writes_the_date(named)
+
+
+def test_no_template():
+    assert chat_template(tokenizer(None, adds_bos=False)) is None
+
+
+def test_remote_code_from_both_configs():
+    config = {"auto_map": {"AutoModelForCausalLM": "modeling_x.XForCausalLM"}}
+    tokenizer_config = {"auto_map": {"AutoTokenizer": ["tokenization_x.XTokenizer", None]}}
+    assert remote_code(config, tokenizer_config) == ["modeling_x.py", "tokenization_x.py"]
+    assert remote_code({}, None) == []
+
+
+needs_node = pytest.mark.skipif(
+    shutil.which("node") is None or not (JS / "node_modules").exists(),
+    reason="Node or @huggingface/jinja missing",
+)
+
+
+@needs_node
+def test_app_template_parses():
+    assert app_template_parses(WITH_BOS).status == "ok"
+
+
+@needs_node
+def test_app_template_rejects_transformers_only_syntax():
+    result = app_template_parses("{% if messages[0]['content'] is sameas true %}x{% endif %}")
+    assert result.status == "fails"
+    assert "line" in result.detail
+
+
+@needs_node
+def test_app_template_is_rendered_with_a_system_message_too():
+    system_only = (
+        "{% for m in messages %}{% if m['role'] == 'system' %}{{ m['content'] | wordcount }}{% endif %}"
+        "{{ m['content'] }}{% endfor %}"
+    )
+    assert app_template_parses(system_only).status == "fails"
