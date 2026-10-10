@@ -4,17 +4,21 @@ This file is the single plan for candor. Anything not listed under Plan is not b
 
 ## Plan
 
+Depth before breadth (decided 2026-10-10): one complete run on the models you already use, in the
+format you run them, before anything else. Every model is scored and shipped as a GGUF, and runs
+in Bionic's llama.cpp engine.
+
 | Phase | What | Done when | State |
 | --- | --- | --- | --- |
 | 0 | Score edits as per-layer LoRA adapters in llama.cpp | Adapters match merged weights, no speed cost | Done |
 | 1 | Core maths and `candor inspect` | candor's rebuild of a heretic trial matches its refusals, and measuring heretic's saved model under heretic's conditions gives heretic's numbers exactly; `inspect` reports correctly on rude-llama, Qwen3.5-9B and K2-Horizon | Done |
-| 2 | `candor init` and `candor run` on the Mac: search scored in llama.cpp, then export | On rude-llama, measured side by side with heretic's saved Trial 170 model under identical conditions (same prompts, pinned date, one begin-of-text token, same engine), candor's model has no more refusals, no higher KL and no maths loss, and it loads in Bionic | In progress: steps 1-2 of 5 done |
-| 3 | The same run on a Runpod pod with one command and a budget limit | Qwen3.5-9B end to end under a set budget, pod deleted automatically; the CUDA release installs and uses the GPU | |
-| 4 | Thinking models, scored at your real Bionic settings | K2-Horizon measured honestly at your reasoning level and sampling, then improved | |
-| 5 | Docs, `candor doctor`, live dashboard, the guide rewritten around candor | You run a new model without me | |
+| 2 | rude-llama end to end on the Mac: measure, search, export a GGUF for Bionic | Under the decision rule written in step 4 before any search runs, candor's shipped GGUF is at least as good as heretic's Trial 170 converted and quantised the same way: fewer or equal refusals on held-out prompts, no higher KL, no maths loss. It loads in Bionic, and you prefer it in a blind A/B | In progress: steps 1-2 done, step 3 in progress |
+| 3 | Qwen3.5-9B, a thinking model: scored with thinking on at your Bionic settings; residuals read on a pod | Defined at the start of the phase, against heretic's Trial 161 | |
+| 4 | K2-Horizon at your real Bionic settings | Measured honestly with the template and reasoning level Bionic actually uses, then improved | |
 
-Pods come before thinking models because K2-Horizon is too big for the Mac and needs several GPU
-runs.
+Pods only where the Mac can't cope: reading residuals for Qwen3.5-9B and K2 (16-bit, 18-19 GB).
+Phase 3 builds a pod bootstrap script and an in-pod watchdog that deletes the pod at a budget, and
+checks them on rude-llama first (about $0.30). Top up Runpod before phase 3 (about $3.55 left).
 
 Every step gets an independent review before it is called done; its findings are fixed with
 tests and the fixes verified until a review comes back clean. Heavy jobs on the Mac (converting
@@ -24,34 +28,41 @@ a real model, reading residuals, a search) wait for the user's go.
 
 | Step | What | State |
 | --- | --- | --- |
-| 1 | `candor init NAME --model SOURCE`: checks the model, writes `runs/NAME/candor.toml` with every setting explained, validated on every load; pins the date; refuses models candor can't edit; never overwrites a run | Done, reviewed |
-| 2 | `candor run RUN` up to the search: GGUF (edit targets checked byte for byte), prompt ids from llama-server (equal to its chat endpoint, pinned date proven, lengths checked), directions (finite), one adapter per edit target per direction set; resumable, and rebuilds whatever a settings change affects | Done, reviewed (SmolLM2: 960 adapters, 1,000 prompts, about 20 s) |
-| 3 | The search: Optuna over per-layer strengths, each trial scored in llama.cpp on the quantised GGUF (refusals with the keyword judge, first-token KL); heretic's saved Trial 170 model scored the same way for comparison; built and reviewed on SmolLM2, then the first rude-llama run with the user's go | Next |
-| 4 | Better measurement: the Qwen3Guard classifier judge with keywords as a cross-check, the best trials re-scored on 300-400 held-out prompts, and the maths check (GSM8K subset, multiple-choice flips) | |
-| 5 | Export: merge the chosen edit, convert and quantise, the final check on the exact shipped file with your KV cache type, and loading it in Bionic | |
+| 1 | `candor init NAME --model SOURCE`: checks the model, writes `runs/NAME/candor.toml` with every setting explained, validated on every load; pins the model's commit, the datasets' commits and the date; refuses models candor can't edit; never overwrites a run | Done, reviewed |
+| 2 | `candor run RUN` up to the search: GGUF (edit targets checked byte for byte), prompt ids from llama-server, directions, one adapter per edit target per direction set; resumable, and rebuilds whatever a settings or code change affects | Done, reviewed |
+| 3 | Fixes from the full review (see the log) | Fixed; the review of the fixes is running |
+| 4 | Measurement, settled before any search: a held-out harmful set outside AdvBench (de-duplicated against the direction prompts, pinned); the Qwen3Guard judge with its false-refusal rate measured on answers to harmless prompts, keyword counts kept beside it; the scoring noise floor from repeat scoring; paired comparison (McNemar) with a margin; KL on 300 harmless prompts; the full GSM8K test set, paired; heretic's Trial 170 rebuilt by candor and scored as adapters, so the comparison is like for like. Written down as phase 2's decision rule | |
+| 5 | The search: Optuna over a kernel per component (heretic's 0.8-1.5 strength range), stored resumably in the run folder, each trial scored in llama.cpp on the quantised GGUF; progress with time left, the Mac kept awake. Built on SmolLM2, then a 10-trial rude-llama pilot (time per trial, noise floor) and the full search, each with the user's go | |
+| 6 | Export: merge, convert and quantise; the final check on the exact shipped file with your KV cache type; how many begin-of-text tokens Bionic's GGUF engine sends; loading it in Bionic; the blind A/B | |
 
 ## Research changes and where they land
 
-From the 2026-10-10 paper review. Each paper gets read before its change is built.
+From the 2026-10-10 paper review, corrected after the full review read each paper in full.
 
 | Finding | Change | Where |
 | --- | --- | --- |
 | Matching targets by name silently misses most of the effect on mixture-of-experts models (2609.09793) | `inspect` lists every per-layer tensor that outputs the hidden size and fails on any it can't place or any layer without a writer | Phase 1, done |
-| Keyword judges miscount refusals, worst on reasoning output | Judge with Qwen3Guard-Gen-0.6B on the final answer; keep keywords as a cross-check, compared by agreement counts only | Phase 2 step 4 |
-| 100 prompts are too noisy to rank trials | Search on 100 with fixed seeds, re-score the best trials on 300-400 held-out prompts | Phase 2 steps 3-4 |
-| First-token KL doesn't predict lost ability | Final candidates must pass a GSM8K subset and a multiple-choice flip check | Phase 2 step 4 |
-| Re-quantising after an edit can bring refusals back | The last check runs on the exact file you ship, with your KV cache type | Phase 2 step 5 |
-| Thinking models decide during reasoning | Directions from thinking-on runs (averaged over reasoning, think start, think close); never score with thinking off; score at the highest level you use; allow strengths above 1 | Phase 4 |
-| Multi-direction edits, cleaned directions | Optional, only if phase 4 falls short (most evidence is from steering, not weight edits) | Later |
+| Keyword judges count compliant answers with safety words as refusals (2512.13655: 72.2% vs 95.7% non-refusal on 900 abliterated answers) | Qwen3Guard-Gen-0.6B on the final answer, with its false-refusal rate measured (the vendor's refusal precision is 83-89%, 2510.14276; calibrate any judge, 2606.25487); keyword counts kept beside it | Phase 2 step 4 |
+| One count on 100 prompts can't separate close models (2609.25173 for unpaired sampled runs; candor's own scoring varies by 1-2 refusals and KL 0.002 with batching) | Measure the noise floor; compare paired on a held-out set; scoring is greedy, so seeds matter only for sampled checks | Phase 2 step 4 |
+| First-token KL misses lost ability (2512.13655: -4.5pp GSM8K at KL 0.043) | The full GSM8K test set, paired against the same quantised file; multiple-choice flips only as a warning (2407.09141) | Phase 2 step 4 |
+| Re-quantising after an edit can bring refusals back (2609.09793) | The last check runs on the exact file you ship, with your KV cache type (2606.09864; already used for all scoring) | Phase 2 step 6 |
+| Thinking mode changes refusals (2509.00544); the think start and think close are decision points in distilled reasoning models (2609.18471, 2510.06036) | Score in the mode and at the level(s) you run, with answers long enough to finish thinking, judged on the final answer with unfinished answers counted separately (2609.09793). candor's directions are already read at the think start | Phases 3-4 |
+| A plain single-direction edit barely worked on Qwen3.5-9B (2605.21706: 3.3%, against 92-97% for an edit pushed a fixed margin past the refusal boundary) | Measure Qwen3.5 properly before trusting heretic's Trial 161; plan a past-the-boundary variant | Phase 3 |
+| A direction averaged over the reasoning (2507.03167: better on R1-Distill-Llama-8B, worse on Qwen3-8B); one direction from a mixed prompt pool beats per-category ones (2602.02132) | Build directions from prompts like the refusals you actually hit; a reasoning-averaged set only if refusals remain | Phases 3-4 |
+| Multi-direction edits (2511.08379; about 10% on Qwen3.5-9B in 2605.21706) and cleaned directions (2601.08489, single author, untuned baseline) | Not planned | |
 
 ## Not in this plan
 
-- heretic and `tune/heretic-kit`: frozen, no new features. The guide stays as reference until phase 5.
+- heretic and `tune/heretic-kit`: frozen, no new features. The guide stays as reference.
 - `tune/abliterate.py`: deleted 2026-10-10. candor does the same job.
-- The guide's section 14 "plan for K2": replaced by phase 4.
+- Cut 2026-10-10 for depth first: `candor doctor`, a live dashboard, one-command pod
+  orchestration, rewriting the guide (the README is the documentation), and support for more
+  model families (the existing mixture-of-experts, Gemma and GLM checks stay as they are).
+- Deferred to phase 3: settings for thinking models (template kwargs, reasoning level, sampling,
+  longer answers) and choosing torch's CUDA build to match llama.cpp's 12.8.
+- Deferred until real runs exist: a way to upgrade an older `candor.toml` when settings are added.
 - Reporting the llama.cpp prompt-cache bug upstream: not wanted.
-- Separate tracks, outside candor: the Qwen3.5 rude fine-tune, the Mac Studio purchase, and the
-  optional check of how many begin-of-text tokens Bionic's GGUF engine sends.
+- Separate tracks, outside candor: the Qwen3.5 rude fine-tune and the Mac Studio purchase.
 
 ## Log
 
@@ -73,20 +84,21 @@ rank-1 adapters with per-request scales gives the same results as merging it.
 - The merged copy converted to GGUF with no file fixes, because merge.py never rewrites them.
 - Two llama-server traps, handled in `engine.py`: `--lora-init-without-apply` leaves every
   adapter's default scale at 1 (the engine sets them to 0 and checks), and prompt caches don't
-  record which adapters computed a prompt (the engine uses `--cache-ram 0` and
-  `cache_prompt: false`; without it 3 refusals became 28).
+  record which adapters computed a prompt (the engine sends `cache_prompt: false`; without it 3
+  refusals became 28).
 
-Numbers: `runs/phase0/results.json` (not in git). Pod: A40, about 23 minutes, about $0.23.
+Numbers: `runs/phase0/results.json` (not in git). Script: `spikes/phase0.py`, last in commit
+`2bb6bba`. Pod: A40, about 23 minutes, about $0.23.
 
 ### Phase 1: core maths and `candor inspect` (done 2026-10-10)
 
-- `candor.heretic` reads heretic's Optuna journals; `spikes/reproduce_trial.py` rebuilds a trial
+- `candor.heretic` reads heretic's Optuna journals; `spikes/reproduce_trial.py` (last in `2bb6bba`) rebuilds a trial
   with candor's own direction finding and edit. On rude-llama Trial 170 it gets heretic's 2/100.
 - Heretic tokenizes the rendered chat with the tokenizer's own special tokens added, so Llama 3
   and K2-Horizon get two begin-of-text tokens. Proved by running heretic's own `Model.generate`
   with a recording stub. transformers, mlx-lm, Bionic's MLX engine (`model_kit.py`) and llama.cpp
   (`chat.cpp`) all send one. Qwen3.5 has none, so it is unaffected.
-- `spikes/compare_models.py` scored the saved heretic model (`models/local/rude-llama-heretic`)
+- `spikes/compare_models.py` (last in `2bb6bba`) scored the saved heretic model (`models/local/rude-llama-heretic`)
   against the original on heretic's test prompts:
 
 | Input | Date in prompt | Batch | Refusals, original | Refusals, edited | KL |
@@ -100,8 +112,8 @@ Numbers: `runs/phase0/results.json` (not in git). Pod: A40, about 23 minutes, ab
   refusals. candor's keyword judge and heretic's agreed on all 800 saved answers.
 - `candor.checks` reports both traps for any model: `begin_of_text` and `writes_the_date`.
 - The engine test (`tests/test_engine.py`) runs a tiny random GGUF in llama-server. It fails if the
-  default-scale reset or `cache_prompt: false` is removed. `--cache-ram 0` is kept as a second guard
-  that no test has yet shown to be needed.
+  default-scale reset or `cache_prompt: false` is removed. `--cache-ram 0` and `--ctx-checkpoints 0`
+  only save memory and time, since nothing is reused without the prompt cache.
 - `candor inspect MODEL` reads the config, tokenizer and file headers only. On the three models:
   rude-llama passes (warns: doubled token, date); Qwen3.5-9B passes and finds all 64 writers,
   including 24 linear-attention `out_proj` (llama.cpp's `ssm_out`); K2-Horizon fails because Bionic
@@ -113,92 +125,65 @@ Numbers: `runs/phase0/results.json` (not in git). Pod: A40, about 23 minutes, ab
   writer is known from heretic's code), and 2609.09793 argues against name matching without
   prescribing shape matching.
 
-### Phase 1 review (2026-10-10)
+### Reviews of phases 1 and 2 (2026-10-10)
 
-An independent review found 13 defects; all are fixed, each with a test (84 tests now):
+Each step was reviewed independently and every finding fixed; the commit messages list them.
 
-- Engine: refused a port another server already holds (it would have scored the wrong model),
-  checks the served model path, cleans up a server whose start fails, kills a server that won't
-  stop, and gets first-token probabilities for prompts whose first token is an incomplete UTF-8
-  sequence (llama-server records none for those). It bans that token and asks again: the reported
-  probabilities come from the raw logits, which a test confirms the ban leaves unchanged.
-- Targets: weights stored without a `.weight` suffix (fused experts) are found; an extra
-  token-prediction layer past the model's layer count is accepted and reported; two stacks that
-  both fit are reported; mixture-of-experts models fail clearly instead of half-mapping; norms on
-  block outputs (Gemma 2/3, OLMo 2) are warned about, since the edit can't remove the direction
-  exactly there.
-- llama.cpp support is read from a table of the architectures llama.cpp's converter registers
-  (`scripts/llama_cpp_architectures.py`, 280 at b11524), not guessed from `model_type`. Mistral
-  was wrongly rejected before.
-- `inspect` gives a clear message instead of a traceback for missing models, gated repos, base
-  models and configs without sizes (a separate exit code when it can't inspect, now 3; 1 when a
-  check fails),
-  resolves templates given as a dict, reads remote code declared in the tokenizer config, and
-  checks the template with a system message and several turns.
-- Only the weight files a model's index lists are read or merged, so a stray
-  `consolidated.safetensors` is never shipped unedited; FP8 weights are refused by `merge`.
-- K2's template fails in Bionic only because of its `is sameas` tests; its `{% generation %}`
-  block parses fine. The guide is corrected.
+- Phase 1: 13 defects, then a regression and 5 gaps in the fixes. They were in the engine (a port
+  another server holds, the served model, cleanup, prompts whose first token is an incomplete
+  UTF-8 sequence), finding targets on unusual layouts, choosing the llama.cpp architecture as its
+  converter does, `inspect`'s errors and exit codes, and `merge` checking every target first.
+- Step 1 (`init`): 9 defects and 4 weak tests: run names, strict settings, building the run
+  folder under a temporary name, pinning Hub models and the date.
+- Step 2 (`run` up to the search): 12 defects and 5 weak tests, then 8, 3 and 1 over three rounds
+  of verifying the fixes: stale results after a settings change, the toolchain's checks, finite
+  residuals, over-long prompts, the disk check and flushing to disk on macOS.
 
-A second review of those fixes found one regression and five gaps, all now fixed (93 tests):
+### Full review (2026-10-10)
 
-- The template check rendered a system message, so templates that deliberately refuse one
-  (Gemma 2, Mistral v0.1) were reported as unreadable by Bionic. Only conversations transformers
-  can render are now tried in Bionic's parser.
-- `merge` now checks every target before writing anything: missing names, non-float dtypes and
-  quantisation scales (an INT8 weight with a `weight_scale` lost its edit silently). It also
-  leaves out weights in other formats such as `pytorch_model.bin`. `inspect` fails on quantised
-  writers.
-- GLM-4's output norms (`post_self_attn_layernorm`, `post_mlp_layernorm`) are now warned about.
-- The llama.cpp architecture is chosen exactly as the converter does: the first top-level entry,
-  replaced by `text_config.architectures` except for the five architectures the converter keeps
-  at top level (also read from its source).
-- `inspect` exits with 3, not 2 (typer's usage-error code), when it can't inspect a model,
-  reports unexpected errors as a message, and handles a template that can't render one message.
-- Known and accepted: another process could take the port in the instant between candor's check
-  and llama-server binding it; the served-model check catches that unless it serves the same file.
+Eleven reviewers covered the code, the tests (about 90 mutations), the papers and the plan; an
+independent verifier checked each finding, two for serious ones. 124 findings, about 60 distinct,
+all but one confirmed.
 
-### Phase 2 step 1 review: `candor init` (2026-10-10)
+- Found correct:
+  - The maths matches heretic's source (edit, kernel, direction interpolation, KL, judge) and
+    llama.cpp's LoRA conventions: adapters against merged weights gave KL 9e-14 on the tiny model.
+  - Requests with different adapter scales are never batched together.
+  - 1,000 adapters start in 0.55 s on Metal.
+  - Every edit target of the three models goes through llama.cpp's LoRA path.
+  - `inspect` is right on all three.
+  - The CUDA runtime archive holds exactly libcudart, libcublas and libcublasLt, loaded beside
+    llama-server through an `$ORIGIN` rpath (from llama.cpp's release.yml; a real pod run is still
+    to come).
+- Blockers, fixed:
+  - rude-llama and heretic's saved model couldn't be converted: transformers 5 wrote a tokenizer
+    class the converter's transformers 4.57.6 doesn't know. They now convert from a staging folder
+    with only the tokenizer settings renamed.
+  - llama.cpp's converter reorders the input columns of Qwen3.5's 24 linear-attention `ssm_out`
+    weights. That stopped the run after converting, and adapters built in the original order would
+    have been wrong. Adapters and the target check now apply the converter's own reordering.
+  - K2's own Python was never downloaded or trusted. `init` now sets `trust_remote_code` for models
+    that need it; K2's code was checked to load and run under transformers 5.19 on a tiny random
+    config (its `output_hidden_states` returns nothing, so candor's hooks are what work).
+- Also fixed:
+  - Records hold candor's code version for each stage, so a fix to a stage rebuilds its results.
+  - `run` checks GPU memory before downloading anything: Qwen3.5-9B needs 21.2 GB and K2 19.8 GB
+    against the Mac's 10 GB. The model loads straight onto the GPU (`accelerate`).
+  - F16 models convert to F16 and are checked byte for byte; rude-llama is F16 on disk.
+  - Prompt datasets are pinned to a commit; Hub configs are read at the pinned commit.
+  - Killing candor stops llama-server.
+  - On pods: the GPU check reads llama-server's device list (it passed on a failed CUDA start), torch
+    must see the GPU, the `--lora` argument stays under Linux's per-argument limit, and the
+    converter's packages are pinned.
+  - HTTP timeouts, and an answer cut short by the slot's context is an error.
+  - The default strength range is heretic's 0.8-1.5, and its meaning under each `row_norm` is
+    described correctly.
+- Tests: mutation showed stage invalidation, atomic `init`, the byte-for-byte check, the pinned
+  date reaching the ids, KL's unlisted tokens, the CUDA check, the lock and five earlier fixes
+  untested. Each now has a test, and every fix was shown to matter by reverting it (P1 12 of 12,
+  P2 51 of 51, P3 25 of 25, plus P4's).
+- Removed: `spikes/` and the library code only they used, `prompts.py` and `reference.py`.
+- Plan: rewritten depth first, GGUF for everything, with the research table corrected after reading
+  each paper in full (above).
 
-A review found 9 defects and 4 weak tests; all fixed (161 tests):
-
-- Run names must be one plain folder name, so `init ../x` can't write outside the runs folder;
-  `--runs ~/...` is expanded (it used to create a folder literally named `~`).
-- The settings file must spell out every setting: a missing one is an error, not a silent
-  default, so a later candor release can't quietly change an existing run.
-- Numbers are strict (no `true` or `"200"` for 200, no infinity), the seed is limited to what
-  the search can use, and names can't be empty.
-- A run folder is built under a temporary name and renamed into place, so a failure leaves
-  nothing behind to block the next `init`; files are read and written as UTF-8.
-- Hub models are pinned to the commit they were checked at (`revision`), so later steps use
-  exactly those weights and that template.
-- The date is pinned only when the template's one date is a `date_string` it accepts from outside,
-  in that call's own format; otherwise `init` warns that a run must finish the day it starts.
-
-### Phase 2 step 2 review: `candor run` up to the search (2026-10-10)
-
-The review found 12 defects and 5 weak tests; all fixed (189 tests, 3 end to end), with each key
-fix shown to matter by reintroducing the bug and watching its test fail:
-
-- Every stage reused its result even after the settings it was built from changed (a new
-  `row_norm` left old adapters in use). Each result now records its inputs and the records of
-  the stages before it; a change rebuilds it and everything after it, and says so.
-- The toolchain trusted a converter environment whose install had failed, didn't check binary
-  versions, would have left the CUDA runtime in a separate folder from llama-server on pods (likely
-  a silent fall back to the CPU), had no download timeout and no lock against two first runs.
-- The pinned-date check couldn't fail on the day of `init`; it now renders a made-up date.
-- Residuals and directions are checked to be finite (float16 on the Mac can overflow).
-- Over-long prompts failed with a bare HTTP 400; they are now checked against the model's context
-  and the scoring server is sized from the longest prompt.
-- The disk check used a wrong ratio; it now uses the real parameter count.
-
-Verification of those fixes took three more rounds: 8 new defects introduced by the fixes (the
-length check skipped on reuse, too much rebuilt after a quantisation change, a server that won't
-start re-downloaded on every run, a damaged record crashing instead of rebuilding, no sync before
-a record is trusted, an oversized checking server, old GGUF files never cleared, two small toolchain
-gaps), then 3 (macOS needs F_FULLFSYNC, identical files across release archives, a damaged install),
-then 1 (advice to delete a user's own llama.cpp folder). The final round was clean: 201 tests and
-3 end-to-end tests pass, and each key fix was shown to matter by reintroducing the bug.
-
-Still unverified, for phase 3: installing the real CUDA release on a pod (the 594 MB runtime
-archive's file list has not been checked against the binaries archive).
+320 tests, plus 5 end to end, pass.
