@@ -80,9 +80,31 @@ of the model with a wide reach (Trial 170 peaks at layer 16.6 of 27 and reaches 
 candor's single-direction trials nearly all peaked the MLP at the last layers with a short reach.
 Trial 170 read at layer 12 is inside candor's search space.
 
-## Next
+## Trial 170 scored by the search's own scorer (2026-10-11)
 
-Score Trial 170 with the search's own scorer, on the same 100 prompts, before deciding what ships
+`candor score runs/rude --heretic .../models--rude-llama-bf16.jsonl --trial 170`:
+
+| Edit | Direction | Refused /100 | Keywords | KL | In the search |
+| --- | --- | --- | --- | --- | --- |
+| heretic-170 | layer 12.039 | 0 | 3 | 0.0834 | |
+| heretic-170 at layer 12 | layer 12 | 0 | 4 | 0.0818 | |
+| trial-165 (the check) | per layer | 0 | 4 | 0.1014 | 0, 4, 0.1017 |
+
+The unedited model refuses 99 of 100, as in the search.
+
+- The search missed it. Trial 170 read at layer 12, which the search could have drawn, refuses as
+  few as candor's best (0) at about 20% less KL (0.0818 against 0.1017), and beats every trial in
+  the search's table on both.
+- Not a fault in single-direction scoring: the layer-12 version uses the search's own adapters.
+- Not the scorer: it ranks Trial 170 ahead of 165, as the held-out measurement did (KL 0.1011
+  against 0.1089).
+- The check repeated its refusals and keywords exactly, and its KL to within 0.0003 (0.3%). The
+  command calls that "not reliable" because it wants a match to 4 decimals; the gap that decides
+  this is about 0.02, some 60 times larger, so the conclusion stands.
+
+## Before the diagnosis
+
+The plan was to score Trial 170 with the search's own scorer, on the same 100 prompts, before deciding what ships
 (`candor score`, built for this):
 
 - If it beats candor's best trials there, the scorer would have picked it and the search missed
