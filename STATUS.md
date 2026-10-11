@@ -47,9 +47,10 @@ How the fix is chosen and checked, decided before any of it runs:
 2. The fix targets the cause (how the search treats the two kinds of edit, and where it spends its
    trials), not this answer: no default comes from Trial 170's values.
 3. The check on rude-llama is one search with no heretic recipe as a starting point and no range
-   narrowed towards it. It passes if it finds, by itself, a recipe scoring at least as well as
-   Trial 170 read at layer 12 (0 of 100 at KL 0.0818 or less, with the search's scorer). If it
-   fails, the answer goes back to the test landscapes; settings are not tweaked until it passes.
+   narrowed towards it. It passes if it finds, by itself, a recipe close to Trial 170 read at
+   layer 12 or better: at most 1 of 100 refused at KL within 3% of 0.0818 (0.0843 or less), with
+   the search's scorer, the same closeness the test landscapes count as a hit. If it fails, the
+   answer goes back to the test landscapes; settings are not tweaked until it passes.
 4. Independent repeats that report whether they agree are built in, as the warning that works on a
    new model with no reference.
 
