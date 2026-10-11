@@ -29,22 +29,29 @@ a real model, reading residuals, a search) wait for the user's go.
 
 Results of each phase, numbers only, are in `results/` (phase 2: `results/phase-2-rude-llama.md`).
 
-### Next: find out why the search fell short
+### Next: a search that doesn't miss recipes it could find
 
-The search ran (200 trials) and its three best trials were measured: none passes the rule below.
-Trial 165 matches Trial 170's refusals (5 against 6) with better maths but 8% more KL; 187 has less
-KL but refuses 11. None of the search's 96 single-direction trials refused fewer than 35 of 100,
-while heretic's best are single-direction (see the results file). Before deciding what ships, the
-user scores Trial 170 with the search's own scorer (about 5 minutes):
+The search missed a better recipe inside its own space: Trial 170 read at layer 12 scores 0 of 100
+at KL 0.0818 with the search's own scorer, against candor's best 0.1017 (results file). It is not a
+fault in scoring single-direction edits, nor a scorer that can't tell them apart: the search never
+tried that shape. The search will run on new models with nothing to compare against, so this is
+fixed before phase 3 (the user, 2026-10-11). rude-llama ships Trial 170's recipe built by candor.
 
-```
-uv run candor score runs/rude --heretic ~/Desktop/tune/checkpoints/models--rude-llama-bf16.jsonl --trial 170
-```
+How the fix is chosen and checked, decided before any of it runs:
 
-If it, or it read at layer 12, beats candor's best there, the search missed a recipe it could have
-drawn: fix how the search explores before phase 3. If it scores no better, the scorer can't separate
-edits this close. If it scores far worse than its held-out 6 of 288 suggests, look for a fault in how
-the search scores single-direction edits.
+1. Designs are compared by how often they miss the best on test landscapes calibrated to the real
+   trial numbers, where today's search must be shown to reproduce the miss. Variants guard against
+   fitting this one case: the best in the per-layer family, the best just outside today's ranges, a
+   narrower target, and randomly generated landscapes. The chosen design must be no worse than
+   today's anywhere and better on average.
+2. The fix targets the cause (how the search treats the two kinds of edit, and where it spends its
+   trials), not this answer: no default comes from Trial 170's values.
+3. The check on rude-llama is one search with no heretic recipe as a starting point and no range
+   narrowed towards it. It passes if it finds, by itself, a recipe scoring at least as well as
+   Trial 170 read at layer 12 (0 of 100 at KL 0.0818 or less, with the search's scorer). If it
+   fails, the answer goes back to the test landscapes; settings are not tweaked until it passes.
+4. Independent repeats that report whether they agree are built in, as the warning that works on a
+   new model with no reference.
 
 To compare a trial against the rule: `candor compare runs/rude base trial-N` (KL and maths are
 judged against the unedited model) and `candor compare runs/rude heretic-170 trial-N` (head to head).
