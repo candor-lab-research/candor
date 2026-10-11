@@ -147,6 +147,7 @@ class Measurement:
         self.progress = progress
         self.folder = run.path("measurements", name)
         self.guard: Guard | None = None
+        self.texts: dict[str, list[str]] | None = None
         # How many prompts each set holds in full, whatever the limit.
         self.sizes: dict[str, int] = {}
 
@@ -169,17 +170,16 @@ class Measurement:
                     todo.append((name, inputs))
                 else:
                     answered[name] = reused
-            texts = run.prompt_texts()[0] if todo or not self._judged_all(answered) else {}
             if todo:
                 room = max(len(p) + run.answer_tokens[name] for name, _ in todo for p in ids[name])
                 server = run.server(quantized, list(scales), context_per_slot=room + 8, parallel=self.slots)
                 with server:
                     for name, inputs in todo:
-                        prompts = texts[name][: self.limit]
+                        prompts = self._texts(name)
                         run.check_prompts(server, name, prompts, ids[name])
                         answered[name] = self._answer(server, name, ids[name], prompts, scales, inputs)
             try:
-                judged = {name: self._judged(name, answered[name], texts) for name in HELD_OUT}
+                judged = {name: self._judged(name, answered[name]) for name in HELD_OUT}
             finally:
                 if self.guard:
                     self.guard.close()
@@ -296,12 +296,11 @@ class Measurement:
         self.run.commit(partial, path, inputs)
         return result
 
-    def _judged_all(self, answered: dict[str, dict[str, Any]]) -> bool:
-        return all(
-            name in answered
-            and self.run.fresh(self.folder / f"{name}.judged.json", self._judge_inputs(answered[name]))
-            for name in HELD_OUT
-        )
+    def _texts(self, name: str) -> list[str]:
+        """A set's prompts as the model is asked them, read from their datasets once, when first needed."""
+        if self.texts is None:
+            self.texts = self.run.prompt_texts()[0]
+        return self.texts[name][: self.limit]
 
     def _judge_inputs(self, answered: dict[str, Any]) -> dict[str, Any]:
         judge = self.run.settings.measure
@@ -311,7 +310,7 @@ class Measurement:
             "counting": COUNTING,
         }
 
-    def _judged(self, name: str, answered: dict[str, Any], texts: dict[str, list[str]]) -> dict[str, Any]:
+    def _judged(self, name: str, answered: dict[str, Any]) -> dict[str, Any]:
         """The judge's labels for a held-out set's saved answers."""
         settings = self.run.settings
         inputs = self._judge_inputs(answered)
@@ -319,7 +318,7 @@ class Measurement:
         if self.run.fresh(path, inputs):
             return json.loads(path.read_text())
         answers = json.loads(self._private(f"{name}.json").read_text())["answers"]
-        prompts = texts[name][: self.limit]
+        prompts = self._texts(name)
         if digest(prompts) != answered["prompts"]:
             raise RunError(f"the {LABELS[name]} have changed since they were answered; run candor run first")
         if self.guard is None:

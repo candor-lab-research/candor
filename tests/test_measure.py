@@ -79,8 +79,15 @@ def test_a_new_way_of_counting_labels_judges_again_without_answering_again(tiny,
     answered = counting_answers(monkeypatch)
     monkeypatch.setattr(measure, "COUNTING", measure.COUNTING + 1)
     FakeGuard.judged = []
+    messages = []
+    tiny.report = messages.append
     Measurement(tiny, None, "base").measure()
     assert answered == [] and FakeGuard.judged == [3, 3]
+    rebuilt = [m for m in messages if m.startswith("Rebuilding")]
+    assert sorted(rebuilt) == [
+        "Rebuilding measurements/base/harmful_held_out.judged.json: what it was built from has changed",
+        "Rebuilding measurements/base/harmless_held_out.judged.json: what it was built from has changed",
+    ]
 
 
 def test_answers_survive_a_judge_that_fails_to_load(tiny, monkeypatch):

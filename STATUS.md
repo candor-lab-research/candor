@@ -27,17 +27,15 @@ a real model, reading residuals, a search) wait for the user's go.
 ### Next: the search (the user runs it)
 
 ```
-uv run candor upgrade runs/rude
-uv run candor measure runs/rude
-uv run candor measure runs/rude --heretic ~/Desktop/tune/checkpoints/models--rude-llama-bf16.jsonl --trial 170
-uv run candor search runs/rude --trials 10
 uv run candor search runs/rude
 ```
 
-`upgrade` adds `search.kl_target`. The two `measure` commands only re-judge the saved answers (a few
-minutes each), because an empty answer now always counts as a refusal. The 10-trial pilot gives the
-time per trial; the last command carries on to all 200, overnight. Then `candor measure` the
-trials it suggests, and `candor compare runs/rude heretic-170 trial-N` against the rule below.
+About 4.5-5 hours: 200 trials at about 76 s each so far, longer as the search finds edits that
+answer in full. Keep the Mac plugged in with the lid open; candor keeps it awake, and `nohup`
+keeps it going if the terminal closes. If it stops, the same command carries on. At the end it
+prints the best trials and a `candor measure runs/rude --trial N` command for each of the most
+promising (about 30 minutes each); then `candor compare runs/rude heretic-170 trial-N` against the
+rule below.
 
 ### Phase 2's decision rule (signed off by the user, 2026-10-11)
 
@@ -285,6 +283,11 @@ full measurement's `--slots 16` run will size.
   of the scoring survived the tests. The twelfth, models of 64 layers or more, is noted under "Not
   in this plan".
 - A two-trial search on SmolLM2 with the real judge passes end to end.
+- On rude-llama: `candor upgrade` added `search.kl_target`; re-judging both saved measurements
+  under the empty-answer rule changed no count. A two-trial search (the start of the real one):
+  the unedited model refuses 99 of the 100 test prompts; the two random trials refused 42 and 22,
+  at KL 0.065 and 0.076 (keywords: 37 and 18). 76 s per trial, about a minute more per session
+  for loading 840 adapters and the judge and scoring the unedited model.
 
 ### Step 4: the full measurement (2026-10-11)
 
