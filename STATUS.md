@@ -7,7 +7,9 @@ This file is the single plan for candor. Anything not listed under Plan is not b
 Depth before breadth (decided 2026-10-10): one complete run on the models you already use, in the
 format you run them, before anything else. Every model is scored and shipped as a GGUF, and runs
 in llama-server, the llama.cpp server candor scores in, so nothing differs between testing and use.
-(Decided 2026-10-11: the user isn't tied to Bionic; Bionic or LM Studio stay possible, unchecked.)
+For every model, the final check (refusals, KL and maths, with your KV cache type) runs on the exact
+file shipped, since merging and re-quantising can shift the result (phase 0: KL 0.01 between adapters
+and merged weights in Q4_K_M). (Decided 2026-10-11: the user isn't tied to Bionic; Bionic or LM Studio stay possible, unchecked.)
 
 | Phase | What | Done when | State |
 | --- | --- | --- | --- |
