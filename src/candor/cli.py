@@ -13,6 +13,7 @@ from importlib.metadata import version
 from pathlib import Path
 from typing import Annotated, Any
 
+import optuna
 import typer
 from huggingface_hub import HfApi
 from huggingface_hub.utils import disable_progress_bars
@@ -32,7 +33,7 @@ from rich.table import Table
 from transformers import AutoTokenizer
 from transformers.utils import logging as transformers_logging
 
-from . import checks, config, measure, source, targets
+from . import checks, config, measure, search, source, targets
 from .convert import ConversionError
 from .engine import LLAMA_CPP_RELEASE, ServerError
 from .run import PROMPT_SETS, Run, RunError
@@ -51,6 +52,9 @@ MARKS = {
 }
 # 2 is what typer uses for usage errors, so "couldn't inspect" gets its own code.
 FAILED_CHECK, COULD_NOT_INSPECT = 1, 3
+# A search's progress takes its speed from every trial of the session, since trials take minutes and
+# rich otherwise looks back only 30 seconds.
+DAY = 24 * 3600
 
 Row = tuple[str, str, str]
 
@@ -66,6 +70,7 @@ def main() -> None:
     disable_progress_bars()
     hub_logging.set_verbosity_error()
     transformers_logging.disable_progress_bar()
+    optuna.logging.set_verbosity(optuna.logging.WARNING)
 
 
 @contextmanager
@@ -385,7 +390,9 @@ def _stopped_by_signals() -> Iterator[None]:
     def stop(signum: int, _frame: Any) -> None:
         raise SystemExit(128 + signum)
 
-    previous = {number: signal.signal(number, stop) for number in (signal.SIGTERM, signal.SIGHUP)}
+    # A signal already ignored stays ignored, so nohup keeps a search going after its terminal closes.
+    numbers = [n for n in (signal.SIGTERM, signal.SIGHUP) if signal.getsignal(n) is not signal.SIG_IGN]
+    previous = {number: signal.signal(number, stop) for number in numbers}
     try:
         yield
     finally:
@@ -418,8 +425,8 @@ def run(folder: Annotated[Path, typer.Argument(help="A run folder made by candor
         raise typer.Exit(COULD_NOT_INSPECT) from None
     summary = ", ".join(f"{count} {what}" for what, count in done.items())
     console.print(
-        f"[green]Prepared {escape(str(folder))}:[/] {summary}. The search over edits is the next stage to "
-        "build."
+        f"[green]Prepared {escape(str(folder))}:[/] {summary}. Next, candor search {escape(str(folder))} "
+        "looks for the best edit."
     )
 
 
@@ -442,8 +449,8 @@ def _where(error: Exception) -> str:
     return f"{type(error).__name__} at {Path(frame.filename).name}:{frame.lineno}"
 
 
-def _measurement_name(trial: int | None, slots: int, limit: int | None) -> str:
-    name = "base" if trial is None else f"heretic-{trial}"
+def _measurement_name(trial: int | None, heretic: bool, slots: int, limit: int | None) -> str:
+    name = "base" if trial is None else f"heretic-{trial}" if heretic else f"trial-{trial}"
     if slots != measure.DEFAULT_SLOTS:
         name += f"-slots-{slots}"
     return name + (f"-first-{limit}" if limit else "")
@@ -461,7 +468,10 @@ def measure_command(
         Path | None,
         typer.Option(help="A heretic study's journal (.jsonl), to measure one of its trials."),
     ] = None,
-    trial: Annotated[int | None, typer.Option(help="The heretic trial, by the number heretic shows.")] = None,
+    trial: Annotated[
+        int | None,
+        typer.Option(help="A trial of candor search, or with --heretic of heretic's, by the number shown."),
+    ] = None,
     slots: Annotated[
         int,
         typer.Option(
@@ -482,14 +492,14 @@ def measure_command(
         ),
     ] = None,
 ) -> None:
-    """Measure the unedited model, or a heretic trial rebuilt with this run's directions, on the prompts
-    the search never sees and on maths. Answers go only to the run's private folder; this shows counts.
-    A stopped measurement carries on where it stopped."""
+    """Measure the unedited model, a trial of candor search, or a heretic trial rebuilt with this run's
+    directions, on the prompts the search never sees and on maths. Answers go only to the run's private
+    folder; this shows counts. A stopped measurement carries on where it stopped."""
     console = Console()
     folder = folder.expanduser()
-    if (heretic is None) != (trial is None):
-        raise typer.BadParameter("give --heretic and --trial together", param_hint="--trial")
-    name = name or _measurement_name(trial, slots, limit)
+    if heretic is not None and trial is None:
+        raise typer.BadParameter("say which of the study's trials with --trial", param_hint="--heretic")
+    name = name or _measurement_name(trial, heretic is not None, slots, limit)
     try:
         config.check_run_name(name)
     except config.ConfigError as error:
@@ -517,6 +527,8 @@ def measure_command(
             edit = None
             if heretic is not None and trial is not None:
                 edit = measure.heretic_trial(heretic.expanduser(), trial, run.settings.edit.row_norm)
+            elif trial is not None:
+                edit = search.trial_edit(run, trial)
             measurement = measure.Measurement(run, edit, name, slots, limit, progress)
             results = measurement.measure()
     except config.ConfigError as error:
@@ -540,10 +552,17 @@ def measure_command(
             measure.seconds(results[s]) * measurement.sizes[s] / len(results[s]["finished"])
             for s in measure.SETS
         )
-        console.print(
-            f"Measuring every prompt would take about {_duration(seconds)} at this speed. Edits that "
-            "refuse less give longer answers, so allow more for them."
-        )
+        if limit < 4 * slots:
+            # Too few prompts to keep every slot busy, so this speed undersells a full run.
+            console.print(
+                f"Measuring every prompt would take at most about {_duration(seconds)}: {limit} prompts "
+                f"can't keep all {slots} slots busy, so a full run goes faster."
+            )
+        else:
+            console.print(
+                f"Measuring every prompt would take about {_duration(seconds)} at this speed. Edits "
+                "that refuse less give longer answers, so allow more for them."
+            )
 
 
 @app.command()
@@ -579,3 +598,88 @@ def compare(
         "says yes, and p is how likely a split that uneven would be if neither were really better. "
         "Two measurements of the same edit with different --slots show what noise alone does."
     )
+
+
+@app.command("search")
+def search_command(
+    folder: Annotated[Path, typer.Argument(help="A run folder made by candor init.")],
+    trials: Annotated[
+        int | None,
+        typer.Option(
+            min=1,
+            help="Stop once this many trials are finished, instead of search.trials. A few try the "
+            "search and time it, and count towards the full search.",
+        ),
+    ] = None,
+) -> None:
+    """Search for the edit that removes the most refusals while changing the model least. Each trial is
+    scored in llama-server on the test prompts, its refusals counted by the judge; the held-out prompts
+    are left for candor measure. A stopped search carries on where it stopped."""
+    console = Console()
+    folder = folder.expanduser()
+
+    def report(message: str) -> None:
+        console.print(f"[dim]{escape(message)}[/]")
+
+    columns = (
+        TextColumn("{task.description}"),
+        BarColumn(bar_width=20),
+        MofNCompleteColumn(),
+        TimeElapsedColumn(),
+        TextColumn("left"),
+        TimeRemainingColumn(),
+    )
+    try:
+        with (
+            _stopped_by_signals(),
+            _awake(),
+            Progress(*columns, console=console, speed_estimate_period=DAY) as bars,
+        ):
+            tasks = []
+
+            def started(done: int, total: int) -> None:
+                tasks.append(bars.add_task("Trials", total=total, completed=done))
+
+            def finished(best: str | None) -> None:
+                bars.advance(tasks[0])
+                if best:
+                    console.print(escape(best))
+
+            run = Run.open(folder, report)
+            target = trials or run.settings.search.trials
+            found, seconds = search.Search(run).search(target, started, finished)
+    except config.ConfigError as error:
+        console.print(f"[red]{escape(str(error))}[/]")
+        raise typer.Exit(COULD_NOT_INSPECT) from None
+    except (RunError, ToolchainError, ConversionError, ServerError) as error:
+        console.print(f"[red]The search stopped:[/] {escape(str(error))}")
+        raise typer.Exit(FAILED_CHECK) from None
+    except Exception as error:
+        console.print(f"[red]The search stopped on an unexpected error:[/] {escape(_where(error))}")
+        raise typer.Exit(COULD_NOT_INSPECT) from None
+    table = Table(
+        title="Trials no other beats on both refusals and KL", title_justify="left", box=box.SIMPLE_HEAD
+    )
+    for heading in ["Trial", "Direction", "Refused", "Keywords", "KL"]:
+        table.add_column(heading, justify="left" if heading == "Direction" else "right")
+    for candidate in found[:10]:
+        table.add_row(
+            str(candidate.trial),
+            candidate.direction,
+            str(candidate.refusals),
+            str(candidate.keyword_refusals),
+            f"{candidate.kl:.4f}",
+        )
+    console.print(table)
+    total = run.settings.search.trials
+    if target < total:
+        console.print(
+            f"Trials took about {seconds:.0f} s each, so all {total} would take about "
+            f"{_duration(seconds * total)}. Later trials aim at edits that refuse less, whose longer "
+            "answers take longer to write and judge, so allow more. Run candor search again to carry on."
+        )
+    elif found:
+        console.print("Measure the most promising on the held-out prompts:")
+        for candidate in found[:3]:
+            command = f"  uv run candor measure {folder} --trial {candidate.trial}"
+            console.print(escape(command), soft_wrap=True)

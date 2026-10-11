@@ -24,6 +24,21 @@ Every step gets an independent review before it is called done; its findings are
 tests and the fixes verified until a review comes back clean. Heavy jobs on the Mac (converting
 a real model, reading residuals, a search) wait for the user's go.
 
+### Next: the search (the user runs it)
+
+```
+uv run candor upgrade runs/rude
+uv run candor measure runs/rude
+uv run candor measure runs/rude --heretic ~/Desktop/tune/checkpoints/models--rude-llama-bf16.jsonl --trial 170
+uv run candor search runs/rude --trials 10
+uv run candor search runs/rude
+```
+
+`upgrade` adds `search.kl_target`. The two `measure` commands only re-judge the saved answers (a few
+minutes each), because an empty answer now always counts as a refusal. The 10-trial pilot gives the
+time per trial; the last command carries on to all 200, overnight. Then `candor measure` the
+trials it suggests, and `candor compare runs/rude heretic-170 trial-N` against the rule below.
+
 ### Phase 2's decision rule (signed off by the user, 2026-10-11)
 
 Written from the full measurement (log below), before any search. candor's edit for rude-llama is
@@ -52,7 +67,7 @@ if not, Trial 170's recipe built by candor ships. Then phase 3, Qwen3.5-9B.
 | 2 | `candor run RUN` up to the search: GGUF (edit targets checked byte for byte), prompt ids from llama-server, directions, one adapter per edit target per direction set; resumable, and rebuilds whatever a settings or code change affects | Done, reviewed |
 | 3 | Fixes from the full review (see the log) | Done: every fix shown to matter by a test that fails without it; a second review was stopped as diminishing returns, so the first real rude-llama run is the check that matters |
 | 4 | Measurement, settled before any search: a held-out harmful set outside AdvBench (de-duplicated against the direction prompts, pinned); the Qwen3Guard judge with its false-refusal rate measured on answers to harmless prompts, keyword counts kept beside it; the scoring noise floor from repeat scoring; paired comparison (McNemar) with a margin; KL on 300 harmless prompts; the full GSM8K test set, paired; heretic's Trial 170 rebuilt by candor and scored as adapters, so the comparison is like for like. Written down as phase 2's decision rule | Done: measured, and the decision rule signed off |
-| 5 | The search: Optuna over a kernel per component (heretic's 0.8-1.5 strength range), stored resumably in the run folder, each trial scored in llama.cpp on the quantised GGUF, refusals counted by the judge; progress with time left, the Mac kept awake. Built on SmolLM2, then a 10-trial rude-llama pilot (time per trial) and one full search, each with the user's go | |
+| 5 | The search: Optuna over a kernel per component (heretic's 0.8-1.5 strength range), stored resumably in the run folder, each trial scored in llama.cpp on the quantised GGUF, refusals counted by the judge; progress with time left, the Mac kept awake. Built on SmolLM2, then a 10-trial rude-llama pilot (time per trial) and one full search, each with the user's go | Built and reviewed; the user runs it (above) |
 | 6 | Export: merge, convert and quantise; the final check on the exact shipped file with your KV cache type; how many begin-of-text tokens Bionic's GGUF engine sends; loading it in Bionic; the blind A/B | |
 
 ## Research changes and where they land
@@ -78,6 +93,12 @@ From the 2026-10-10 paper review, corrected after the full review read each pape
 - Cut 2026-10-10 for depth first: `candor doctor`, a live dashboard, one-command pod
   orchestration, rewriting the guide (the README is the documentation), and support for more
   model families (the existing mixture-of-experts, Gemma and GLM checks stay as they are).
+- Optuna is pinned below 5 (4.9, the version heretic ran), so rude-llama's search uses the same
+  sampler that found Trial 170. Optuna 5 changed multivariate TPE's bandwidth and its
+  multi-objective weights; worth trying once candor has its own baseline, for example on Qwen3.5.
+- Models of 64 layers or more: the `--lora` list of every adapter set passes Linux's 128 KiB
+  argument limit (about 34 KB for rude-llama's 28 layers, 46 KB for 32). Not needed for the three
+  models in this plan; shorter adapter names would fix it.
 - Deferred to phase 3: settings for thinking models (template kwargs, reasoning level, sampling,
   longer answers) and choosing torch's CUDA build to match llama.cpp's 12.8.
 - Reporting the llama.cpp prompt-cache bug upstream: not wanted.
@@ -237,6 +258,33 @@ Pilot on rude-llama, the first 10 prompts of each set (counts only):
 The judge and keywords agreed on all 40 held-out answers; 10 prompts can't say more than that.
 Re-running both gave the same counts and KL 0.0577 against 0.0576, a first sight of the noise the
 full measurement's `--slots 16` run will size.
+
+### Step 5: the search built (2026-10-11)
+
+- `candor search RUN` runs Optuna's TPE (4.9, as heretic ran) over heretic's edit shape: one
+  direction for every layer or each layer's own, and per component a peak strength (0.8-1.5), its
+  position (0.6-1.0 of the depth), the edge strength as a share of the peak, and a reach of at least
+  one layer. 200 trials, 60 random, 128 candidates per step, two objectives: KL and the refusal
+  share, with KL replaced below 0.01 as heretic does. candor's single direction is a whole layer
+  (Trial 170's 12.04 sits next to layer 12), and refusals are counted by the judge.
+- Every adapter set loads into one llama-server once; a trial sets strengths per request, answers
+  the 100 test prompts (100 tokens), the judge counts refusals (an empty answer always counts), and
+  KL comes from the 100 harmless test prompts. Answers are dropped once judged.
+- It resumes where it stopped, fails a trial cut off part way, moves the sampler's seed on each
+  session so no random trial repeats, and won't carry on a search whose scores would now mean
+  something else (model file, adapters, prompts, lengths, judge, KV cache, settings, code, Optuna).
+  `nohup` keeps it going after the terminal closes. It ends with the trials no other beats on both
+  refusals and KL, and the `measure --trial N` commands for the most promising, which rebuild the
+  same adapters byte for byte.
+- Building it showed that edits could reach no layer at all (a reach under one layer), unlike
+  heretic's; the reach now never goes below one layer.
+- Two independent reviews (heretic fidelity and correctness; overnight robustness, privacy and
+  tests) found 12 problems. 11 are fixed, each with a test that fails without the fix: among them a
+  resumed search repeated its random trials, Optuna 5's TPE isn't the one heretic used, the time
+  left never showed, saved labels from before the empty-answer rule were reused, and ten mutations
+  of the scoring survived the tests. The twelfth, models of 64 layers or more, is noted under "Not
+  in this plan".
+- A two-trial search on SmolLM2 with the real judge passes end to end.
 
 ### Step 4: the full measurement (2026-10-11)
 

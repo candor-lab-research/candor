@@ -408,6 +408,14 @@ class Run:
         texts["maths"] = [f"{question}\n\n{instruction}" for question in texts["maths"]]
         return texts, dropped
 
+    def check_prompts(self, server: LlamaServer, name: str, texts: list[str], ids: list[list[int]]) -> None:
+        """Prompts read again from their dataset must be the ones prompts.json was built from, before
+        a judge reads them or answers are checked against their rows."""
+        if server.chat_ids(self.chats(texts), self.template_kwargs()) != ids:
+            raise RunError(
+                f"the {name} prompts have changed since prompts.json was built; run candor run first"
+            )
+
     def prompt_ids(self) -> dict[str, list[list[int]]]:
         """Each prompt set as the exact token ids llama-server feeds the model for that chat."""
         _, quantized = self.gguf()

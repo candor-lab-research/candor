@@ -32,6 +32,8 @@ uv run candor upgrade runs/rude                                # after updating 
 uv run candor measure runs/rude                                # the unedited model, on held-out prompts
 uv run candor measure runs/rude --heretic STUDY.jsonl --trial 170   # a heretic trial, rebuilt
 uv run candor compare runs/rude base heretic-170               # prompt by prompt
+uv run candor search runs/rude                                 # search for a better edit, overnight
+uv run candor measure runs/rude --trial 37                     # one of its trials, on held-out prompts
 ```
 
 - `inspect` reads only the config, tokenizer and file headers, so it is quick and needs no GPU. Its
@@ -59,12 +61,20 @@ uv run candor compare runs/rude base heretic-170               # prompt by promp
 - `compare A B` pairs two measurements prompt by prompt: each count, how many prompts went each
   way, and the exact McNemar p-value. Measuring the same edit twice with different `--slots` shows
   what batching noise alone does.
+- `search` tries `search.trials` edits (200; the first 60 at random) of the shape heretic searches,
+  with Optuna's TPE sampler aiming at fewer refusals and lower KL. Every adapter is loaded into one
+  llama-server once, so a trial only sets strengths: it answers the 100 test prompts, the judge
+  counts refusals, and KL is read from the 100 harmless test prompts. Nothing a model writes is
+  kept. It resumes where it stopped, refuses to carry on a search made under other settings, and
+  `--trials N` stops early to time it. It ends with the trials no other beats on both refusals and
+  KL, and the commands to measure the most promising on the held-out prompts.
 - Reading residuals needs the model in 16 bits on the GPU. `run` checks this before downloading or
   converting anything: rude-llama fits on an 18 GB Mac; Qwen3.5-9B and K2-Horizon need a pod.
 
 A run folder holds `candor.toml`, `inspect.json`, `gguf/` (the model as an unquantised GGUF of its
 own float type, the deployment quantisation, and `convert.log`), `prompts.json`, `directions.pt`,
-`adapters/`, `measurements/`, `private/` and `logs/`, each result beside a `.inputs.json` record. llama.cpp itself (release
+`adapters/`, `measurements/`, `search/` (Optuna's journal and a record of the settings it was made
+with), `private/` and `logs/`, each result beside a `.inputs.json` record. llama.cpp itself (release
 b11524: the binaries, checked by sha256, and its converter in its own environment, pinned by
 `src/candor/data/converter-constraints.txt`) is fetched once into `~/.cache/candor`, or
 `CANDOR_CACHE`; `CANDOR_LLAMA_BIN` points at an existing b11524 build instead.

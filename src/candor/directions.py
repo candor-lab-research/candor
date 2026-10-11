@@ -26,6 +26,6 @@ def after_layer(directions: Tensor, layer: float) -> Tensor:
     """The direction read after a fractional layer, interpolated between its neighbours."""
     position = layer + 1
     low = math.floor(position)
-    if low + 1 >= len(directions):
+    if position == low or low + 1 >= len(directions):
         return directions[low]
     return F.normalize(torch.lerp(directions[low], directions[low + 1], position - low), dim=0)

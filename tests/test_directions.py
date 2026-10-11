@@ -33,3 +33,11 @@ def test_after_layer():
     middle = after_layer(directions, 1.5)
     torch.testing.assert_close(middle, F.normalize(directions[2] + directions[3], dim=0))
     torch.testing.assert_close(after_layer(directions, 3.0), directions[4])
+
+
+def test_a_whole_layer_gives_that_layers_direction_as_it_is():
+    # Not normalised, so any arithmetic on the way would show; a search's adapters for a layer and a
+    # measurement's of the same trial must be built from identical directions.
+    found = torch.randn(6, 16, generator=torch.Generator().manual_seed(1))
+    assert torch.equal(after_layer(found, 3), found[4])
+    assert torch.equal(after_layer(found, 3.0), found[4])

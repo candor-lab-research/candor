@@ -228,11 +228,19 @@ class Search(Section):
     )
     reach: Range = Field(
         default=(0.01, 0.6),
-        description="How far either side of the peak the edit reaches, as a fraction of depth.",
+        description="How far either side of the peak the edit reaches, as a fraction of depth. The search "
+        "never goes below one layer, as in heretic, so every edit changes some layer.",
     )
     direction_layer: Range = Field(
         default=(0.4, 0.9),
         description="Which layer's refusal direction a single-direction trial uses, as a fraction of depth.",
+    )
+
+    kl_target: Finite = Field(
+        default=0.01,
+        ge=0,
+        description="Below this KL divergence an edit is scored by its refusals instead, so the search "
+        "doesn't dwell on edits that change almost nothing (heretic's default).",
     )
 
     @field_validator("strength", "peak_layer", "edge_strength", "reach", "direction_layer")

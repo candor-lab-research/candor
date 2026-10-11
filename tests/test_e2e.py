@@ -191,6 +191,13 @@ def test_init_and_run_prepare_every_stage_resume_and_follow_settings(tmp_path):
     assert compared.exit_code == 0, compared.output
     assert "0.0000" in compared.output
 
+    searched = runner.invoke(app, ["search", str(run_folder), "--trials", "2"])
+    assert searched.exit_code == 0, searched.output
+    assert "Trials no other beats on both refusals and KL" in searched.output
+    trial = runner.invoke(app, ["measure", str(run_folder), "--trial", "1", "--limit", "2"])
+    assert trial.exit_code == 0, trial.output
+    assert "unlabelled" not in trial.output
+
 
 def test_the_judge_tells_a_refusal_from_an_answer():
     defaults = Measure()

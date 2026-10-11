@@ -330,7 +330,7 @@ class Ending:
 @pytest.mark.parametrize(
     ("outcome", "code", "message"),
     [
-        ({"edit targets": 2, "adapters": 4}, 0, "2 edit targets, 4 adapters. The search"),
+        ({"edit targets": 2, "adapters": 4}, 0, "2 edit targets, 4 adapters. Next, candor search"),
         (RunError("no room [here]"), 1, "The run stopped: no room [here]"),
         (ToolchainError("no llama-server"), 1, "The run stopped: no llama-server"),
         (ConversionError("the converter failed"), 1, "The run stopped: the converter failed"),
@@ -399,3 +399,14 @@ def test_library_progress_bars_stay_out_of_candors_output(tmp_path):
         assert not transformers_logging.is_progress_bar_enabled()
     finally:
         transformers_logging.enable_progress_bar()
+
+
+def test_a_signal_already_ignored_stays_ignored_so_nohup_works():
+    previous = signal.signal(signal.SIGHUP, signal.SIG_IGN)
+    try:
+        with cli._stopped_by_signals():
+            assert signal.getsignal(signal.SIGHUP) is signal.SIG_IGN
+            assert signal.getsignal(signal.SIGTERM) not in (signal.SIG_DFL, signal.SIG_IGN)
+        assert signal.getsignal(signal.SIGHUP) is signal.SIG_IGN
+    finally:
+        signal.signal(signal.SIGHUP, previous)

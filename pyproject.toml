@@ -12,6 +12,7 @@ dependencies = [
     "httpx>=0.28",
     "huggingface-hub>=2.2",
     "numpy>=2",
+    "optuna>=4.7,<5",
     "pydantic>=2.10",
     "rich>=15",
     "safetensors>=0.6",

@@ -19,7 +19,7 @@ from typing import Any
 from . import heretic, kl
 from .directions import after_layer
 from .engine import LlamaServer
-from .judge import Guard, is_refusal, read_verdict
+from .judge import Guard, is_refusal, judged_refusal, read_verdict
 from .kernel import Kernel
 from .run import HELD_OUT, Run, RunError, digest, load_prompts, sync
 from .targets import Writer
@@ -33,6 +33,9 @@ LABELS = {
 # Short enough for progress bars to fit an 80-column terminal.
 SHORT_LABELS = {"harmful_held_out": "Harmful", "harmless_held_out": "Harmless", "maths": "Maths"}
 DEFAULT_SLOTS = 8
+# How the judge's replies become labels. Bump it in any commit that changes that, so saved labels are
+# judged again (the answers aren't).
+COUNTING = 2
 # "Answer: $1,234.50" and the like; failing that, an answer's last number is taken as its answer.
 STATED = re.compile(r"answer\W*?\$?\s*(-?\d[\d,]*(?:\.\d+)?)", re.IGNORECASE)
 NUMBER = re.compile(r"-?\d[\d,]*(?:\.\d+)?")
@@ -173,7 +176,7 @@ class Measurement:
                 with server:
                     for name, inputs in todo:
                         prompts = texts[name][: self.limit]
-                        self._check_prompts(server, name, prompts, ids[name])
+                        run.check_prompts(server, name, prompts, ids[name])
                         answered[name] = self._answer(server, name, ids[name], prompts, scales, inputs)
             try:
                 judged = {name: self._judged(name, answered[name], texts) for name in HELD_OUT}
@@ -243,14 +246,6 @@ class Measurement:
             return None
         return result
 
-    def _check_prompts(self, server: LlamaServer, name: str, texts: list[str], ids: list[list[int]]) -> None:
-        """The prompts read now must be the ones prompts.json was built from, since the judge reads
-        them and the maths answers are checked against their rows."""
-        if server.chat_ids(self.run.chats(texts), self.run.template_kwargs()) != ids:
-            raise RunError(
-                f"the {LABELS[name]} have changed since prompts.json was built; run candor run first"
-            )
-
     def _answer(
         self,
         server: LlamaServer,
@@ -310,7 +305,11 @@ class Measurement:
 
     def _judge_inputs(self, answered: dict[str, Any]) -> dict[str, Any]:
         judge = self.run.settings.measure
-        return {"answers": answered["answers"], "judge": [judge.judge, judge.judge_revision]}
+        return {
+            "answers": answered["answers"],
+            "judge": [judge.judge, judge.judge_revision],
+            "counting": COUNTING,
+        }
 
     def _judged(self, name: str, answered: dict[str, Any], texts: dict[str, list[str]]) -> dict[str, Any]:
         """The judge's labels for a held-out set's saved answers."""
@@ -330,7 +329,7 @@ class Measurement:
         replies = self.guard.replies(prompts, answers, done=done)
         verdicts = [read_verdict(reply) for reply in replies]
         result = {
-            "judge_refused": [v.refused for v in verdicts],
+            "judge_refused": [judged_refusal(a, v) for a, v in zip(answers, verdicts, strict=True)],
             "judge_safety": [v.safety for v in verdicts],
             "judge": digest(inputs["judge"]),
             "judge_seconds": time.perf_counter() - started,
