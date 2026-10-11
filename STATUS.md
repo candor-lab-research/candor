@@ -6,15 +6,16 @@ This file is the single plan for candor. Anything not listed under Plan is not b
 
 Depth before breadth (decided 2026-10-10): one complete run on the models you already use, in the
 format you run them, before anything else. Every model is scored and shipped as a GGUF, and runs
-in Bionic's llama.cpp engine.
+in llama-server, the llama.cpp server candor scores in, so nothing differs between testing and use.
+(Decided 2026-10-11: the user isn't tied to Bionic; Bionic or LM Studio stay possible, unchecked.)
 
 | Phase | What | Done when | State |
 | --- | --- | --- | --- |
 | 0 | Score edits as per-layer LoRA adapters in llama.cpp | Adapters match merged weights, no speed cost | Done |
 | 1 | Core maths and `candor inspect` | candor's rebuild of a heretic trial matches its refusals, and measuring heretic's saved model under heretic's conditions gives heretic's numbers exactly; `inspect` reports correctly on rude-llama, Qwen3.5-9B and K2-Horizon | Done |
-| 2 | rude-llama end to end on the Mac: measure, search, export a GGUF for Bionic | Under the decision rule written in step 4 before any search runs, candor's shipped GGUF is at least as good as heretic's Trial 170 converted and quantised the same way: fewer or equal refusals on held-out prompts, no higher KL, no maths loss. It loads in Bionic, and you prefer it in a blind A/B | In progress: steps 1-4 done |
-| 3 | Qwen3.5-9B, a thinking model: scored with thinking on at your Bionic settings; residuals read on a pod | Defined at the start of the phase, against heretic's Trial 161 | |
-| 4 | K2-Horizon at your real Bionic settings | Measured honestly with the template and reasoning level Bionic actually uses, then improved | |
+| 2 | rude-llama end to end on the Mac: measure, search, export a GGUF to run in llama-server | Under the decision rule written in step 4 before any search runs, candor's shipped GGUF is at least as good as heretic's Trial 170 converted and quantised the same way: fewer or equal refusals on held-out prompts, no higher KL, no maths loss. It runs in llama-server, and you prefer it in a blind A/B | In progress: steps 1-4 done |
+| 3 | Qwen3.5-9B, a thinking model: scored with thinking on at your settings; residuals read on a pod | Defined at the start of the phase, against heretic's Trial 161 | |
+| 4 | K2-Horizon at your real settings | Measured honestly with its own chat template (Bionic couldn't parse it; llama-server's reader is to be checked) and the reasoning level you use, then improved | |
 
 Pods only where the Mac can't cope: reading residuals for Qwen3.5-9B and K2 (16-bit, 18-19 GB).
 Phase 3 builds a pod bootstrap script and an in-pod watchdog that deletes the pod at a budget, and
@@ -51,7 +52,7 @@ these hold:
 
 Measurement noise is too small to matter here (0 flips on 588 held-out prompts and KL 0.0000 between
 8 and 16 slots), so counts are compared as they are, strictly: no trading refusals for KL. Step 6
-then repeats this on the exact file shipped, and adds Bionic loading and the blind A/B.
+then repeats this on the exact file shipped, and adds running it in llama-server and the blind A/B.
 
 Also decided: the search counts each trial's refusals with the judge, not keywords (keywords
 miscounted 19 of Trial 170's 25), and rude-llama gets one search: if its result passes, it ships;
@@ -66,7 +67,7 @@ if not, Trial 170's recipe built by candor ships. Then phase 3, Qwen3.5-9B.
 | 3 | Fixes from the full review (see the log) | Done: every fix shown to matter by a test that fails without it; a second review was stopped as diminishing returns, so the first real rude-llama run is the check that matters |
 | 4 | Measurement, settled before any search: a held-out harmful set outside AdvBench (de-duplicated against the direction prompts, pinned); the Qwen3Guard judge with its false-refusal rate measured on answers to harmless prompts, keyword counts kept beside it; the scoring noise floor from repeat scoring; paired comparison (McNemar) with a margin; KL on 300 harmless prompts; the full GSM8K test set, paired; heretic's Trial 170 rebuilt by candor and scored as adapters, so the comparison is like for like. Written down as phase 2's decision rule | Done: measured, and the decision rule signed off |
 | 5 | The search: Optuna over a kernel per component (heretic's 0.8-1.5 strength range), stored resumably in the run folder, each trial scored in llama.cpp on the quantised GGUF, refusals counted by the judge; progress with time left, the Mac kept awake. Built on SmolLM2, then a 10-trial rude-llama pilot (time per trial) and one full search, each with the user's go | Built and reviewed; the user runs it (above) |
-| 6 | Export: merge, convert and quantise; the final check on the exact shipped file with your KV cache type; how many begin-of-text tokens Bionic's GGUF engine sends; loading it in Bionic; the blind A/B | |
+| 6 | Export: merge, convert and quantise; the final check on the exact shipped file with your KV cache type; a `candor serve` command that runs the shipped file in llama-server at your settings (system prompt, KV cache, date); the blind A/B | |
 
 ## Research changes and where they land
 
