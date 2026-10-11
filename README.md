@@ -34,6 +34,7 @@ uv run candor measure runs/rude --heretic STUDY.jsonl --trial 170   # a heretic 
 uv run candor compare runs/rude base heretic-170               # prompt by prompt
 uv run candor search runs/rude                                 # search for a better edit, overnight
 uv run candor measure runs/rude --trial 37                     # one of its trials, on held-out prompts
+uv run candor score runs/rude --heretic STUDY.jsonl --trial 170     # where it would sit in the search
 ```
 
 - `inspect` reads only the config, tokenizer and file headers, so it is quick and needs no GPU. Its
@@ -68,14 +69,20 @@ uv run candor measure runs/rude --trial 37                     # one of its tria
   kept. It resumes where it stopped, refuses to carry on a search made under other settings, and
   `--trials N` stops early to time it. It ends with the trials no other beats on both refusals and
   KL, and the commands to measure the most promising on the held-out prompts.
+- `score` scores one edit exactly as the search scores its trials, without adding it to the search.
+  A heretic trial is scored as rebuilt, and at the nearest whole layer as the search could draw it;
+  it shows which of the search's best trials beat it on both refusals and KL, and whether the search
+  could have drawn it at all. The search's best trial is scored again beside it and should repeat its
+  score, which shows the two can be compared. `--trial N` alone scores one of the search's trials.
 - Reading residuals needs the model in 16 bits on the GPU. `run` checks this before downloading or
   converting anything: rude-llama fits on an 18 GB Mac; Qwen3.5-9B and K2-Horizon need a pod.
 
 A run folder holds `candor.toml`, `inspect.json`, `gguf/` (the model as an unquantised GGUF of its
 own float type, the deployment quantisation, and `convert.log`), `prompts.json`, `directions.pt`,
 `adapters/`, `measurements/`, `search/` (Optuna's journal and a record of the settings it was made
-with), `private/` and `logs/`, each result beside a `.inputs.json` record. llama.cpp itself (release
-b11524: the binaries, checked by sha256, and its converter in its own environment, pinned by
+with), `scores/` (adapters `score` builds for directions the search has none for), `private/` and
+`logs/`, each result beside a `.inputs.json` record. llama.cpp itself (release b11524: the
+binaries, checked by sha256, and its converter in its own environment, pinned by
 `src/candor/data/converter-constraints.txt`) is fetched once into `~/.cache/candor`, or
 `CANDOR_CACHE`; `CANDOR_LLAMA_BIN` points at an existing b11524 build instead.
 

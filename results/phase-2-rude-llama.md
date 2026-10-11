@@ -69,12 +69,26 @@ Head to head against Trial 170, prompt by prompt (only 170 / only candor's trial
   7-18% below the held-out KL.
 - candor's trials trip the keyword list less than Trial 170 (12-22 against 25).
 
+## The search's single-direction trials
+
+Read from the search's study (numbers only): 96 of the 200 trials used a single direction (32 of
+the 60 random, 64 of the 140 aimed). None refused fewer than 35 of 100; every trial under 10 used
+directions per layer. heretic's own search tried 125 single-direction trials: none under 10 in its
+random phase either (best 11), but from trial 90 on it found 20 under 10, and they were its best
+(Trial 170: 2 of 100 by keywords at its lowest KL). heretic's good ones edit the MLP from the middle
+of the model with a wide reach (Trial 170 peaks at layer 16.6 of 27 and reaches 12.8 layers);
+candor's single-direction trials nearly all peaked the MLP at the last layers with a short reach.
+Trial 170 read at layer 12 is inside candor's search space.
+
 ## Next
 
-Score Trial 170 with the search's own scorer, on the same 100 prompts, before deciding what ships:
+Score Trial 170 with the search's own scorer, on the same 100 prompts, before deciding what ships
+(`candor score`, built for this):
 
 - If it beats candor's best trials there, the scorer would have picked it and the search missed
   it: look at the search space and what the search tried (every trial above is per layer; Trial
   170 is one direction).
 - If it scores about the same as 165 and 167, the scorer can't separate edits this close: score
   on more prompts or with longer answers.
+- If it scores far worse than its held-out 6 of 288 suggests (around candor's single-direction
+  trials, 35 or more), look for a fault in how the search scores single-direction edits.

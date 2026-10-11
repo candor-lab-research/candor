@@ -96,6 +96,24 @@ def heretic_trial(journal_path: Path, number: int, row_norm: str) -> Edit:
     return Edit(f"heretic-{number}", trial.direction_layer, trial.kernels)
 
 
+def edit_adapters(run: Run, edit: Edit, folder: Path) -> tuple[dict[str, Path], dict[str, Any]]:
+    """An edit's own adapters, one per edit target along the direction it reads, written to folder
+    unless already there, by GGUF tensor name; and what they are built from."""
+    if not run.path("directions.pt").exists():
+        run.check_memory()
+    found = run.directions()
+    _, layers, _, _ = run.shape
+    layer = edit.direction_layer
+    if layer is None:
+        directions = found[1:]
+    elif 0 <= layer <= layers - 1:
+        directions = after_layer(found, layer).expand(layers, -1)
+    else:
+        raise RunError(f"{edit.name} reads its direction at layer {layer:g}; this model has {layers}")
+    inputs = {**run.adapter_inputs(), "direction_layer": layer}
+    return run.adapter_set(folder, directions, inputs), inputs
+
+
 def gold_number(answer: str) -> float:
     """The number a GSM8K answer ends with, after '#### '."""
     found = NUMBER.findall(answer.rsplit("####", 1)[1]) if "####" in answer else []
@@ -189,22 +207,8 @@ class Measurement:
         """The edit's own adapters, one per edit target, and the strength each is applied at."""
         assert self.edit is not None
         run = self.run
-        if not run.path("directions.pt").exists():
-            run.check_memory()
-        found = run.directions()
-        _, layers, _, writers = run.shape
-        layer = self.edit.direction_layer
-        if layer is None:
-            directions = found[1:]
-        elif 0 <= layer <= layers - 1:
-            directions = after_layer(found, layer).expand(layers, -1)
-        else:
-            raise RunError(
-                f"{self.edit.name} reads its direction at layer {layer:g}; this model has {layers}"
-            )
-        inputs = {**run.adapter_inputs(), "direction_layer": layer}
-        files = run.adapter_set(self.folder / "adapters", directions, inputs)
-        strengths = self.edit.strengths(writers, run.target_names)
+        files, inputs = edit_adapters(run, self.edit, self.folder / "adapters")
+        strengths = self.edit.strengths(run.shape[3], run.target_names)
         scales = {files[name]: strength for name, strength in strengths.items() if strength}
         return scales, {"adapters": digest(inputs), **self.edit.record(), "strengths": strengths}
 

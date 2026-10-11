@@ -33,8 +33,18 @@ Results of each phase, numbers only, are in `results/` (phase 2: `results/phase-
 
 The search ran (200 trials) and its three best trials were measured: none passes the rule below.
 Trial 165 matches Trial 170's refusals (5 against 6) with better maths but 8% more KL; 187 has less
-KL but refuses 11. Before deciding what ships, score Trial 170 with the search's own scorer: if it
-beats candor's best there, the search missed it; if not, the scorer can't separate edits this close.
+KL but refuses 11. None of the search's 96 single-direction trials refused fewer than 35 of 100,
+while heretic's best are single-direction (see the results file). Before deciding what ships, the
+user scores Trial 170 with the search's own scorer (about 5 minutes):
+
+```
+uv run candor score runs/rude --heretic ~/Desktop/tune/checkpoints/models--rude-llama-bf16.jsonl --trial 170
+```
+
+If it, or it read at layer 12, beats candor's best there, the search missed a recipe it could have
+drawn: fix how the search explores before phase 3. If it scores no better, the scorer can't separate
+edits this close. If it scores far worse than its held-out 6 of 288 suggests, look for a fault in how
+the search scores single-direction edits.
 
 To compare a trial against the rule: `candor compare runs/rude base trial-N` (KL and maths are
 judged against the unedited model) and `candor compare runs/rude heretic-170 trial-N` (head to head).

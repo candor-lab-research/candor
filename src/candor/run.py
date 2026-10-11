@@ -43,8 +43,9 @@ DATE_PROBE = "31 Dec 1999"
 CHECKED_PER_SET = 3
 # The version of each stage's code, in stage order. Bump a stage's number in any commit that changes
 # the results it builds. Each record holds the numbers of its own stage and every stage before it, so
-# results built by older code are rebuilt along with everything after them.
-STAGES = {"gguf": 1, "prompts.json": 1, "directions.pt": 1, "adapters": 1, "measurements": 1}
+# results built by older code are rebuilt along with everything after them. scores holds the adapters
+# candor score builds for edits the search has none for.
+STAGES = {"gguf": 1, "prompts.json": 1, "directions.pt": 1, "adapters": 1, "measurements": 1, "scores": 1}
 
 
 class RunError(RuntimeError):
@@ -508,10 +509,9 @@ class Run:
 
         found[0] is the embedding output and found[i + 1] the output of layer i.
         """
-        low, high = self.settings.search.direction_layer
-        last = layers - 1
+        low, high = self.settings.search.direction_layers(layers)
         sets = {"per-layer": found[1:]}
-        for layer in range(round(low * last), round(high * last) + 1):
+        for layer in range(low, high + 1):
             sets[f"layer-{layer}"] = found[layer + 1].expand(layers, -1)
         return sets
 

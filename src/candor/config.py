@@ -264,6 +264,13 @@ class Search(Section):
             raise ValueError("must be above 0")
         return value
 
+    def direction_layers(self, layers: int) -> tuple[int, int]:
+        """The first and last whole layer a single-direction trial reads its direction from, in a model
+        with this many layers."""
+        last = layers - 1
+        low, high = self.direction_layer
+        return round(low * last), round(high * last)
+
     @model_validator(mode="after")
     def _startup_fits(self) -> "Search":
         if self.startup_trials > self.trials:

@@ -683,3 +683,124 @@ def search_command(
         for candidate in found[:3]:
             command = f"  uv run candor measure {folder} --trial {candidate.trial}"
             console.print(escape(command), soft_wrap=True)
+
+
+def _direction(layer: float | None) -> str:
+    return search.PER_LAYER if layer is None else f"layer {layer:g}"
+
+
+def _trials(numbers: list[int]) -> str:
+    return ("trial " if len(numbers) == 1 else "trials ") + ", ".join(map(str, numbers))
+
+
+@app.command("score")
+def score_command(
+    folder: Annotated[Path, typer.Argument(help="A run folder made by candor init.")],
+    trial: Annotated[
+        int,
+        typer.Option(help="A trial of candor search, or with --heretic of heretic's, by the number shown."),
+    ],
+    heretic: Annotated[
+        Path | None,
+        typer.Option(help="A heretic study's journal (.jsonl), to score one of its trials."),
+    ] = None,
+) -> None:
+    """Score one edit exactly as the search scores its trials, without adding it to the search. A trial
+    of the search shows whether its score repeats. A heretic trial, rebuilt with this run's directions,
+    shows where it would sit among the search's trials and whether the search could have drawn it; the
+    search's own best trial is scored again beside it, as a check. Shows counts only."""
+    console = Console()
+    folder = folder.expanduser()
+
+    def report(message: str) -> None:
+        console.print(f"[dim]{escape(message)}[/]")
+
+    try:
+        with _stopped_by_signals(), _awake():
+            run = Run.open(folder, report)
+            study = search.load(run)
+            front = search.candidates(study) if study else []
+            _, layers, _, writers = run.shape
+            # Each edit, with its number when it is a trial of the search.
+            edits: list[tuple[measure.Edit, int | None]] = []
+            if heretic is None:
+                edits.append((search.trial_edit(run, trial), trial))
+            else:
+                edit = measure.heretic_trial(heretic.expanduser(), trial, run.settings.edit.row_norm)
+                nearest = search.nearest_layer(edit, run.settings.search, layers)
+                edits += [(edit, None)] + ([(nearest, None)] if nearest else [])
+                if front:
+                    edits.append((search.trial_edit(run, front[0].trial), front[0].trial))
+            scored = search.Search(run).score([edit for edit, _ in edits])
+            searched = {
+                number: search.searched_score(study, number) for _, number in edits if study and number
+            }
+    except config.ConfigError as error:
+        console.print(f"[red]{escape(str(error))}[/]")
+        raise typer.Exit(COULD_NOT_INSPECT) from None
+    except (RunError, ToolchainError, ConversionError, ServerError) as error:
+        console.print(f"[red]The scoring stopped:[/] {escape(str(error))}")
+        raise typer.Exit(FAILED_CHECK) from None
+    except Exception as error:
+        console.print(f"[red]The scoring stopped on an unexpected error:[/] {escape(_where(error))}")
+        raise typer.Exit(COULD_NOT_INSPECT) from None
+    table = Table(box=box.SIMPLE_HEAD)
+    for heading in ["Edit", "Direction", "Refused", "Keywords", "KL", "In the search"]:
+        table.add_column(heading, justify="left" if heading in {"Edit", "Direction"} else "right")
+    for (edit, number), score in zip(edits, scored.edits, strict=True):
+        before = searched.get(number) if number else None
+        table.add_row(
+            escape(edit.name),
+            _direction(edit.direction_layer),
+            str(score.refusals),
+            str(score.keyword_refusals),
+            f"{score.kl:.4f}",
+            f"{before.refusals}, {before.keyword_refusals}, {before.kl:.4f}" if before else "",
+        )
+    console.print(f"Scored as the search scores its trials, on its {scored.prompts} test prompts:")
+    console.print(table)
+    base = study.user_attrs.get("base_refusals") if study else None
+    console.print(
+        f"The unedited model refuses {scored.base_refusals} of {scored.prompts}"
+        + (f" ({base} in the search)." if base is not None else ".")
+    )
+    if not study or not front:
+        console.print(
+            f"The search has no {'finished trials' if study else 'trials'} yet to set these beside."
+        )
+        return
+    reliable = True
+    for (edit, number), score in zip(edits, scored.edits, strict=True):
+        if number:
+            if search.repeats(score, searched[number]):
+                console.print(
+                    f"{escape(edit.name)} scores as it did in the search, so the scores above can be set "
+                    "beside the search's."
+                )
+            else:
+                reliable = False
+                console.print(
+                    f"{escape(edit.name)} scores differently from the search (the last column), so the "
+                    "scores above can't be set beside the search's, and the verdicts below don't hold."
+                )
+    components = sorted({writer.component for writer in writers})
+    for (edit, number), score in zip(edits, scored.edits, strict=True):
+        if number:
+            continue
+        name = escape(edit.name)
+        beaten_by = [c.trial for c in front if search.beats(c, score)]
+        tied = [c.trial for c in front if search.ties(c, score)]
+        beaten = [c.trial for c in front if search.beats(score, c)]
+        verdict = (
+            f"{name}: the search's best {_trials(beaten_by)} {'beats' if len(beaten_by) == 1 else 'beat'} it "
+            "on both refusals and KL."
+            if beaten_by
+            else f"{name}: no trial of the search beats it on both refusals and KL"
+            + (f"; it ties with {_trials(tied)}" if tied else "")
+            + (f"; it beats the search's best {_trials(beaten)} on both." if beaten else ".")
+        )
+        console.print(verdict if reliable else f"Not reliable: {verdict}")
+        if outside := search.outside_space(edit, run.settings.search, layers, components):
+            console.print(f"  The search couldn't have drawn it: {escape('; '.join(outside))}.")
+        else:
+            console.print("  The search could have drawn it.")

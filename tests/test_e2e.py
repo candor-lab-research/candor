@@ -194,6 +194,9 @@ def test_init_and_run_prepare_every_stage_resume_and_follow_settings(tmp_path):
     searched = runner.invoke(app, ["search", str(run_folder), "--trials", "2"])
     assert searched.exit_code == 0, searched.output
     assert "Trials no other beats on both refusals and KL" in searched.output
+    scored = runner.invoke(app, ["score", str(run_folder), "--trial", "2"])
+    assert scored.exit_code == 0, scored.output
+    assert "trial-2 scores as it did in the search" in scored.output
     trial = runner.invoke(app, ["measure", str(run_folder), "--trial", "1", "--limit", "2"])
     assert trial.exit_code == 0, trial.output
     assert "unlabelled" not in trial.output
