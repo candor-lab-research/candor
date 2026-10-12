@@ -19,13 +19,15 @@ and merged weights in Q4_K_M). (Decided 2026-10-11: the user isn't tied to Bioni
 | 3 | Qwen3.5-9B, a thinking model: scored with thinking on at your settings; residuals read on a pod | Defined at the start of the phase, against heretic's Trial 161 | |
 | 4 | K2-Horizon at your real settings | Measured honestly with its own chat template (Bionic couldn't parse it; llama-server's reader is to be checked) and the reasoning level you use, then improved | |
 
-Pods only where the Mac can't cope: reading residuals for Qwen3.5-9B and K2 (16-bit, 18-19 GB).
-Phase 3 builds a pod bootstrap script and an in-pod watchdog that deletes the pod at a budget, and
-checks them on rude-llama first (about $0.30). Top up Runpod before phase 3 (about $3.55 left).
+From phase 3 every heavy job runs on a pod, not the Mac (the user's decision, 2026-10-12): the
+rude-llama search of phase 2 and its measurements are the last on the Mac. So candor's whole
+pipeline (convert, residuals, search, measure) must run on a pod. Phase 3 builds a pod bootstrap
+script and an in-pod watchdog that deletes the pod at a budget, and checks them on rude-llama first
+(about $0.30). Top up Runpod before phase 3 (about $3.55 left, far short of searches on pods).
 
 Every step gets an independent review before it is called done; its findings are fixed with
-tests and the fixes verified until a review comes back clean. Heavy jobs on the Mac (converting
-a real model, reading residuals, a search) wait for the user's go.
+tests and the fixes verified until a review comes back clean. Heavy jobs (converting a real model,
+reading residuals, a search) wait for the user's go.
 
 Results of each phase, numbers only, are in `results/` (phase 2: `results/phase-2-rude-llama.md`).
 
