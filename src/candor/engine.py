@@ -69,7 +69,7 @@ class LlamaServer:
 
     def start(self, timeout: float = 600) -> None:
         """Start llama-server and wait until it serves the model. Paths in extra must be absolute."""
-        if _port_in_use(self.port):
+        if port_in_use(self.port):
             raise ServerError(f"port {self.port} is already in use, so another server would answer instead")
         # Every request starts from position 0 (see _complete), so the RAM prompt cache and context
         # checkpoints are never used. Turning them off saves copying slot states to and from up to
@@ -337,6 +337,6 @@ def _free_port() -> int:
         return s.getsockname()[1]
 
 
-def _port_in_use(port: int) -> bool:
+def port_in_use(port: int) -> bool:
     with socket.socket() as s:
         return s.connect_ex(("127.0.0.1", port)) == 0

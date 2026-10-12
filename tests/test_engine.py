@@ -193,7 +193,7 @@ def test_a_busy_port_is_refused(files):
 def test_a_server_serving_another_model_is_refused(files, tmp_path, monkeypatch, stop_later):
     folder, _, _ = files
     with server(folder, "base.gguf") as running:
-        monkeypatch.setattr(engine, "_port_in_use", lambda _: False)
+        monkeypatch.setattr(engine, "port_in_use", lambda _: False)
         sleeper = stub(tmp_path, "exec sleep 60")
         other = LlamaServer(sleeper, folder / "merged.gguf", tmp_path / "server.log", port=running.port)
         stop_later(other)
@@ -203,7 +203,7 @@ def test_a_server_serving_another_model_is_refused(files, tmp_path, monkeypatch,
 
 
 def test_a_port_that_never_answers_cannot_hold_up_the_start(tmp_path, monkeypatch):
-    monkeypatch.setattr(engine, "_port_in_use", lambda _: False)
+    monkeypatch.setattr(engine, "port_in_use", lambda _: False)
     with socket.socket() as silent:
         silent.bind(("127.0.0.1", 0))
         silent.listen()

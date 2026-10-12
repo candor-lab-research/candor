@@ -2,6 +2,7 @@
 
 import json
 import os
+import shlex
 import shutil
 import signal
 import subprocess
@@ -33,7 +34,7 @@ from rich.table import Table
 from transformers import AutoTokenizer
 from transformers.utils import logging as transformers_logging
 
-from . import checks, config, export, measure, search, source, targets
+from . import checks, config, export, measure, search, serve, source, targets
 from .convert import ConversionError
 from .engine import LLAMA_CPP_RELEASE, ServerError
 from .run import PROMPT_SETS, Run, RunError
@@ -670,6 +671,105 @@ def export_command(
         f"uv run candor compare {folder} {edit.name} {edit.name}-exported",
     ):
         console.print(escape(f"  {command}"), soft_wrap=True)
+
+
+@app.command("serve")
+def serve_command(
+    folder: Annotated[Path, typer.Argument(help="A run folder made by candor init.")],
+    trial: Annotated[
+        int | None,
+        typer.Option(
+            help="Serve this trial's export, made by candor export, by the number shown; without it, the "
+            "unedited model."
+        ),
+    ] = None,
+    heretic: Annotated[
+        Path | None,
+        typer.Option(help="A heretic study's journal (.jsonl), to serve the export of one of its trials."),
+    ] = None,
+    port: Annotated[
+        int, typer.Option(min=1, max=65535, help="The port for the chat page and the API.")
+    ] = 8080,
+    context: Annotated[
+        int, typer.Option(min=256, help="Tokens of context, at most the model's own limit.")
+    ] = 16384,
+) -> None:
+    """Run the unedited model or a trial's export in llama-server as candor measures it: the run's KV
+    cache type and chat template settings, with today's date. It first shows the command, the
+    settings and how the chat template renders a first message, so the mode (such as thinking) is
+    plain before you chat; then it serves llama-server's chat page until Ctrl-C."""
+    console = Console()
+    folder = folder.expanduser()
+    if heretic is not None and trial is None:
+        raise typer.BadParameter("say which of the study's trials with --trial", param_hint="--heretic")
+
+    def report(message: str) -> None:
+        console.print(f"[dim]{escape(message)}[/]")
+
+    try:
+        with _stopped_by_signals():
+            run = Run.open(folder, report)
+            if trial is None:
+                name = "the unedited model"
+                with run.locked():
+                    _, model = run.gguf()
+            else:
+                if heretic is not None:
+                    edit = measure.heretic_trial(heretic.expanduser(), trial, run.settings.edit.row_norm)
+                else:
+                    edit = search.trial_edit(run, trial)
+                name = edit.name
+                with run.locked():
+                    model, _ = export.exported(run, edit)
+            limit = run.context_limit
+            context = min(context, limit) if limit else context
+            args = serve.arguments(run, model, port, context)
+            settings = serve.chat_settings(run)
+            system = run.settings.deployment.system_prompt
+            console.print(f"Serving {escape(name)}: {escape(str(model))}")
+            console.print(
+                f"KV cache {run.settings.deployment.kv_cache}, {context} tokens of context, chat template "
+                f"settings: {escape(json.dumps(settings)) if settings else 'none'}. Answers are sampled with "
+                "llama-server's defaults, as apps do; measurements answer greedily."
+            )
+            console.print(shlex.join(args), markup=False, highlight=False, soft_wrap=True, style="dim")
+            log = run.path("private", "logs", "serve.log")
+            process = serve.start(args, log)
+            try:
+                console.print("A first message of Hello reaches the model as:")
+                console.print(serve.sample(run, port), markup=False, highlight=False)
+                console.print(
+                    "In the chat page's Settings, then in a new chat (a chat keeps the settings it began "
+                    "with):"
+                )
+                if system:
+                    console.print("  set the system message to the one measured, between the lines:")
+                    console.print("---", system, "---", sep="\n", markup=False, highlight=False)
+                else:
+                    console.print("  leave the system message empty, as measured")
+                console.print(
+                    "  keep the reasoning menu on Default: its other choices replace the template settings, "
+                    "and its Low, Medium and High are token budgets for thinking, not the model's own effort "
+                    "levels"
+                )
+                console.print(f"Chat at http://127.0.0.1:{port}, llama-server's own page. Ctrl-C stops it.")
+                code = process.wait()
+                console.print(
+                    f"llama-server stopped by itself with code {code}; its log is {escape(str(log))}"
+                )
+            except KeyboardInterrupt:
+                console.print("Stopped.")
+            finally:
+                serve.stop(process)
+    except config.ConfigError as error:
+        console.print(f"[red]{escape(str(error))}[/]")
+        raise typer.Exit(COULD_NOT_INSPECT) from None
+    except (RunError, ToolchainError, ConversionError, ServerError, serve.ServeError) as error:
+        console.print(f"[red]candor serve stopped:[/] {escape(str(error))}")
+        raise typer.Exit(FAILED_CHECK) from None
+    except Exception as error:
+        console.print(f"[red]candor serve stopped on an unexpected error:[/] {escape(_where(error))}")
+        raise typer.Exit(COULD_NOT_INSPECT) from None
 
 
 @app.command("search")

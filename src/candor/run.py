@@ -367,14 +367,19 @@ class Run:
     def server(
         self, model: Path, adapters: Sequence[Path] = (), context_per_slot: int = 8192, parallel: int = 4
     ) -> LlamaServer:
-        cache = self.settings.deployment.kv_cache
-        extra = ["--cache-type-k", cache, "--cache-type-v", cache]
-        if cache not in {"f32", "f16", "bf16"}:
-            extra += ["-fa", "on"]  # llama.cpp refuses a quantised V cache without flash attention
+        extra = self.cache_flags()
         self.path("logs").mkdir(exist_ok=True)
         binary = toolchain.binaries() / "llama-server"
         log = self.path("logs", "server.log")
         return LlamaServer(binary, model, log, adapters, parallel, context_per_slot, extra=extra)
+
+    def cache_flags(self) -> list[str]:
+        """llama-server's flags for the KV cache type the run deploys with."""
+        cache = self.settings.deployment.kv_cache
+        flags = ["--cache-type-k", cache, "--cache-type-v", cache]
+        if cache not in {"f32", "f16", "bf16"}:
+            flags += ["-fa", "on"]  # llama.cpp refuses a quantised V cache without flash attention
+        return flags
 
     # Prompt ids
 

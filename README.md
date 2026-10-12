@@ -37,6 +37,7 @@ uv run candor measure runs/rude --trial 37                     # one of its tria
 uv run candor score runs/rude --heretic STUDY.jsonl --trial 170     # where it would sit in the search
 uv run candor export runs/rude --trial 37                      # merge it into the GGUF you run
 uv run candor measure runs/rude --trial 37 --exported          # measure that exact file
+uv run candor serve runs/rude --trial 37                       # chat with it in llama-server
 ```
 
 - `inspect` reads only the config, tokenizer and file headers, so it is quick and needs no GPU. Its
@@ -90,6 +91,15 @@ uv run candor measure runs/rude --trial 37 --exported          # measure that ex
   unchanged. Only `exports/EDIT/RUN-EDIT-QUANTISATION.gguf` is kept. Merging before quantising shifts
   the result a little, so `measure --exported` measures that exact file, and `compare` sets it against
   the unedited model and against the trial measured with adapters.
+- `serve` runs the unedited model, or a trial's current export, in llama-server as candor measures
+  it: the run's KV cache type and chat template settings, with today's date as apps write it. Before
+  serving it shows the command, the settings and how the server's own template settings render a
+  first message of Hello, so a thinking model's mode is plain before you chat. The chat page can
+  override both the system message and the template settings, and remembers them, so serve says what
+  to set there: the measured system message, and the reasoning menu on Default (its Low, Medium and
+  High are token budgets for thinking, not the model's effort levels). Chats are sampled with
+  llama-server's defaults, as apps sample; measurements answer greedily. It serves llama-server's
+  chat page (`--port`, 8080) until Ctrl-C; the server's log goes to `private/`.
 - Reading residuals needs the model in 16 bits on the GPU. `run` checks this before downloading or
   converting anything: rude-llama fits on an 18 GB Mac; Qwen3.5-9B and K2-Horizon need a pod.
 
