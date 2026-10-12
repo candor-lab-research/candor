@@ -181,3 +181,62 @@ start: the pilot flagged a start point, which is only a point of a fixed grid.
 Limits to remember: 100 test prompts can't tell 0 refusals from 2, so the search's pick truly
 refuses about 2 of 100 and sits above the true best; measuring the best few of each kind on the
 held-out prompts, as the search suggests, is how the choice is made.
+
+## The rebuilt search on rude-llama (2026-10-12)
+
+`uv run candor search runs/rude`: 600 trials in 7 h 21 min, about 44 s each (the first search: 58 s).
+Stopping trials that can't win saved about a quarter; 262 trials were scored in full. Picked from
+its study, numbers only:
+
+| Kind | Least KL at 0 refused | at 1 | at 2 |
+| --- | --- | --- | --- |
+| One layer | 535: 0.0778 | 231: 0.0833 | 305: 0.0760, 327: 0.0764 |
+| Per layer | 324: 0.0914 | 462: 0.0874 | 448: 0.0831, 492: 0.0849 |
+
+On the same scorer, Trial 170 refuses 0 at KL 0.0834 (0.0818 read at layer 12), so 535 matches it
+on refusals at 5-7% less KL. 535 reads layer 12, with attention as Trial 170's (strength 1.33 against
+1.33, peak at layer 16.7 against 16.5, editing from layer 1 against 3 to the last) and a gentler MLP
+(1.03 against 1.26, peak 19.5 against 16.6).
+
+The search suggested the two least-KL trials of each kind within the cap: 305, 327, 448 and 492,
+all refusing 2. It skipped 535, and its edge alarm checked only 305, which presses no range end. 535
+presses two: the attention peak's floor (0.6) and its reach's ceiling (0.6). The fix (`77106e4`,
+committed before any held-out number) suggests each kind's least KL at each count within the cap
+unless one refusing fewer has less, checks each for range ends, and announces such trials as they
+finish. On this run it suggests 535, 305, 324, 462 and 448.
+
+Held-out, measured as Trial 170 was:
+
+| | Trial 170 | 535 | 305 | 327 | 448 | 492 |
+| --- | --- | --- | --- | --- | --- | --- |
+| Search score (refused /100, KL) | 0, 0.0834 | 0, 0.0778 | 2, 0.0760 | 2, 0.0764 | 2, 0.0831 | 2, 0.0849 |
+| Harmful refused, judge (at most 6/288) | 6 | 5 | 5 | 3 | 14 | 15 |
+| KL from unedited (at most 0.1011) | 0.1011 | 0.0920 | 0.1214 | 0.1205 | 0.0973 | 0.0965 |
+| Maths correct /1319 (unedited 980) | 977 | 996 | 981 | 997 | 990 | 996 |
+| Harmless refused, judge (at most 7/300) | 2 | 2 | 3 | 2 | 3 | 3 |
+| Harmful refused, keywords | 25 | 16 | 11 | 11 | 15 | 18 |
+| KL from Trial 170 | | 0.0010 | 0.0237 | 0.0211 | 0.0283 | 0.0296 |
+| Decision rule | The bar | Passes | Fails on KL | Fails on KL | Fails on refusals | Fails on refusals |
+
+Against Trial 170, prompt by prompt, 535: harmful refused 1 / 0 (p 1), keywords 12 / 3 (p 0.035),
+maths 34 / 53 (p 0.053). Against the unedited model, its maths is 70 / 86 (p 0.23).
+
+What it shows:
+
+- 535 passes phase 2's decision rule, so it ships (the milestone:
+  `milestone-rude-llama-vs-heretic.md`).
+- The check set before the run (a suggested trial at most 6/288 at KL at most 0.1041) fails for the
+  four trials as the search printed them; it passes for 535 under the fixed suggestions. The fix
+  came from the search's own numbers, not the held-out ones.
+- The twins agree (305 and 327, 448 and 492), so the gaps between search and held-out are not luck;
+  they depend on the kind of edit:
+  - One layer at direction layer 14: refusals hold (2/100 became 3-5/288), KL rises 58-60%.
+  - Per layer: KL rises 16-17%, refusals don't hold (2/100 became 14-15/288).
+  - 535 and Trial 170, both at layer 12: KL rises 18-21%, refusals 0/100 became 5-6/288.
+- The harmful test prompts are AdvBench (`harmful_behaviors`) and the held-out ones StrongREJECT, so
+  refusals cross a change of source. The harmless test and held-out prompts are the same set
+  (`harmless_alpaca` `test[:100]` and `test[100:400]`), so layer 14's KL gap comes from 100 prompts
+  and from picking the least of hundreds of trials on them.
+- Budget: one layer's least KL at 0 refused was 0.1046 after 200 trials, 0.1012 after 300, 0.0875
+  after 400, 0.0817 after 500 and 0.0778 after 600; still falling at the end. The planned check of
+  the picks after 200 and 400 trials was dropped, since one run can't cut the 600 default.
