@@ -161,6 +161,15 @@ against 30% at 600 trials). The time saved is to be measured on rude-llama. 300 
 by default. The search's report flags a best trial pressing on the end of a range. Widening ranges automatically is deferred: the
 landscapes can't say whether it matters, and the edge alarm on a real model will.
 
+A check on six randomised landscapes (rand1-rand6, made after the design was chosen; 60 runs
+each, 100 on rand5) gave the share of runs within 10% of the best, pooled: today's search 22% at
+400 trials and 26% at 9.6 hours of scoring (about its 600 trials); without stopping, the chosen
+design (which the built stop rule doesn't change) 46% and 50%. It was at or above today's search on
+every landscape and budget, significantly on most; the only cells below it were one run in 60
+within 3%. rand2, whose best sits on the attention strength's ceiling with mid-depth peaks like the
+harshest landscape, stayed hard for every design (at most 22%). The references are good to 1-2%,
+so within-3% figures are soft. A gentler stop rule gained nothing per trial and cost time.
+
 The 4-trial pilot (2026-10-12) took 57-91 s a trial against 46-67 s for the old search's trials
 refusing as many (71, 75, 28 and 98 of 100 against the old trials' times by refusals). Scoring a
 chunk at a time left the model idle while the judge worked, and short refusals left slots empty
