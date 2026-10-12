@@ -24,6 +24,7 @@ where it would sit among the search's trials and whether the search could have d
 """
 
 import json
+import math
 import time
 import warnings
 from collections.abc import Callable, Iterable, Iterator
@@ -319,10 +320,11 @@ def _scored_in_full(found: Found) -> list[Candidate]:
 
 
 def front(found: list[Candidate]) -> list[Candidate]:
-    """The candidates no other beats on both refusals and KL, fewest refusals first."""
+    """The candidates no other beats on both refusals and KL, fewest refusals first. KL is compared as
+    shown."""
     kept: list[Candidate] = []
     for candidate in sorted(found, key=lambda c: (c.refusals, c.kl)):
-        if not kept or candidate.kl < kept[-1].kl:
+        if not kept or round(candidate.kl, KL_DIGITS) < round(kept[-1].kl, KL_DIGITS):
             kept.append(candidate)
     return kept
 
@@ -336,6 +338,13 @@ def within_cap(found: Found, scope: str, cap: int) -> list[Candidate]:
     """The scope's trials scored in full that refuse no more than cap, least KL first."""
     kept = [c for c in _scored_in_full(found) if scope_of(c.params) == scope and c.refusals <= cap]
     return sorted(kept, key=lambda c: (c.kl, c.refusals))
+
+
+def to_measure(found: Found, scope: str, cap: int) -> list[Candidate]:
+    """The scope's trials within the cap with the least KL at each count refused, fewest refused first,
+    leaving out any that one refusing fewer beats. 100 test prompts can't tell 0 refused from 2, so
+    the held-out prompts choose between them."""
+    return front(within_cap(found, scope, cap))
 
 
 def fewest_refused(found: Found, scope: str) -> Candidate | None:
@@ -417,8 +426,8 @@ class Search:
     ) -> tuple[Found, float]:
         """Run trials until target are finished, taking turns between the kinds of edit, each kind up to
         search.trials_per_scope. started gets the trials already finished and the target; finished is
-        called after each trial, with a line to show when it has the least KL of its kind within the
-        cap so far. Returns the trials and the mean seconds per trial."""
+        called after each trial, with a line to show when it is within the cap and no earlier trial of
+        its kind refused as few with as little KL. Returns the trials and the mean seconds per trial."""
         run, space = self.run, self.run.settings.search
         with run.locked():
             run.check_remote_code()
@@ -440,20 +449,22 @@ class Search:
                         base = scorer.score({}).refusals
                         first.set_user_attr("base_refusals", base)
                     run.report(f"The unedited model refuses {base} of {len(harmful)} test prompts")
-                    least = {scope: self._least(studies[scope]) for scope in SCOPES}
+                    kept = {scope: self._within_cap(studies[scope]) for scope in SCOPES}
                     while self._done(studies) < target:
                         scope = self._next(studies)
                         number, score = self._trial(studies, scope, scorer, adapters)
-                        before = least[scope]
-                        best = (
-                            score.judged == len(harmful)
-                            and score.refusals <= space.max_refusals
-                            and (before is None or score.kl < before)
-                        )
-                        least[scope] = score.kl if best else least[scope]
+                        within = score.judged == len(harmful) and score.refusals <= space.max_refusals
+                        shown = round(score.kl, KL_DIGITS)
+                        before = [
+                            round(kl, KL_DIGITS) for refusals, kl in kept[scope] if refusals <= score.refusals
+                        ]
+                        best = within and shown < min(before, default=math.inf)
+                        if within:
+                            kept[scope].append((score.refusals, score.kl))
                         finished(
                             f"Trial {number}, {scope}: {score.refusals} of {len(harmful)} refused, KL "
-                            f"{score.kl:.4f}, the least KL of its kind within the cap so far"
+                            f"{score.kl:.4f}, the least KL so far of its kind refusing {score.refusals} "
+                            "or fewer"
                             if best
                             else None
                         )
@@ -617,15 +628,14 @@ class Search:
         open_scopes = [s for s in SCOPES if len(_completed(studies[s])) < space.trials_per_scope]
         return min(open_scopes, key=lambda s: (len(_completed(studies[s])), SCOPES.index(s)))
 
-    def _least(self, study: optuna.Study) -> float | None:
-        """The least KL among the study's trials scored in full within the cap."""
+    def _within_cap(self, study: optuna.Study) -> list[tuple[int, float]]:
+        """The refusals and KL of the study's trials scored in full within the cap."""
         cap = self.run.settings.search.max_refusals
-        kept = [
-            t.user_attrs["kl"]
+        return [
+            (t.user_attrs["refusals"], t.user_attrs["kl"])
             for t in _completed(study)
             if not t.user_attrs["stopped"] and t.user_attrs["refusals"] <= cap
         ]
-        return min(kept, default=None)
 
     def _trial(
         self,

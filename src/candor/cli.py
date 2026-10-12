@@ -686,29 +686,36 @@ def search_command(
     console.print(table)
     _, layers, _, _ = run.shape
     cap = space.max_refusals
-    console.print(f"The least KL of each kind within the cap ({cap} refused):")
+    console.print(
+        f"The least KL of each kind at each count within the cap ({cap} refused), unless a trial "
+        "refusing fewer has less:"
+    )
     picks = []
     for scope in search.SCOPES:
-        kept = search.within_cap(found, scope, cap)
-        top = kept[0] if kept else search.fewest_refused(found, scope)
-        if top is None:
+        best = search.to_measure(found, scope, cap)
+        fewest = search.fewest_refused(found, scope)
+        if fewest is None:
             console.print(f"  {scope}: no trial scored in full yet")
             continue
-        described = f"trial {top.trial}, {top.direction}, {top.refusals} refused, KL {top.kl:.4f}"
-        if kept:
-            console.print(f"  {scope}: {described}")
-        else:
-            console.print(f"  {scope}: none refused {cap} or fewer; the fewest refused: {described}")
-        # The best of the spread start is a point of a fixed grid, so its edges say nothing yet.
+        # The spread start is a fixed grid, so its trials' edges say nothing yet.
         aimed = (
             sum(search.scope_of(t.params) == scope for t in found.trials.values()) > space.startup_per_scope
         )
-        if aimed and (edges := search.at_edges(top.params, space, layers)):
-            console.print(
-                f"    It presses on the edge of the search's ranges ({escape('; '.join(edges))}), so a "
-                "better edit may lie outside them."
+        for candidate in best or [fewest]:
+            described = (
+                f"trial {candidate.trial}, {candidate.direction}, {candidate.refusals} refused, "
+                f"KL {candidate.kl:.4f}"
             )
-        picks += [c.trial for c in kept[:2]] if kept else [top.trial]
+            if best:
+                console.print(f"  {scope}: {described}")
+            else:
+                console.print(f"  {scope}: none refused {cap} or fewer; the fewest refused: {described}")
+            if aimed and (edges := search.at_edges(candidate.params, space, layers)):
+                console.print(
+                    f"    It presses on the edge of the search's ranges ({escape('; '.join(edges))}), "
+                    "so a better edit may lie outside them."
+                )
+            picks.append(candidate.trial)
     if len(found.trials) < total:
         console.print(
             f"Trials took about {seconds:.0f} s each, so all {total} would take about "
@@ -716,7 +723,7 @@ def search_command(
             "trials aim at them, so allow more. Run candor search again to carry on."
         )
     elif picks:
-        console.print("Measure the best of each kind on the held-out prompts:")
+        console.print("Measure each on the held-out prompts:")
         for number in picks:
             console.print(escape(f"  uv run candor measure {folder} --trial {number}"), soft_wrap=True)
 

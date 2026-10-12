@@ -72,10 +72,11 @@ uv run candor score runs/rude --heretic STUDY.jsonl --trial 170     # where it w
   which leaves every trial the sampler draws unchanged; KL is read from the 100 harmless test
   prompts. Nothing a model writes is kept. It resumes where it
   stopped, refuses to carry on a search made under other settings, and `--trials N` stops early to
-  time it. It ends with the fully scored trials no other beats on both refusals and KL, the
-  least-KL trial of each kind within the cap (or, failing that, the one that refused fewest),
-  flagged if it presses on the edge of a range, and the commands to measure the best of each kind
-  on the held-out prompts. The results file explains the design:
+  time it. It ends with the fully scored trials no other beats on both refusals and KL; for each
+  kind, the least-KL trial at each count within the cap unless one refusing fewer has less (or,
+  failing that, the one that refused fewest), each flagged if it presses on the edge of a range;
+  and the commands to measure each on the held-out prompts, since 100 test prompts can't tell 0
+  refused from 2. The results file explains the design:
   `results/phase-2-rude-llama.md`.
 - `score` scores one edit exactly as the search scores its trials, without adding it to the search.
   A heretic trial is scored as rebuilt, and at the nearest whole layer as the search could draw it;

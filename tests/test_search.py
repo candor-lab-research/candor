@@ -311,14 +311,14 @@ def test_search_and_measure_a_trial_from_the_command_line(tiny):
     assert "so all 4 would take about" in shown
     assert "Trial 1, one layer: 1 of 3 refused, KL" in shown
     assert "Trial 2, per layer: 1 of 3 refused, KL" in shown
-    assert "The least KL of each kind within the cap (2 refused): one layer: trial 1, layer" in shown
+    assert "The least KL of each kind at each count within the cap (2 refused)" in shown
     finished_search = runner.invoke(app, ["search", str(folder)])
     assert finished_search.exit_code == 0, finished_search.output
     commands = [line.split() for line in finished_search.output.splitlines() if "candor measure" in line]
     found = search.load(run.Run.open(folder))
     assert found is not None
-    expected = [c.trial for scope in search.SCOPES for c in search.within_cap(found, scope, 2)[:2]]
-    assert [int(words[-1]) for words in commands] == expected and len(expected) == 4
+    expected = [c.trial for scope in search.SCOPES for c in search.to_measure(found, scope, 2)]
+    assert [int(words[-1]) for words in commands] == expected and len(expected) >= 2
     measured = runner.invoke(app, ["measure", str(folder), "--trial", "1", "--limit", "1"])
     assert measured.exit_code == 0, measured.output
     assert "candor measure: trial-1-first-1" in measured.output
@@ -475,34 +475,37 @@ def scripted(monkeypatch, scores: list[Score]):
     return asked
 
 
-def test_a_trial_is_announced_when_it_has_the_least_kl_of_its_kind_within_the_cap(tiny, monkeypatch):
-    small(tiny, trials=3)
+def test_a_trial_is_announced_when_none_of_its_kind_refused_as_few_with_as_little_kl(tiny, monkeypatch):
+    small(tiny, trials=4)
     scripted(
         monkeypatch,
         [
             Score(3, 0, 0, 0.0, 3),  # the unedited model
             Score(1, 0, 0, 0.5, 3),  # 1, one layer: the first within the cap
-            Score(3, 0, 0, 0.1, 3),  # 2, per layer: over the cap
-            Score(0, 0, 0, 0.6, 3),  # 3, one layer: more KL
-            Score(2, 0, 0, 0.2, 3),  # 4, per layer: the first of its kind within the cap
-            Score(1, 0, 0, 0.4, 3),  # 5, one layer, in a new session: less KL
-            Score(0, 0, 0, 0.1, 1),  # 6, per layer: stopped early, so not scored in full
+            Score(0, 0, 0, 0.1, 1),  # 2, per layer: stopped early, so not scored in full
+            Score(0, 0, 0, 0.6, 3),  # 3, one layer: more KL, but the first to refuse none
+            Score(2, 0, 0, 0.2, 3),  # 4, per layer: the first of its kind scored in full
+            Score(0, 0, 0, 0.55, 3),  # 5, one layer, in a new session: less KL than trial 3
+            Score(0, 0, 0, 0.1, 1),  # 6, per layer: stopped early again
+            Score(2, 0, 0, 0.49996, 3),  # 7, one layer: trial 1's KL as shown, refusing more
+            Score(1, 0, 0, 0.15, 3),  # 8, per layer: the first to refuse 1 or fewer in full
         ],
     )
     said = []
     Search(tiny).search(4, finished=said.append)
-    Search(tiny).search(6, finished=said.append)
+    Search(tiny).search(8, finished=said.append)
     assert [line and line.split(":")[0] for line in said] == [
         "Trial 1, one layer",
         None,
-        None,
+        "Trial 3, one layer",
         "Trial 4, per layer",
         "Trial 5, one layer",
         None,
+        None,
+        "Trial 8, per layer",
     ]
-    assert (
-        said[0]
-        == "Trial 1, one layer: 1 of 3 refused, KL 0.5000, the least KL of its kind within the cap so far"
+    assert said[0] == (
+        "Trial 1, one layer: 1 of 3 refused, KL 0.5000, the least KL so far of its kind refusing 1 or fewer"
     )
 
 
@@ -1081,6 +1084,27 @@ def test_within_cap_keeps_the_cap_and_puts_the_least_kl_first():
     assert search.fewest_refused(search.Found({}, 1), search.PER_LAYER) is None
 
 
+def test_to_measure_keeps_the_least_kl_at_each_count_unless_one_refusing_fewer_has_less():
+    # As on rude-llama: none refused at a little more KL than the least within the cap.
+    trials = [
+        made(535, 0, 0.0778, 12),
+        made(231, 1, 0.0833, 14),
+        made(305, 2, 0.0760, 14),
+        made(327, 2, 0.0764, 14),
+        made(131, 3, 0.0661, 14),
+        made(448, 2, 0.0831),
+        made(462, 1, 0.0874),
+        made(324, 0, 0.0914),
+    ]
+    found = search.Found({t.user_attrs["number"]: t for t in trials}, 99)
+    assert [c.trial for c in search.to_measure(found, search.ONE_LAYER, 2)] == [535, 305]
+    assert [c.trial for c in search.to_measure(found, search.PER_LAYER, 2)] == [324, 462, 448]
+    assert [c.trial for c in search.to_measure(found, search.ONE_LAYER, 0)] == [535]
+    assert search.to_measure(found, search.PER_LAYER, -1) == []
+    close = search.Found({1: made(1, 0, 0.07604, 12), 2: made(2, 2, 0.07601, 12)}, 99)
+    assert [c.trial for c in search.to_measure(close, search.ONE_LAYER, 2)] == [1]  # the same KL as shown
+
+
 def test_a_stopped_trial_is_never_a_candidate():
     found = search.Found({1: made(1, 1, 0.3), 2: made(2, 3, 0.01, judged=1)}, 1)
     assert [c.trial for c in search.candidates(found)] == [1]
@@ -1097,7 +1121,7 @@ def test_a_new_session_announces_only_less_kl_than_the_last_sessions(tiny, monke
             Score(3, 0, 0, 0.1, 3),  # 2, per layer: over the cap
             Score(2, 0, 0, 0.3, 3),  # 3, one layer: at the cap, the least KL
             Score(3, 0, 0, 0.2, 3),  # 4, per layer: over the cap, in a new session
-            Score(1, 0, 0, 0.4, 3),  # 5, one layer: more KL than trial 3
+            Score(2, 0, 0, 0.4, 3),  # 5, one layer: more KL than trial 3
         ],
     )
     said = []
@@ -1184,11 +1208,23 @@ def test_a_search_holding_only_one_kinds_study_still_loads(tiny):
     assert found is not None and found.trials == {}
 
 
-def test_the_report_names_each_kinds_best_its_edges_and_what_to_measure(tiny):
+def test_the_report_names_each_kinds_best_at_each_count_its_edges_and_what_to_measure(tiny, monkeypatch):
     small(tiny, trials=3)
     tiny.settings.search.strength = (1.0, 1.0)  # every trial presses on the strength's ends
     config.write(tiny.folder.parent, "cli", tiny.settings, "made by a test")
     folder = tiny.folder.parent / "cli"
+    scripted(
+        monkeypatch,
+        [
+            Score(3, 0, 0, 0.0, 3),  # the unedited model
+            Score(0, 0, 0, 0.30, 3),  # 1, one layer: refuses none
+            Score(1, 0, 0, 0.25, 3),  # 2, per layer
+            Score(2, 0, 0, 0.20, 3),  # 3, one layer: less KL, refusing more
+            Score(3, 0, 0, 0.10, 3),  # 4, per layer: over the cap
+            Score(1, 0, 0, 0.35, 3),  # 5, one layer: trial 1 beats it
+            Score(2, 0, 0, 0.26, 3),  # 6, per layer: trial 2 beats it
+        ],
+    )
     result = CliRunner(env={"COLUMNS": "200"}).invoke(app, ["search", str(folder)])
     assert result.exit_code == 0, result.output
     shown = flat(result.output)
@@ -1198,19 +1234,19 @@ def test_the_report_names_each_kinds_best_its_edges_and_what_to_measure(tiny):
     for c in search.candidates(found):
         row = rf"^ *{c.trial} +{c.direction} +{c.refusals} +{c.keyword_refusals} +{c.kl:.4f} *$"
         assert re.search(row, result.output, re.M)
-    expected = []
-    for scope in search.SCOPES:
-        kept = search.within_cap(found, scope, 2)
-        assert len(kept) == 3 and kept[0].kl < kept[-1].kl
-        top = kept[0]
-        assert (
-            f"{scope}: trial {top.trial}, {top.direction}, {top.refusals} refused, KL {top.kl:.4f}" in shown
-        )
-        expected += [c.trial for c in kept[:2]]
+    picks = {scope: search.to_measure(found, scope, 2) for scope in search.SCOPES}
+    assert {scope: [c.trial for c in kept] for scope, kept in picks.items()} == {
+        search.ONE_LAYER: [1, 3],
+        search.PER_LAYER: [2],
+    }
+    for scope, kept in picks.items():
+        for c in kept:
+            assert f"{scope}: trial {c.trial}, {c.direction}, {c.refusals} refused, KL {c.kl:.4f}" in shown
+    assert "one layer: trial 5" not in shown and "per layer: trial 6" not in shown
     commands = [line.split() for line in result.output.splitlines() if "candor measure" in line]
-    assert [int(words[-1]) for words in commands] == expected
-    assert shown.count("It presses on the edge of the search's ranges (") == 2
-    assert shown.count("attn.strength 1, at its floor 1; attn.strength 1, at its ceiling 1") == 2
+    assert [int(words[-1]) for words in commands] == [1, 3, 2]
+    assert shown.count("It presses on the edge of the search's ranges (") == 3
+    assert shown.count("attn.strength 1, at its floor 1; attn.strength 1, at its ceiling 1") == 3
 
 
 def test_the_edge_alarm_waits_for_the_trials_the_search_aims(tiny):
