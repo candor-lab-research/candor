@@ -68,9 +68,19 @@ taking turns, each starting from 20 evenly spread trials and aiming at the least
 within 10% of the best in 83% of runs at 400 trials and 93% at 600 (today's search: 20% and 23%),
 and was no worse on any landscape tested. Trials that can't win stop early only once 25 fully scored
 trials of their kind refused fewer, which leaves every trial the sampler draws unchanged; stopping
-sooner was faster but missed more on the harshest landscape (17% against 30% at 600 trials). It is not watertight: on the harshest
-landscape it still missed in most runs. Widening ranges automatically is deferred until the edge
-alarm fires on a real model.
+sooner was faster but missed more on the harshest landscape (17% against 30% at 600 trials). It is
+not watertight: on the harshest landscape it still missed in most runs. Widening ranges
+automatically is deferred until the edge alarm fires on a real model.
+
+After the rude-llama search (agreed 2026-10-12, while it ran):
+
+1. Measure the trials it suggests and judge them by point 3.
+2. Work out what it would have suggested after 200 and 400 trials; measure any of those not
+   already measured. One run is one data point: it doesn't cut the 600-trial default by itself.
+3. Midway, every top trial of both kinds pressed an end of a range (MLP strength at 1.5, peaks at
+   0.6, reach at 0.6). If the final picks still do, run one search with only those ends widened, on
+   a pod (the pod set-up's first real job). Widened ranges become the default only if its
+   held-out best beats this run's.
 
 To compare a trial against the rule: `candor compare runs/rude base trial-N` (KL and maths are
 judged against the unedited model) and `candor compare runs/rude heretic-170 trial-N` (head to head).
