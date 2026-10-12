@@ -35,6 +35,8 @@ uv run candor compare runs/rude base heretic-170               # prompt by promp
 uv run candor search runs/rude                                 # search for a better edit, overnight
 uv run candor measure runs/rude --trial 37                     # one of its trials, on held-out prompts
 uv run candor score runs/rude --heretic STUDY.jsonl --trial 170     # where it would sit in the search
+uv run candor export runs/rude --trial 37                      # merge it into the GGUF you run
+uv run candor measure runs/rude --trial 37 --exported          # measure that exact file
 ```
 
 - `inspect` reads only the config, tokenizer and file headers, so it is quick and needs no GPU. Its
@@ -83,13 +85,19 @@ uv run candor score runs/rude --heretic STUDY.jsonl --trial 170     # where it w
   it shows which of the search's best trials beat it on both refusals and KL, and whether the search
   could have drawn it at all. The search's best trial is scored again beside it and should repeat its
   score, which shows the two can be compared. `--trial N` alone scores one of the search's trials.
+- `export` merges a trial's edit into a copy of the model's weights as its adapters apply it, then
+  converts and quantises the copy as the run deploys, checking the edited weights reach the GGUF
+  unchanged. Only `exports/EDIT/RUN-EDIT-QUANTISATION.gguf` is kept. Merging before quantising shifts
+  the result a little, so `measure --exported` measures that exact file, and `compare` sets it against
+  the unedited model and against the trial measured with adapters.
 - Reading residuals needs the model in 16 bits on the GPU. `run` checks this before downloading or
   converting anything: rude-llama fits on an 18 GB Mac; Qwen3.5-9B and K2-Horizon need a pod.
 
 A run folder holds `candor.toml`, `inspect.json`, `gguf/` (the model as an unquantised GGUF of its
 own float type, the deployment quantisation, and `convert.log`), `prompts.json`, `directions.pt`,
 `adapters/`, `measurements/`, `search/` (Optuna's journal and a record of the settings it was made
-with), `scores/` (adapters `score` builds for directions the search has none for), `private/` and
+with), `scores/` (adapters `score` builds for directions the search has none for), `exports/` (the
+GGUFs `export` makes), `private/` and
 `logs/`, each result beside a `.inputs.json` record. llama.cpp itself (release b11524: the
 binaries, checked by sha256, and its converter in its own environment, pinned by
 `src/candor/data/converter-constraints.txt`) is fetched once into `~/.cache/candor`, or

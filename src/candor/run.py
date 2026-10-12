@@ -44,8 +44,16 @@ CHECKED_PER_SET = 3
 # The version of each stage's code, in stage order. Bump a stage's number in any commit that changes
 # the results it builds. Each record holds the numbers of its own stage and every stage before it, so
 # results built by older code are rebuilt along with everything after them. scores holds the adapters
-# candor score builds for edits the search has none for.
-STAGES = {"gguf": 1, "prompts.json": 1, "directions.pt": 1, "adapters": 1, "measurements": 1, "scores": 1}
+# candor score builds for edits the search has none for, and exports the GGUFs candor export ships.
+STAGES = {
+    "gguf": 1,
+    "prompts.json": 1,
+    "directions.pt": 1,
+    "adapters": 1,
+    "measurements": 1,
+    "scores": 1,
+    "exports": 1,
+}
 
 
 class RunError(RuntimeError):
@@ -56,7 +64,7 @@ def digest(value: Any) -> str:
     return hashlib.sha256(json.dumps(value, sort_keys=True).encode()).hexdigest()[:16]
 
 
-def _record(output: Path) -> Path:
+def record_of(output: Path) -> Path:
     return output.with_name(output.name + ".inputs.json")
 
 
@@ -159,12 +167,16 @@ class Run:
         stage = stages.index(output.relative_to(self.folder).parts[0])
         return {**inputs, "code": {name: STAGES[name] for name in stages[: stage + 1]}}
 
-    def fresh(self, output: Path, inputs: dict[str, Any]) -> bool:
+    def current(self, output: Path, inputs: dict[str, Any]) -> bool:
         """Whether output exists and was built from exactly these inputs, by this version of candor."""
-        record = _record(output)
         expected = json.loads(json.dumps(self._with_code(output, inputs)))
-        if output.exists() and _read_record(record) == expected:
+        return output.exists() and _read_record(record_of(output)) == expected
+
+    def fresh(self, output: Path, inputs: dict[str, Any]) -> bool:
+        """Whether output is current, saying why it will be rebuilt when it isn't."""
+        if self.current(output, inputs):
             return True
+        record = record_of(output)
         if output.exists() or record.exists():
             why = "what it was built from has changed" if output.exists() else "it is missing"
             self.report(f"Rebuilding {output.relative_to(self.folder)}: {why}")
@@ -174,7 +186,7 @@ class Run:
         """Replace output with the finished partial and record what it was built from. The output is
         on the disk before its record is, so a crash or power cut at any point leaves either no record
         or a record that matches, never a record trusting a half-written output."""
-        record = _record(output)
+        record = record_of(output)
         record.unlink(missing_ok=True)
         _remove(output)
         sync(partial)
@@ -298,11 +310,13 @@ class Run:
 
     # GGUF
 
-    def _check_disk(self, base_needed: bool, quantized_needed: bool) -> None:
+    def check_disk(self, copies: int, quantized_needed: bool, extra: int = 0) -> None:
+        """Stop unless there is room for this many 16-bit copies of the model, a quantised one, and
+        extra bytes."""
         shapes = source.tensor_shapes(str(self.model_folder))
         weights = sum(math.prod(shape) for shape in shapes.values())
         quantized = config.QUANTIZATIONS[self.settings.deployment.quantization] / 8 if quantized_needed else 0
-        needed = 1.1 * weights * ((2 if base_needed else 0) + quantized)
+        needed = 1.1 * (weights * (2 * copies + quantized) + extra)
         free = shutil.disk_usage(self.folder).free
         if free < needed:
             raise RunError(
@@ -321,14 +335,14 @@ class Run:
         quantized = base if quantization == base_type else out / f"model-{quantization}.gguf"
         quantized_inputs = {"base": digest(base_inputs), "quantization": quantization}
         for leftover in out.iterdir():
-            kept = {base.name, quantized.name, _record(base).name, _record(quantized).name, "convert.log"}
+            kept = {base.name, quantized.name, record_of(base).name, record_of(quantized).name, "convert.log"}
             if leftover.name not in kept:
                 self.report(f"Removing {leftover.relative_to(self.folder)}, which this run no longer uses")
                 _remove(leftover)
         base_fresh = self.fresh(base, base_inputs)
         quantized_fresh = base_fresh if quantized == base else self.fresh(quantized, quantized_inputs)
         if not (base_fresh and quantized_fresh):
-            self._check_disk(not base_fresh, quantized != base and not quantized_fresh)
+            self.check_disk(0 if base_fresh else 1, quantized != base and not quantized_fresh)
         if not base_fresh:
             self.report("Converting to GGUF")
             partial = base.with_name(base.name + ".building")
@@ -501,6 +515,19 @@ class Run:
         torch.save(found, partial)
         self.commit(partial, path, inputs)
         return found
+
+    def edit_directions(self, name: str, layer: float | None) -> torch.Tensor:
+        """The direction an edit removes at each layer: each layer's own when layer is None, otherwise
+        the one read after that layer, which may fall between two."""
+        if not self.path("directions.pt").exists():
+            self.check_memory()
+        found = self.directions()
+        _, layers, _, _ = self.shape
+        if layer is None:
+            return found[1:]
+        if 0 <= layer <= layers - 1:
+            return directions.after_layer(found, layer).expand(layers, -1)
+        raise RunError(f"{name} reads its direction at layer {layer:g}; this model has {layers}")
 
     # Adapters
 

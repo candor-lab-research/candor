@@ -16,8 +16,7 @@ from dataclasses import asdict, dataclass
 from pathlib import Path
 from typing import Any
 
-from . import heretic, kl
-from .directions import after_layer
+from . import export, heretic, kl
 from .engine import LlamaServer
 from .judge import Guard, is_refusal, judged_refusal, read_verdict
 from .kernel import Kernel
@@ -57,12 +56,13 @@ class Edit:
     direction_layer: float | None
     kernels: dict[str, Kernel]
 
+    def strength(self, writer: Writer) -> float:
+        kernel = self.kernels.get(writer.component)
+        return kernel.at(writer.layer) if kernel else 0.0
+
     def strengths(self, writers: list[Writer], names: dict[str, str]) -> dict[str, float]:
         """Each edit target's strength, by its GGUF tensor name."""
-        return {
-            names[w.name]: self.kernels[w.component].at(w.layer) if w.component in self.kernels else 0.0
-            for w in writers
-        }
+        return {names[w.name]: self.strength(w) for w in writers}
 
     def record(self) -> dict[str, Any]:
         kernels = {component: asdict(kernel) for component, kernel in sorted(self.kernels.items())}
@@ -99,18 +99,8 @@ def heretic_trial(journal_path: Path, number: int, row_norm: str) -> Edit:
 def edit_adapters(run: Run, edit: Edit, folder: Path) -> tuple[dict[str, Path], dict[str, Any]]:
     """An edit's own adapters, one per edit target along the direction it reads, written to folder
     unless already there, by GGUF tensor name; and what they are built from."""
-    if not run.path("directions.pt").exists():
-        run.check_memory()
-    found = run.directions()
-    _, layers, _, _ = run.shape
-    layer = edit.direction_layer
-    if layer is None:
-        directions = found[1:]
-    elif 0 <= layer <= layers - 1:
-        directions = after_layer(found, layer).expand(layers, -1)
-    else:
-        raise RunError(f"{edit.name} reads its direction at layer {layer:g}; this model has {layers}")
-    inputs = {**run.adapter_inputs(), "direction_layer": layer}
+    directions = run.edit_directions(edit.name, edit.direction_layer)
+    inputs = {**run.adapter_inputs(), "direction_layer": edit.direction_layer}
     return run.adapter_set(folder, directions, inputs), inputs
 
 
@@ -156,9 +146,15 @@ class Measurement:
         slots: int = DEFAULT_SLOTS,
         limit: int | None = None,
         progress: Progress = no_progress,
+        exported: bool = False,
     ):
+        """With exported, the edit's exported GGUF is measured, rather than the run's model with the
+        edit's adapters."""
+        if exported and edit is None:
+            raise ValueError("only an edit has an export to measure")
         self.run = run
         self.edit = edit
+        self.exported = exported
         self.name = name
         self.slots = slots
         self.limit = limit
@@ -179,7 +175,13 @@ class Measurement:
             self.sizes = {name: len(all_ids[name]) for name in SETS}
             ids = {name: all_ids[name][: self.limit] for name in SETS}
             self.folder.mkdir(parents=True, exist_ok=True)
-            scales, edit = self._adapters() if self.edit else ({}, None)
+            model, scales, edit = quantized, {}, None
+            if self.exported:
+                assert self.edit is not None
+                model, made_from = export.exported(run, self.edit)
+                edit = {"exported": digest(made_from)}
+            elif self.edit:
+                scales, edit = self._adapters()
             answered, todo = {}, []
             for name in SETS:
                 inputs = self._answer_inputs(name, ids[name], edit)
@@ -190,7 +192,7 @@ class Measurement:
                     answered[name] = reused
             if todo:
                 room = max(len(p) + run.answer_tokens[name] for name, _ in todo for p in ids[name])
-                server = run.server(quantized, list(scales), context_per_slot=room + 8, parallel=self.slots)
+                server = run.server(model, list(scales), context_per_slot=room + 8, parallel=self.slots)
                 with server:
                     for name, inputs in todo:
                         prompts = self._texts(name)
@@ -214,7 +216,8 @@ class Measurement:
 
     def _answer_inputs(self, name: str, ids: list[list[int]], edit: dict[str, Any] | None) -> dict[str, Any]:
         """What a set's answers depend on. Everything but the edit and the slots must match for two
-        measurements to be compared."""
+        measurements to be compared. An export counts as its edit: it is the run's model, quantised
+        the same way, with the edit merged in."""
         settings = self.run.settings
         paired: dict[str, Any] = {
             "model": self.run.inputs["quantized"],

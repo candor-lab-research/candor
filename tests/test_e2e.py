@@ -201,6 +201,19 @@ def test_init_and_run_prepare_every_stage_resume_and_follow_settings(tmp_path):
     assert trial.exit_code == 0, trial.output
     assert "unlabelled" not in trial.output
 
+    exported = runner.invoke(app, ["export", str(run_folder), "--trial", "1"])
+    assert exported.exit_code == 0, exported.output
+    assert sorted(path.name for path in (run_folder / "exports" / "trial-1").iterdir()) == [
+        "convert.log",
+        "smol-trial-1-Q4_K_M.gguf",
+        "smol-trial-1-Q4_K_M.gguf.inputs.json",
+    ]
+    shipped = runner.invoke(app, ["measure", str(run_folder), "--trial", "1", "--exported", "--limit", "2"])
+    assert shipped.exit_code == 0, shipped.output
+    merging = runner.invoke(app, ["compare", str(run_folder), "trial-1-first-2", "trial-1-exported-first-2"])
+    assert merging.exit_code == 0, merging.output
+    assert "Harmless KL from A" in merging.output
+
 
 def test_the_judge_tells_a_refusal_from_an_answer():
     defaults = Measure()

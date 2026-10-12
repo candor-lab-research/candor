@@ -33,7 +33,7 @@ from rich.table import Table
 from transformers import AutoTokenizer
 from transformers.utils import logging as transformers_logging
 
-from . import checks, config, measure, search, source, targets
+from . import checks, config, export, measure, search, source, targets
 from .convert import ConversionError
 from .engine import LLAMA_CPP_RELEASE, ServerError
 from .run import PROMPT_SETS, Run, RunError
@@ -457,8 +457,12 @@ def _where(error: Exception) -> str:
     return f"{type(error).__name__} at {Path(frame.filename).name}:{frame.lineno}"
 
 
-def _measurement_name(trial: int | None, heretic: bool, slots: int, limit: int | None) -> str:
-    name = "base" if trial is None else f"heretic-{trial}" if heretic else f"trial-{trial}"
+def _edit_name(trial: int, heretic: bool) -> str:
+    return f"heretic-{trial}" if heretic else f"trial-{trial}"
+
+
+def _measurement_name(trial: int | None, heretic: bool, slots: int, limit: int | None, exported: bool) -> str:
+    name = "base" if trial is None else _edit_name(trial, heretic) + ("-exported" if exported else "")
     if slots != measure.DEFAULT_SLOTS:
         name += f"-slots-{slots}"
     return name + (f"-first-{limit}" if limit else "")
@@ -492,11 +496,18 @@ def measure_command(
         int | None,
         typer.Option(min=1, help="Only the first N prompts of each set, to try the measurement and time it."),
     ] = None,
+    exported: Annotated[
+        bool,
+        typer.Option(
+            help="Measure the trial's GGUF made by candor export, the file you run, instead of the "
+            "run's model with the trial's adapters."
+        ),
+    ] = False,
     name: Annotated[
         str | None,
         typer.Option(
-            help="The measurement's name. By default base or heretic-TRIAL, with -slots-N and -first-N "
-            "added when those are set."
+            help="The measurement's name. By default base, trial-N or heretic-N, with -exported, "
+            "-slots-N and -first-N added when those are set."
         ),
     ] = None,
 ) -> None:
@@ -507,7 +518,9 @@ def measure_command(
     folder = folder.expanduser()
     if heretic is not None and trial is None:
         raise typer.BadParameter("say which of the study's trials with --trial", param_hint="--heretic")
-    name = name or _measurement_name(trial, heretic is not None, slots, limit)
+    if exported and trial is None:
+        raise typer.BadParameter("say which trial's export with --trial", param_hint="--exported")
+    name = name or _measurement_name(trial, heretic is not None, slots, limit, exported)
     try:
         config.check_run_name(name)
     except config.ConfigError as error:
@@ -537,7 +550,7 @@ def measure_command(
                 edit = measure.heretic_trial(heretic.expanduser(), trial, run.settings.edit.row_norm)
             elif trial is not None:
                 edit = search.trial_edit(run, trial)
-            measurement = measure.Measurement(run, edit, name, slots, limit, progress)
+            measurement = measure.Measurement(run, edit, name, slots, limit, progress, exported)
             results = measurement.measure()
     except config.ConfigError as error:
         console.print(f"[red]{escape(str(error))}[/]")
@@ -606,6 +619,57 @@ def compare(
         "says yes, and p is how likely a split that uneven would be if neither were really better. "
         "Two measurements of the same edit with different --slots show what noise alone does."
     )
+
+
+@app.command("export")
+def export_command(
+    folder: Annotated[Path, typer.Argument(help="A run folder made by candor init.")],
+    trial: Annotated[
+        int,
+        typer.Option(help="A trial of candor search, or with --heretic of heretic's, by the number shown."),
+    ],
+    heretic: Annotated[
+        Path | None,
+        typer.Option(help="A heretic study's journal (.jsonl), to export one of its trials."),
+    ] = None,
+) -> None:
+    """Merge a trial's edit into the model's weights, then convert and quantise it as the run deploys:
+    the GGUF you run. Measure that exact file before using it, with candor measure --exported."""
+    console = Console()
+    folder = folder.expanduser()
+
+    def report(message: str) -> None:
+        console.print(f"[dim]{escape(message)}[/]")
+
+    try:
+        with _stopped_by_signals(), _awake():
+            run = Run.open(folder, report)
+            if heretic is not None:
+                edit = measure.heretic_trial(heretic.expanduser(), trial, run.settings.edit.row_norm)
+            else:
+                edit = search.trial_edit(run, trial)
+            shipped = export.export(run, edit)
+    except config.ConfigError as error:
+        console.print(f"[red]{escape(str(error))}[/]")
+        raise typer.Exit(COULD_NOT_INSPECT) from None
+    except (RunError, ToolchainError, ConversionError, ServerError) as error:
+        console.print(f"[red]The export stopped:[/] {escape(str(error))}")
+        raise typer.Exit(FAILED_CHECK) from None
+    except Exception as error:
+        console.print(f"[red]The export stopped on an unexpected error:[/] {escape(_where(error))}")
+        raise typer.Exit(COULD_NOT_INSPECT) from None
+    console.print(f"{escape(edit.name)}: {escape(str(shipped))}, {shipped.stat().st_size / 1e9:.1f} GB")
+    console.print(
+        "Measure this file, then compare it with the unedited model, and with the trial as measured "
+        "with adapters to see what merging and quantising changed:"
+    )
+    picked = f"--trial {trial}" + (f" --heretic {heretic}" if heretic is not None else "")
+    for command in (
+        f"uv run candor measure {folder} {picked} --exported",
+        f"uv run candor compare {folder} base {edit.name}-exported",
+        f"uv run candor compare {folder} {edit.name} {edit.name}-exported",
+    ):
+        console.print(escape(f"  {command}"), soft_wrap=True)
 
 
 @app.command("search")
