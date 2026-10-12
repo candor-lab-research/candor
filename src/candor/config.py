@@ -206,9 +206,29 @@ class Measure(Section):
 
 
 class Search(Section):
-    trials: StrictInt = Field(default=200, ge=1, description="How many edits to try.")
-    startup_trials: StrictInt = Field(
-        default=60, ge=1, description="Random trials before the search starts aiming."
+    trials_per_scope: StrictInt = Field(
+        default=300,
+        ge=1,
+        description="How many edits to try of each kind: every layer reading the refusal direction found "
+        "at one layer, and each layer reading its own. The two kinds are searched apart and take turns. "
+        "Fewer than 200 each makes missing the best edit far likelier.",
+    )
+    startup_per_scope: StrictInt = Field(
+        default=20,
+        ge=1,
+        description="Evenly spread trials of each kind before the search starts aiming.",
+    )
+    max_refusals: StrictInt = Field(
+        default=2,
+        ge=0,
+        description="The most test prompts an edit may refuse and still count. The search looks for the "
+        "least KL among edits that refuse no more than this.",
+    )
+    stop_early: StrictBool = Field(
+        default=True,
+        description="Stop scoring a trial once it has refused more test prompts than max_refusals and "
+        "than a fully scored trial of its kind, since it can't win. It is told to the search with its "
+        "refusals scaled to all the prompts. This makes the search about 1.5 times faster.",
     )
     seed: StrictInt = Field(
         default=0, ge=0, lt=2**32, description="Fixes the search's randomness, so a run can be repeated."
@@ -234,13 +254,6 @@ class Search(Section):
     direction_layer: Range = Field(
         default=(0.4, 0.9),
         description="Which layer's refusal direction a single-direction trial uses, as a fraction of depth.",
-    )
-
-    kl_target: Finite = Field(
-        default=0.01,
-        ge=0,
-        description="Below this KL divergence an edit is scored by its refusals instead, so the search "
-        "doesn't dwell on edits that change almost nothing (heretic's default).",
     )
 
     @field_validator("strength", "peak_layer", "edge_strength", "reach", "direction_layer")
@@ -273,8 +286,8 @@ class Search(Section):
 
     @model_validator(mode="after")
     def _startup_fits(self) -> "Search":
-        if self.startup_trials > self.trials:
-            raise ValueError("startup_trials can't be more than trials")
+        if self.startup_per_scope > self.trials_per_scope:
+            raise ValueError("startup_per_scope can't be more than trials_per_scope")
         return self
 
 
@@ -313,12 +326,43 @@ def _missing(settings: BaseModel, prefix: str = "") -> list[str]:
     return found
 
 
-def _validated(text: str, where: str) -> RunConfig:
-    """The settings, with any the text leaves out at their defaults."""
+# Settings a newer candor dropped, with why; candor upgrade removes them.
+RETIRED = {
+    "search.trials": "the two kinds of edit are now searched apart: see search.trials_per_scope",
+    "search.startup_trials": "see search.startup_per_scope",
+    "search.kl_target": "the search now caps refusals instead: see search.max_refusals",
+}
+
+
+def _retired(data: dict[str, Any]) -> list[str]:
+    """Remove the retired settings from parsed TOML, and name those it held."""
+    found = []
+    for name in RETIRED:
+        section, key = name.split(".")
+        if isinstance(data.get(section), dict) and key in data[section]:
+            del data[section][key]
+            found.append(name)
+    return found
+
+
+def _validated(text: str, where: str, retired: list[str] | None = None) -> RunConfig:
+    """The settings, with any the text leaves out at their defaults. Retired settings are refused, or
+    with retired given, dropped and named there."""
     try:
-        return RunConfig.model_validate(tomllib.loads(text))
+        data = tomllib.loads(text)
     except tomllib.TOMLDecodeError as error:
         raise ConfigError(f"{where} isn't valid TOML: {error}") from None
+    dropped = _retired(data)
+    if retired is not None:
+        retired += dropped
+    elif dropped:
+        reasons = "; ".join(f"{name} ({RETIRED[name]})" for name in dropped)
+        raise ConfigError(
+            f"{where} has settings this version of candor no longer uses: {reasons}. candor upgrade "
+            "removes them."
+        )
+    try:
+        return RunConfig.model_validate(data)
     except ValidationError as error:
         problems = [f"{'.'.join(map(str, e['loc']))}: {e['msg']}" for e in error.errors()]
         raise ConfigError(f"{where} has settings candor can't use:\n  " + "\n  ".join(problems)) from None
@@ -349,17 +393,18 @@ def load(folder: Path) -> RunConfig:
     return parse(text, str(path))
 
 
-def load_for_upgrade(folder: Path) -> tuple[RunConfig, list[str], str]:
-    """The settings with those the file leaves out at their defaults, the names of those, and the
-    file's header."""
+def load_for_upgrade(folder: Path) -> tuple[RunConfig, list[str], list[str], str]:
+    """The settings with those the file leaves out at their defaults, the names of those, the retired
+    settings it held, and the file's header."""
     path, text = _read(folder)
-    settings = _validated(text, str(path))
+    retired: list[str] = []
+    settings = _validated(text, str(path), retired)
     header = []
     for line in text.splitlines():
         if not line.startswith("#"):
             break
         header.append(line.removeprefix("#").removeprefix(" "))
-    return settings, _missing(settings), "\n".join(header)
+    return settings, _missing(settings), retired, "\n".join(header)
 
 
 def rewrite(folder: Path, settings: RunConfig, header: str) -> None:

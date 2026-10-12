@@ -348,23 +348,26 @@ def init(
 
 @app.command()
 def upgrade(folder: Annotated[Path, typer.Argument(help="A run folder made by candor init.")]) -> None:
-    """Add the settings this version of candor has and a run's candor.toml lacks, at their defaults.
+    """Add the settings this version of candor has and a run's candor.toml lacks, at their defaults,
+    and remove those it no longer uses.
 
-    Prompt sets it adds are pinned to their datasets' commits now. Every value already in the file is
-    kept, but the file is written afresh, so comments added by hand are lost.
+    Prompt sets it adds are pinned to their datasets' commits now. Every other value already in the
+    file is kept, but the file is written afresh, so comments added by hand are lost.
     """
     console = Console()
     folder = folder.expanduser()
     try:
-        settings, added, header = config.load_for_upgrade(folder)
-        if not added:
+        settings, added, retired, header = config.load_for_upgrade(folder)
+        if not added and not retired:
             console.print(f"{escape(str(folder / config.FILE))} already has every setting.")
             return
         new_sets = [name for name in PROMPT_SETS if {"prompts", f"prompts.{name}"} & set(added)]
         settings.prompts = _pinned(settings.prompts, new_sets)
         if {"measure", "measure.judge"} & set(added) and settings.measure.judge_revision is None:
             settings.measure.judge_revision = _revision(settings.measure.judge)
-        header += f"\nUpgraded {date.today()} by candor {version('candor')}: added {', '.join(added)}."
+        changes = [f"added {', '.join(added)}"] if added else []
+        changes += [f"removed {', '.join(retired)}"] if retired else []
+        header += f"\nUpgraded {date.today()} by candor {version('candor')}: {'; '.join(changes)}."
         with Run(folder, settings).locked():
             config.rewrite(folder, settings, header)
     except config.ConfigError as error:
@@ -377,9 +380,14 @@ def upgrade(folder: Annotated[Path, typer.Argument(help="A run folder made by ca
         failure = escape(f"{type(error).__name__}: {error}")
         console.print(f"[red]candor couldn't upgrade the run:[/] {failure}")
         raise typer.Exit(COULD_NOT_INSPECT) from None
-    console.print(f"[green]Added to {escape(str(folder / config.FILE))}:[/]")
-    for name in added:
-        console.print(f"  {escape(config.setting(settings, name))}", soft_wrap=True)
+    if added:
+        console.print(f"[green]Added to {escape(str(folder / config.FILE))}:[/]")
+        for name in added:
+            console.print(f"  {escape(config.setting(settings, name))}", soft_wrap=True)
+    if retired:
+        console.print(f"[green]Removed from {escape(str(folder / config.FILE))}:[/]")
+        for name in retired:
+            console.print(f"  {escape(name)}: {escape(config.RETIRED[name])}", soft_wrap=True)
 
 
 @contextmanager
@@ -607,14 +615,16 @@ def search_command(
         int | None,
         typer.Option(
             min=1,
-            help="Stop once this many trials are finished, instead of search.trials. A few try the "
-            "search and time it, and count towards the full search.",
+            help="Stop once this many trials are finished, of both kinds together, instead of all of "
+            "them. A few try the search and time it, and count towards the full search.",
         ),
     ] = None,
 ) -> None:
-    """Search for the edit that removes the most refusals while changing the model least. Each trial is
-    scored in llama-server on the test prompts, its refusals counted by the judge; the held-out prompts
-    are left for candor measure. A stopped search carries on where it stopped."""
+    """Search for the edit that changes the model least while it refuses almost nothing. The two kinds
+    of edit, one layer's refusal direction for every layer or each layer its own, are searched apart
+    and take turns. Each trial is scored in llama-server on the test prompts, its refusals counted by
+    the judge; the held-out prompts are left for candor measure. A stopped search carries on where it
+    stopped."""
     console = Console()
     folder = folder.expanduser()
 
@@ -646,8 +656,9 @@ def search_command(
                     console.print(escape(best))
 
             run = Run.open(folder, report)
-            target = trials or run.settings.search.trials
-            found, seconds = search.Search(run).search(target, started, finished)
+            space = run.settings.search
+            total = len(search.SCOPES) * space.trials_per_scope
+            found, seconds = search.Search(run).search(trials or total, started, finished)
     except config.ConfigError as error:
         console.print(f"[red]{escape(str(error))}[/]")
         raise typer.Exit(COULD_NOT_INSPECT) from None
@@ -662,7 +673,7 @@ def search_command(
     )
     for heading in ["Trial", "Direction", "Refused", "Keywords", "KL"]:
         table.add_column(heading, justify="left" if heading == "Direction" else "right")
-    for candidate in found[:10]:
+    for candidate in search.candidates(found)[:10]:
         table.add_row(
             str(candidate.trial),
             candidate.direction,
@@ -671,18 +682,34 @@ def search_command(
             f"{candidate.kl:.4f}",
         )
     console.print(table)
-    total = run.settings.search.trials
-    if target < total:
+    _, layers, _, _ = run.shape
+    best = {scope: search.within_cap(found, scope, space.max_refusals) for scope in search.SCOPES}
+    console.print(f"The least KL of each kind within the cap ({space.max_refusals} refused):")
+    for scope, kept in best.items():
+        if not kept:
+            console.print(f"  {scope}: no trial yet")
+            continue
+        top = kept[0]
+        console.print(
+            f"  {scope}: trial {top.trial}, {top.direction}, {top.refusals} refused, KL {top.kl:.4f}"
+        )
+        if edges := search.at_edges(top.params, space, layers):
+            console.print(
+                f"    It presses on the edge of the search's ranges ({escape('; '.join(edges))}), so a "
+                "better edit may lie outside them."
+            )
+    if len(found.trials) < total:
         console.print(
             f"Trials took about {seconds:.0f} s each, so all {total} would take about "
-            f"{_duration(seconds * total)}. Later trials aim at edits that refuse less, whose longer "
-            "answers take longer to write and judge, so allow more. Run candor search again to carry on."
+            f"{_duration(seconds * total)}. Trials that refuse almost nothing take longest, and later "
+            "trials aim at them, so allow more. Run candor search again to carry on."
         )
-    elif found:
-        console.print("Measure the most promising on the held-out prompts:")
-        for candidate in found[:3]:
-            command = f"  uv run candor measure {folder} --trial {candidate.trial}"
-            console.print(escape(command), soft_wrap=True)
+    elif any(best.values()):
+        console.print("Measure the best of each kind on the held-out prompts:")
+        for kept in best.values():
+            for candidate in kept[:2]:
+                command = f"  uv run candor measure {folder} --trial {candidate.trial}"
+                console.print(escape(command), soft_wrap=True)
 
 
 def _direction(layer: float | None) -> str:
@@ -718,8 +745,8 @@ def score_command(
     try:
         with _stopped_by_signals(), _awake():
             run = Run.open(folder, report)
-            study = search.load(run)
-            front = search.candidates(study) if study else []
+            found = search.load(run)
+            front = search.candidates(found) if found else []
             _, layers, _, writers = run.shape
             # Each edit, with its number when it is a trial of the search.
             edits: list[tuple[measure.Edit, int | None]] = []
@@ -733,7 +760,7 @@ def score_command(
                     edits.append((search.trial_edit(run, front[0].trial), front[0].trial))
             scored = search.Search(run).score([edit for edit, _ in edits])
             searched = {
-                number: search.searched_score(study, number) for _, number in edits if study and number
+                number: search.searched_score(found, number) for _, number in edits if found and number
             }
     except config.ConfigError as error:
         console.print(f"[red]{escape(str(error))}[/]")
@@ -759,20 +786,25 @@ def score_command(
         )
     console.print(f"Scored as the search scores its trials, on its {scored.prompts} test prompts:")
     console.print(table)
-    base = study.user_attrs.get("base_refusals") if study else None
+    base = found.base_refusals if found else None
     console.print(
         f"The unedited model refuses {scored.base_refusals} of {scored.prompts}"
         + (f" ({base} in the search)." if base is not None else ".")
     )
-    if not study or not front:
+    if not found or not front:
         console.print(
-            f"The search has no {'finished trials' if study else 'trials'} yet to set these beside."
+            f"The search has no {'finished trials' if found else 'trials'} yet to set these beside."
         )
         return
     reliable = True
     for (edit, number), score in zip(edits, scored.edits, strict=True):
         if number:
-            if search.repeats(score, searched[number]):
+            if searched[number].judged < scored.prompts:
+                console.print(
+                    f"{escape(edit.name)} was stopped early in the search, after {searched[number].judged} "
+                    "prompts, so there's no full score of it to repeat."
+                )
+            elif search.repeats(score, searched[number]):
                 console.print(
                     f"{escape(edit.name)} scores as it did in the search, so the scores above can be set "
                     "beside the search's."

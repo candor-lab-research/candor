@@ -47,12 +47,25 @@ How the fix is chosen and checked, decided before any of it runs:
 2. The fix targets the cause (how the search treats the two kinds of edit, and where it spends its
    trials), not this answer: no default comes from Trial 170's values.
 3. The check on rude-llama is one search with no heretic recipe as a starting point and no range
-   narrowed towards it. It passes if it finds, by itself, a recipe close to Trial 170 read at
-   layer 12 or better: at most 1 of 100 refused at KL within 3% of 0.0818 (0.0843 or less), with
-   the search's scorer, the same closeness the test landscapes count as a hit. If it fails, the
-   answer goes back to the test landscapes; settings are not tweaked until it passes.
-4. Independent repeats that report whether they agree are built in, as the warning that works on a
-   new model with no reference.
+   narrowed towards it. It passes if the best trial of either kind it suggests measuring, measured
+   on the held-out prompts, is close to Trial 170 or better: at most 6 of 288 refused at held-out
+   KL within 3% of 0.1011 (0.1041 or less). (Amended 2026-10-12 before it ran: on 100 test prompts,
+   0 against 2 refusals is mostly noise, so the first version, judged on the search's own scores,
+   could pass a search that hadn't found it.) If it fails, the answer goes back to the test
+   landscapes; settings are not tweaked until it passes. If it also passes phase 2's strict rule,
+   it ships instead of Trial 170's recipe.
+4. ~~Independent repeats that report whether they agree are built in.~~ Dropped 2026-10-12: in the
+   test landscapes, whether two repeats agreed didn't predict a miss, and one long run beat several
+   short ones of the same total. The warning built instead is the edge alarm: the search flags a
+   best trial pressing on the end of a range, where a better edit may lie outside it.
+
+The design chosen (results file, "The search fix"): the two kinds of edit searched as two studies
+taking turns, each starting from 20 evenly spread trials and aiming at the least KL within a cap of
+2 refusals, with trials that can't win stopped early. On the calibrated test landscape it got
+within 10% of the best in 83% of runs at 400 trials (today's search: 20%), 93% at equal time with
+the early stop, and was no worse on any landscape tested. It is not watertight: on the harshest
+landscape it still missed in most runs. Widening ranges automatically is deferred until the edge
+alarm fires on a real model.
 
 To compare a trial against the rule: `candor compare runs/rude base trial-N` (KL and maths are
 judged against the unedited model) and `candor compare runs/rude heretic-170 trial-N` (head to head).
@@ -85,7 +98,7 @@ if not, Trial 170's recipe built by candor ships. Then phase 3, Qwen3.5-9B.
 | 2 | `candor run RUN` up to the search: GGUF (edit targets checked byte for byte), prompt ids from llama-server, directions, one adapter per edit target per direction set; resumable, and rebuilds whatever a settings or code change affects | Done, reviewed |
 | 3 | Fixes from the full review (see the log) | Done: every fix shown to matter by a test that fails without it; a second review was stopped as diminishing returns, so the first real rude-llama run is the check that matters |
 | 4 | Measurement, settled before any search: a held-out harmful set outside AdvBench (de-duplicated against the direction prompts, pinned); the Qwen3Guard judge with its false-refusal rate measured on answers to harmless prompts, keyword counts kept beside it; the scoring noise floor from repeat scoring; paired comparison (McNemar) with a margin; KL on 300 harmless prompts; the full GSM8K test set, paired; heretic's Trial 170 rebuilt by candor and scored as adapters, so the comparison is like for like. Written down as phase 2's decision rule | Done: measured, and the decision rule signed off |
-| 5 | The search: Optuna over a kernel per component (heretic's 0.8-1.5 strength range), stored resumably in the run folder, each trial scored in llama.cpp on the quantised GGUF, refusals counted by the judge; progress with time left, the Mac kept awake. Built on SmolLM2, then a 10-trial rude-llama pilot (time per trial) and one full search, each with the user's go | Done: 200 trials in 3 h 13 min; trials 165, 167 and 187 measured, none passes (see Next) |
+| 5 | The search: Optuna over a kernel per component (heretic's 0.8-1.5 strength range), stored resumably in the run folder, each trial scored in llama.cpp on the quantised GGUF, refusals counted by the judge; progress with time left, the Mac kept awake. Built on SmolLM2, then a 10-trial rude-llama pilot (time per trial) and one full search, each with the user's go | Done: 200 trials in 3 h 13 min; trials 165, 167 and 187 measured, none passes; the search was then redesigned (see Next) |
 | 6 | Export: merge, convert and quantise; the final check on the exact shipped file with your KV cache type; a `candor serve` command that runs the shipped file in llama-server at your settings (system prompt, KV cache, date); the blind A/B | |
 
 ## Research changes and where they land

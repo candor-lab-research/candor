@@ -61,13 +61,13 @@ def test_unset_optional_settings_are_left_as_comments(tmp_path):
 
 
 def test_a_misspelt_setting_is_named(tmp_path):
-    text = config.render(settings(), "h").replace("trials = 200", "trails = 200")
-    with pytest.raises(ConfigError, match=r"search\.trails"):
+    text = config.render(settings(), "h").replace("trials_per_scope = 300", "trails_per_scope = 300")
+    with pytest.raises(ConfigError, match=r"search\.trails_per_scope"):
         config.load(write_text(tmp_path, text))
 
 
 @pytest.mark.parametrize(
-    ("line", "name"), [("startup_trials = 60", "search.startup_trials"), ("[search]", "search")]
+    ("line", "name"), [("startup_per_scope = 20", "search.startup_per_scope"), ("[search]", "search")]
 )
 def test_a_missing_setting_is_an_error_not_a_default(tmp_path, line, name):
     text = config.render(settings(), "h")
@@ -85,14 +85,16 @@ def test_a_missing_setting_is_an_error_not_a_default(tmp_path, line, name):
         ("strength = [0.8, 1.5]", "strength = [0.8, inf]", "finite"),
         ("strength = [0.8, 1.5]", 'strength = ["1", "3"]', "valid number"),
         ("reach = [0.01, 0.6]", "reach = [0.01, 1.6]", "between 0 and 1"),
-        ("trials = 200", "trials = true", "valid integer"),
-        ("trials = 200", 'trials = "200"', "valid integer"),
+        ("trials_per_scope = 300", "trials_per_scope = true", "valid integer"),
+        ("trials_per_scope = 300", 'trials_per_scope = "300"', "valid integer"),
+        ("max_refusals = 2", "max_refusals = -1", "greater than or equal to 0"),
+        ("stop_early = true", 'stop_early = "yes"', "valid boolean"),
         ("seed = 0", "seed = -1", "greater than or equal to 0"),
         ("seed = 0", "seed = 4294967296", "less than"),
         ('source = "org/model"', 'source = ""', "at least 1 character"),
         ('quantization = "Q4_K_M"', 'quantization = "Q3"', "must be one of"),
         ('kv_cache = "f16"', 'kv_cache = "fp16"', "must be one of"),
-        ("startup_trials = 60", "startup_trials = 600", "startup_trials"),
+        ("startup_per_scope = 20", "startup_per_scope = 600", "startup_per_scope"),
         ("answer_tokens = 100", "answer_tokens = true", "valid integer"),
         ("kl_tokens = 20", 'kl_tokens = "20"', "valid integer"),
         ('row_norm = "pre"', 'row_norm = "full"', '"none" or "pre"'),
@@ -150,14 +152,18 @@ def test_a_failed_write_leaves_nothing_behind(tmp_path):
 
 def test_settings_that_dont_read_back_are_never_written(tmp_path, monkeypatch):
     render = config.render
-    monkeypatch.setattr(config, "render", lambda *args: render(*args).replace("trials = 200", "trials = 201"))
+    monkeypatch.setattr(
+        config,
+        "render",
+        lambda *args: render(*args).replace("trials_per_scope = 300", "trials_per_scope = 301"),
+    )
     with pytest.raises(ConfigError, match="read back"):
         config.write(tmp_path, "run", settings(), "h")
     assert list(tmp_path.iterdir()) == []
 
 
 def test_a_missing_setting_points_to_upgrade(tmp_path):
-    text = config.render(settings(), "h").replace("startup_trials = 60", "")
+    text = config.render(settings(), "h").replace("startup_per_scope = 20", "")
     with pytest.raises(ConfigError, match="candor upgrade adds them at their defaults"):
         config.load(write_text(tmp_path, text))
 
@@ -165,12 +171,12 @@ def test_a_missing_setting_points_to_upgrade(tmp_path):
 def test_an_upgrade_fills_in_missing_settings_and_keeps_the_rest(tmp_path):
     text = config.render(settings(source="/models/mine"), "Made by init\nfor a run")
     held_out = next(line for line in text.splitlines() if line.startswith("harmful_held_out = "))
-    text = text.replace(held_out + "\n", "").replace("trials = 200", "trials = 123")
-    upgraded, added, header = config.load_for_upgrade(write_text(tmp_path, text))
-    assert added == ["prompts.harmful_held_out"]
+    text = text.replace(held_out + "\n", "").replace("trials_per_scope = 300", "trials_per_scope = 123")
+    upgraded, added, retired, header = config.load_for_upgrade(write_text(tmp_path, text))
+    assert added == ["prompts.harmful_held_out"] and retired == []
     assert header == "Made by init\nfor a run"
     assert upgraded.prompts.harmful_held_out == config.Prompts().harmful_held_out
-    assert upgraded.search.trials == 123 and upgraded.model.source == "/models/mine"
+    assert upgraded.search.trials_per_scope == 123 and upgraded.model.source == "/models/mine"
     config.rewrite(tmp_path, upgraded, header)
     assert config.load(tmp_path) == upgraded
     assert [p.name for p in tmp_path.iterdir()] == [config.FILE]
@@ -190,3 +196,20 @@ def test_an_unpinned_prompt_set_is_left_floating(tmp_path):
     unpinned = 'harmful = { dataset = "mlabonne/harmful_behaviors", split = "train[:400]", column = "text" }'
     assert unpinned in rendered
     assert config.load(write_text(tmp_path, rendered)).prompts.harmful.revision is None
+
+
+def test_settings_candor_no_longer_uses_are_refused_and_upgrade_removes_them(tmp_path):
+    text = config.render(settings(), "h")
+    old = "trials = 200\nstartup_trials = 60\nkl_target = 0.01\n"
+    text = text.replace("trials_per_scope = 300\n", "").replace("startup_per_scope = 20\n", "")
+    text = text.replace("[search]\n", "[search]\n" + old)
+    path = write_text(tmp_path, text)
+    with pytest.raises(
+        ConfigError,
+        match=r"no longer uses: search\.trials \(.*search\.trials_per_scope\).*candor upgrade removes them",
+    ):
+        config.load(path)
+    upgraded, added, retired, _ = config.load_for_upgrade(path)
+    assert retired == ["search.trials", "search.startup_trials", "search.kl_target"]
+    assert added == ["search.trials_per_scope", "search.startup_per_scope"]
+    assert upgraded.search == config.Search()

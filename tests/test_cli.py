@@ -236,7 +236,7 @@ def test_upgrade_adds_missing_settings_pinned_and_keeps_every_value(tmp_path):
     folder = tmp_path / "runs" / "first"
     text = (folder / config.FILE).read_text()
     held_out = next(line for line in text.splitlines() if line.startswith("harmful_held_out = "))
-    text = text.replace(held_out + "\n", "").replace("trials = 200", "trials = 201")
+    text = text.replace(held_out + "\n", "").replace("trials_per_scope = 300", "trials_per_scope = 301")
     (folder / config.FILE).write_text(text)
     refused = CliRunner(env={"COLUMNS": "250"}).invoke(app, ["run", str(folder)])
     assert refused.exit_code == 3 and "candor upgrade adds them" in refused.output
@@ -246,10 +246,28 @@ def test_upgrade_adds_missing_settings_pinned_and_keeps_every_value(tmp_path):
     assert 'revision = "walledai/StrongREJECT@commit"' in result.output
     settings = config.load(folder)
     assert settings.prompts.harmful_held_out.revision == "walledai/StrongREJECT@commit"
-    assert settings.search.trials == 201
+    assert settings.search.trials_per_scope == 301
     upgraded = (folder / config.FILE).read_text()
     assert upgraded.startswith(text.split("\n\n")[0] + "\n# Upgraded ")
     assert "added prompts.harmful_held_out." in upgraded
+
+
+def test_upgrade_removes_settings_candor_no_longer_uses(tmp_path):
+    assert init(tmp_path, model_folder(tmp_path)).exit_code == 0
+    folder = tmp_path / "runs" / "first"
+    path = folder / config.FILE
+    text = path.read_text().replace("startup_per_scope = 20\n", "startup_trials = 60\nkl_target = 0.01\n")
+    path.write_text(text)
+    refused = CliRunner(env={"COLUMNS": "250"}).invoke(app, ["run", str(folder)])
+    assert refused.exit_code == 3 and "candor upgrade removes them" in refused.output
+    result = upgrade(folder)
+    assert result.exit_code == 0, result.output
+    assert "search.startup_per_scope = 20" in result.output
+    assert "search.kl_target: the search now caps refusals instead" in result.output
+    upgraded = path.read_text()
+    assert "added search.startup_per_scope; removed search.startup_trials, search.kl_target." in upgraded
+    assert "kl_target" not in upgraded.split("# Upgraded")[1].split("\n", 1)[1]
+    assert config.load(folder).search == config.Search()
 
 
 def test_upgrade_pins_the_judge_it_adds(tmp_path):
@@ -277,7 +295,7 @@ def test_upgrade_waits_for_a_run_using_the_folder(tmp_path):
     assert init(tmp_path, model_folder(tmp_path)).exit_code == 0
     folder = tmp_path / "runs" / "first"
     path = folder / config.FILE
-    path.write_text(path.read_text().replace("startup_trials = 60\n", ""))
+    path.write_text(path.read_text().replace("startup_per_scope = 20\n", ""))
     before = path.read_bytes()
     with Run(folder, config.load_for_upgrade(folder)[0]).locked():
         result = upgrade(folder)

@@ -114,3 +114,48 @@ The plan was to score Trial 170 with the search's own scorer, on the same 100 pr
   on more prompts or with longer answers.
 - If it scores far worse than its held-out 6 of 288 suggests (around candor's single-direction
   trials, 35 or more), look for a fault in how the search scores single-direction edits.
+
+## The search fix (2026-10-12)
+
+Four agents studied the miss from different sides and a fifth tested designs on test landscapes:
+synthetic score landscapes over candor's exact settings, calibrated to the 400 real trials of both
+searches (candor's and heretic's) with Trial 170 as the anchor between their scales. Each design was
+run 20-30 times per landscape. Everything is numbers only; the agents never saw prompts or answers.
+
+Why the search missed, from Optuna 4.9's source and the real run:
+
+- Mainly the goal. Aiming at every trade-off of refusals against KL, the sampler's set of good
+  trials (the top of the refusal-KL front) held 9 one-layer trials that were all weak edits: 36-93
+  refusals at KL 0.009-0.027, MLP peaking at the last layers with a short reach. New trials are drawn
+  near good ones, so it kept drawing weak one-layer edits. Only 1 of its 96 one-layer trials was near
+  Trial 170's shape.
+- The good one-layer shape is rare under today's ranges: both bands start early and run to the last
+  layer. About 4% of random draws have it, and under 1% also read a good direction layer.
+- Sharing settings between the two kinds of edit was only a small leak; separating them alone did
+  not help.
+
+Results on the calibrated landscape, share of runs within 10% of the best (within 3%):
+
+| Design | 400 trials | 600 trials | Equal time to today's 400 |
+| --- | --- | --- | --- |
+| Today's search | 20% (0%) | 23% (0%) | 20% (0%) |
+| Two kinds apart, each capped, spread start | 83% (13%) | 93% (20%) | 77% (13%) |
+| The same, stopping trials that can't win | | | 93% (17%) |
+
+On the harshest landscape (a narrower target) the chosen design reached 17% at 400 trials against
+3%, and 37% at 1,200: better, but still a miss in most runs, with nothing inside a run to warn of it.
+Where the best was per-layer it reached 100% against 97%. Optuna's GP sampler did worse in this
+harness: with refusal counts this noisy it settled at the cap's edge, where edits truly refuse 3-4.
+Repeats did not help: for the same total trials one long run beat two or four shorter ones, and
+whether two repeats agreed did not predict a miss. Stopping when progress stalls missed too often.
+
+Built: the two kinds as two studies taking turns, each starting from 20 scrambled Sobol points,
+multivariate TPE minimising KL with refusals above 2 of 100 as a constraint (by how far over, scaled
+to all prompts for a stopped trial), and a trial stopped once it has refused more than 2 and more
+than a fully scored trial of its kind. 300 trials of each kind by default. The search's report
+flags a best trial pressing on the end of a range. Widening ranges automatically is deferred: the
+landscapes can't say whether it matters, and the edge alarm on a real model will.
+
+Limits to remember: 100 test prompts can't tell 0 refusals from 2, so the search's pick truly
+refuses about 2 of 100 and sits above the true best; measuring the best few of each kind on the
+held-out prompts, as the search suggests, is how the choice is made.
