@@ -326,6 +326,53 @@ def test_each_answer_is_reported_as_it_finishes(files):
     assert all(a.finished == (a.tokens < 4) for a in answers)
 
 
+def answered(payload):
+    return {
+        "content": str(payload["prompt"][0]),
+        "tokens_predicted": 1,
+        "truncated": False,
+        "stop_type": "eos",
+    }
+
+
+def test_answers_come_in_order_and_closing_early_cancels_those_not_started(monkeypatch):
+    s = LlamaServer(LLAMA_SERVER, Path("model.gguf"), Path("server.log"), parallel=2)
+    sent, done = [], []
+
+    def complete(payload):
+        sent.append(payload["prompt"])
+        time.sleep(0.05 if payload["prompt"][0] % 2 == 0 else 0.02)  # odd ones finish first
+        done.append(payload["prompt"])
+        return answered(payload)
+
+    monkeypatch.setattr(s, "_complete", complete)
+    answering = s.answers([[i] for i in range(40)], 4)
+    assert [next(answering).text for _ in range(3)] == ["0", "1", "2"]
+    answering.close()
+    started = len(sent)
+    time.sleep(0.1)
+    assert len(sent) == started < 20
+    assert sorted(done) == sorted(sent)
+
+
+def test_a_failed_answer_stops_those_still_queued(monkeypatch):
+    s = LlamaServer(LLAMA_SERVER, Path("model.gguf"), Path("server.log"), parallel=2)
+    sent = []
+
+    def complete(payload):
+        sent.append(payload)
+        time.sleep(0.02)
+        if len(sent) == 3:
+            raise ServerError("injected")
+        return answered(payload)
+
+    monkeypatch.setattr(s, "_complete", complete)
+    with pytest.raises(ServerError, match="injected"):
+        list(s.answers([[i] for i in range(40)], 4))
+    time.sleep(0.1)
+    assert len(sent) < 20
+
+
 def test_a_failure_stops_the_requests_still_queued(monkeypatch):
     s = LlamaServer(LLAMA_SERVER, Path("model.gguf"), Path("server.log"), parallel=2)
     sent = []

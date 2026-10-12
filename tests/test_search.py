@@ -63,14 +63,14 @@ def finished(run) -> list[optuna.trial.FrozenTrial]:
 def recording_answers(monkeypatch) -> list[str]:
     """Every answer the server gives, so tests can check none of it is kept."""
     answers = []
-    real = LlamaServer.generate
+    real = LlamaServer.answers
 
     def recording(self, *args, **kwargs):
-        found = real(self, *args, **kwargs)
-        answers.extend(a.text for a in found)
-        return found
+        for answer in real(self, *args, **kwargs):
+            answers.append(answer.text)
+            yield answer
 
-    monkeypatch.setattr(LlamaServer, "generate", recording)
+    monkeypatch.setattr(LlamaServer, "answers", recording)
     return answers
 
 
@@ -389,12 +389,17 @@ def test_a_trial_isnt_rebuilt_from_other_directions_or_adapters(tiny):
 
 def silent(monkeypatch):
     """The model says nothing at all, which the fake judge doesn't call a refusal."""
-    real = LlamaServer.generate
+    generate, answers = LlamaServer.generate, LlamaServer.answers
 
     def nothing(self, *args, **kwargs):
-        return [Answer("", 0, True) for _ in real(self, *args, **kwargs)]
+        return [Answer("", 0, True) for _ in generate(self, *args, **kwargs)]
+
+    def nothing_each(self, *args, **kwargs):
+        for _ in answers(self, *args, **kwargs):
+            yield Answer("", 0, True)
 
     monkeypatch.setattr(LlamaServer, "generate", nothing)
+    monkeypatch.setattr(LlamaServer, "answers", nothing_each)
 
 
 def test_an_edit_that_says_nothing_counts_as_refusing_everything(tiny, monkeypatch):
@@ -410,25 +415,25 @@ def test_an_edit_that_says_nothing_counts_as_refusing_everything(tiny, monkeypat
 def test_each_trial_is_scored_with_its_strengths_on_the_test_prompts(tiny, monkeypatch):
     small(tiny)
     ids = tiny.prompt_ids()
-    asked = {"generate": [], "top_logprobs": [], "scales": []}
+    asked = {"answers": [], "top_logprobs": [], "scales": []}
     answers = []
-    real_generate, real_top = LlamaServer.generate, LlamaServer.top_logprobs
+    real_answers, real_top = LlamaServer.answers, LlamaServer.top_logprobs
 
-    def generate(self, prompts, tokens, scales=None, done=None):
-        asked["generate"].append(prompts)
+    def answering(self, prompts, tokens, scales=None):
+        asked["answers"].append(prompts)
         asked["scales"].append(dict(scales or {}))
-        found = real_generate(self, prompts, tokens, scales, done)
+        found = list(real_answers(self, prompts, tokens, scales))
         answers.append([a.text for a in found])
-        return found
+        yield from found
 
     def top_logprobs(self, prompts, *args, **kwargs):
         asked["top_logprobs"].append(prompts)
         return real_top(self, prompts, *args, **kwargs)
 
-    monkeypatch.setattr(LlamaServer, "generate", generate)
+    monkeypatch.setattr(LlamaServer, "answers", answering)
     monkeypatch.setattr(LlamaServer, "top_logprobs", top_logprobs)
     _, seconds = Search(tiny).search(3)
-    assert all(prompts == ids["harmful_test"] for prompts in asked["generate"])
+    assert all(prompts == ids["harmful_test"] for prompts in asked["answers"])
     assert all(prompts == ids["harmless_test"] for prompts in asked["top_logprobs"])
     adapters = tiny.adapters()
     trials = finished(tiny)
@@ -567,18 +572,13 @@ def test_scoring_stops_at_the_end_of_the_chunk_that_goes_over(tiny, monkeypatch)
     monkeypatch.setattr(search, "CHUNK", 2)
     labels = []
 
+    asked = []
+
     def replies(self, prompts, answers, **kwargs):
+        asked.append(len(answers))
         return [REFUSED if labels.pop(0) else ANSWERED for _ in answers]
 
     monkeypatch.setattr(FakeGuard, "replies", replies)
-    asked = []
-    real = LlamaServer.generate
-
-    def generate(self, prompts, *args, **kwargs):
-        asked.append(len(prompts))
-        return real(self, prompts, *args, **kwargs)
-
-    monkeypatch.setattr(LlamaServer, "generate", generate)
     with Search(tiny)._scorer(*scorer_inputs(tiny)) as scorer:
         labels[:], asked[:] = [True, False, True], []
         whole = scorer.score({}, stop_above=2)
@@ -618,14 +618,13 @@ def test_the_search_shows_time_left_from_every_trial_of_the_session(tiny, monkey
 
 def test_keywords_are_counted_on_each_trials_answers(tiny, monkeypatch):
     small(tiny)
-    real = LlamaServer.generate
+    real = LlamaServer.answers
 
     def one_sorry(self, *args, **kwargs):
-        found = real(self, *args, **kwargs)
-        texts = ["I'm sorry."] + ["Here it is."] * (len(found) - 1)
-        return [Answer(text, a.tokens, True) for text, a in zip(texts, found, strict=True)]
+        for i, answer in enumerate(real(self, *args, **kwargs)):
+            yield Answer("Here it is." if i else "I'm sorry.", answer.tokens, True)
 
-    monkeypatch.setattr(LlamaServer, "generate", one_sorry)
+    monkeypatch.setattr(LlamaServer, "answers", one_sorry)
     Search(tiny).search(2)
     assert [t.user_attrs["keyword_refusals"] for t in finished(tiny)] == [1, 1]
 
@@ -822,7 +821,7 @@ def test_scoring_closes_the_judge_even_when_it_stops(tiny, monkeypatch):
     def broken(self, *args, **kwargs):
         raise RuntimeError("stopped")
 
-    monkeypatch.setattr(LlamaServer, "generate", broken)
+    monkeypatch.setattr(LlamaServer, "answers", broken)
     with pytest.raises(RuntimeError, match="stopped"):
         Search(tiny).score([Edit("each", None, KERNELS)])
     assert len(closed) == 2
@@ -1212,6 +1211,16 @@ def test_the_report_names_each_kinds_best_its_edges_and_what_to_measure(tiny):
     assert [int(words[-1]) for words in commands] == expected
     assert shown.count("It presses on the edge of the search's ranges (") == 2
     assert shown.count("attn.strength 1, at its floor 1; attn.strength 1, at its ceiling 1") == 2
+
+
+def test_the_edge_alarm_waits_for_the_trials_the_search_aims(tiny):
+    small(tiny)
+    tiny.settings.search.startup_per_scope = 2
+    tiny.settings.search.strength = (1.0, 1.0)
+    config.write(tiny.folder.parent, "cli", tiny.settings, "made by a test")
+    result = CliRunner(env={"COLUMNS": "200"}).invoke(app, ["search", str(tiny.folder.parent / "cli")])
+    assert result.exit_code == 0, result.output
+    assert "It presses on the edge" not in flat(result.output)
 
 
 def test_with_nothing_within_the_cap_the_fewest_refused_of_each_kind_is_reported(tiny):

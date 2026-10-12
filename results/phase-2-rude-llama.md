@@ -158,9 +158,16 @@ review ran candor's own search code on the landscapes and got the simulated desi
 one. The first build stopped after 1 trial refused fewer, which the evaluation had kept only as a
 speed mode; the review caught it, and it missed more on the harshest landscape (table above, 17%
 against 30% at 600 trials). The time saved is to be measured on rude-llama. 300 trials of each kind
-by default. The search's report
-flags a best trial pressing on the end of a range. Widening ranges automatically is deferred: the
+by default. The search's report flags a best trial pressing on the end of a range. Widening ranges automatically is deferred: the
 landscapes can't say whether it matters, and the edge alarm on a real model will.
+
+The 4-trial pilot (2026-10-12) took 57-91 s a trial against 46-67 s for the old search's trials
+refusing as many (71, 75, 28 and 98 of 100 against the old trials' times by refusals). Scoring a
+chunk at a time left the model idle while the judge worked, and short refusals left slots empty
+until the chunk's longest answer finished. Each chunk is now judged while the server answers the
+ones after it. The chunks and the judge's batches are the same, so scores mean what they did and
+the pilot's trials stand. The edge alarm also waits until a kind has trials beyond its spread
+start: the pilot flagged a start point, which is only a point of a fixed grid.
 
 Limits to remember: 100 test prompts can't tell 0 refusals from 2, so the search's pick truly
 refuses about 2 of 100 and sits above the true best; measuring the best few of each kind on the

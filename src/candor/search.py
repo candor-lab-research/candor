@@ -27,8 +27,9 @@ import json
 import time
 import warnings
 from collections.abc import Callable, Iterable, Iterator
-from contextlib import contextmanager
+from contextlib import closing, contextmanager
 from dataclasses import asdict, dataclass
+from itertools import islice
 from pathlib import Path
 from typing import Any
 
@@ -46,7 +47,8 @@ from .measure import Edit, edit_adapters
 from .run import STAGES, Run, RunError, digest
 
 SLOTS = 8
-# Harmful prompts answered and judged at a time, so a trial that can't win stops early.
+# Harmful prompts judged at a time, so a trial that can't win stops early. The server answers the
+# next ones meanwhile.
 CHUNK = SLOTS
 # The sampler weighs this many candidates for each trial, as heretic does, rather than Optuna's 24.
 CANDIDATES = 128
@@ -687,24 +689,23 @@ class _Scorer:
         self.base = server.top_logprobs(harmless, scoring.kl_tokens)
 
     def score(self, scales: dict[Path, float], stop_above: int | None = None) -> Score:
-        """An edit's refusals and KL divergence. The harmful prompts are answered and judged CHUNK at a
-        time, in order; with stop_above, judging stops once more than that many are refused."""
+        """An edit's refusals and KL divergence. The harmful prompts are judged CHUNK at a time, in
+        order, while the server answers the next ones; with stop_above, it stops once more than that
+        many are refused."""
         refusals = keyword_refusals = unlabelled = judged = 0
-        for start in range(0, len(self.harmful), CHUNK):
-            end = start + CHUNK
-            answers = [
-                a.text
-                for a in self.server.generate(self.harmful[start:end], self.scoring.answer_tokens, scales)
-            ]
-            verdicts = [read_verdict(reply) for reply in self.guard.replies(self.texts[start:end], answers)]
-            labels = [
-                judged_refusal(answer, verdict) for answer, verdict in zip(answers, verdicts, strict=True)
-            ]
-            refusals += sum(label is not False for label in labels)
-            unlabelled += sum(label is None for label in labels)
-            keyword_refusals += sum(map(is_refusal, answers))
-            judged += len(answers)
-            if stop_above is not None and refusals > stop_above:
-                break
+        with closing(self.server.answers(self.harmful, self.scoring.answer_tokens, scales)) as answering:
+            for start in range(0, len(self.harmful), CHUNK):
+                answers = [a.text for a in islice(answering, CHUNK)]
+                replies = self.guard.replies(self.texts[start : start + CHUNK], answers)
+                labels = [
+                    judged_refusal(answer, read_verdict(reply))
+                    for answer, reply in zip(answers, replies, strict=True)
+                ]
+                refusals += sum(label is not False for label in labels)
+                unlabelled += sum(label is None for label in labels)
+                keyword_refusals += sum(map(is_refusal, answers))
+                judged += len(answers)
+                if stop_above is not None and refusals > stop_above:
+                    break
         top = self.server.top_logprobs(self.harmless, self.scoring.kl_tokens, scales)
         return Score(refusals, keyword_refusals, unlabelled, kl.mean_from_top(self.base, top), judged)

@@ -7,7 +7,7 @@ import os
 import socket
 import subprocess
 import time
-from collections.abc import Callable, Iterable, Mapping
+from collections.abc import Callable, Generator, Iterable, Mapping
 from concurrent.futures import ThreadPoolExecutor, as_completed
 from dataclasses import dataclass
 from pathlib import Path
@@ -237,20 +237,46 @@ class LlamaServer:
         done: Callable[[], None] | None = None,
     ) -> list[Answer]:
         """Greedy answers to prompts given as token ids. done is called as each one finishes."""
-        lora = self.lora(scales)
-        payloads = [{"prompt": p, "n_predict": max_tokens, "temperature": 0.0, "lora": lora} for p in prompts]
+        payloads = self._payloads(prompts, max_tokens, scales)
         results = self._complete_all(payloads, done)
-        for prompt, result in zip(prompts, results, strict=True):
-            # The server also flags an answer that fills its slot exactly, so only a short one counts.
-            if result["truncated"] and result["tokens_predicted"] < max_tokens:
-                raise ServerError(
-                    f"the server's context cut an answer short: a prompt of {len(prompt)} tokens needs"
-                    f" a slot of at least {len(prompt) + max_tokens} tokens"
-                )
-        return [
-            Answer(result["content"], result["tokens_predicted"], result["stop_type"] != "limit")
-            for result in results
-        ]
+        return [self._answer(payload, result) for payload, result in zip(payloads, results, strict=True)]
+
+    def answers(
+        self, prompts: list[list[int]], max_tokens: int, scales: Mapping[Path, float] | None = None
+    ) -> Generator[Answer]:
+        """Greedy answers to prompts given as token ids, in order, each as soon as it is ready. The
+        server answers the rest meanwhile. Closing the iterator early cancels those not yet started."""
+        payloads = self._payloads(prompts, max_tokens, scales)
+        pool = ThreadPoolExecutor(self.parallel)
+        try:
+            futures = [pool.submit(self._complete, payload) for payload in payloads]
+            for payload, future in zip(payloads, futures, strict=True):
+                yield self._answer(payload, future.result())
+        except GeneratorExit:
+            # The server can't be told to drop an answer it has started, so wait for those rather
+            # than let them slow whatever is asked next.
+            pool.shutdown(cancel_futures=True)
+            raise
+        except BaseException:
+            pool.shutdown(wait=False, cancel_futures=True)
+            raise
+        pool.shutdown()
+
+    def _payloads(
+        self, prompts: list[list[int]], max_tokens: int, scales: Mapping[Path, float] | None
+    ) -> list[dict[str, Any]]:
+        lora = self.lora(scales)
+        return [{"prompt": p, "n_predict": max_tokens, "temperature": 0.0, "lora": lora} for p in prompts]
+
+    def _answer(self, payload: dict[str, Any], result: dict[str, Any]) -> Answer:
+        # The server also flags an answer that fills its slot exactly, so only a short one counts.
+        if result["truncated"] and result["tokens_predicted"] < payload["n_predict"]:
+            length = len(payload["prompt"])
+            raise ServerError(
+                f"the server's context cut an answer short: a prompt of {length} tokens needs"
+                f" a slot of at least {length + payload['n_predict']} tokens"
+            )
+        return Answer(result["content"], result["tokens_predicted"], result["stop_type"] != "limit")
 
     def top_logprobs(
         self,

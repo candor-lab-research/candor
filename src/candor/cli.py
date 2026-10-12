@@ -699,7 +699,11 @@ def search_command(
             console.print(f"  {scope}: {described}")
         else:
             console.print(f"  {scope}: none refused {cap} or fewer; the fewest refused: {described}")
-        if edges := search.at_edges(top.params, space, layers):
+        # The best of the spread start is a point of a fixed grid, so its edges say nothing yet.
+        aimed = (
+            sum(search.scope_of(t.params) == scope for t in found.trials.values()) > space.startup_per_scope
+        )
+        if aimed and (edges := search.at_edges(top.params, space, layers)):
             console.print(
                 f"    It presses on the edge of the search's ranges ({escape('; '.join(edges))}), so a "
                 "better edit may lie outside them."
