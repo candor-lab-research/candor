@@ -14,10 +14,10 @@ this design missing the best far less often (see results/phase-2-rude-llama.md).
 
 All of the run's adapters are loaded into one llama-server, so a trial only sets their strengths per
 request. A trial answers the harmful test prompts a chunk at a time and the judge labels each chunk;
-refusals can only add up, so a trial that has refused more than the cap, and more than a fully scored
-trial of its kind, can't win and stops there. KL divergence is read from the harmless test prompts'
-first tokens. The held-out prompts are left for candor measure. Nothing a model writes is kept:
-answers are judged, then dropped.
+refusals can only add up, so a trial that has refused more than the cap, and more than 25 fully scored
+trials of its kind, can't win and stops there, unseen by the sampler. KL divergence is read from the
+harmless test prompts' first tokens. The held-out prompts are left for candor measure. Nothing a model
+writes is kept: answers are judged, then dropped.
 
 Any other edit, such as a heretic trial, can be scored the same way without joining the search, to see
 where it would sit among the search's trials and whether the search could have drawn it.
@@ -64,6 +64,11 @@ ROUNDING = 1e-9
 KL_DIGITS = 4
 # A setting within this share of its range from an end of it presses on that end.
 EDGE = 0.05
+# A trial stops early only once this many trials of its kind, scored in full, refused fewer. TPE learns
+# from its best trials, at most 25 of them (Optuna's default gamma), and these all rank ahead of the
+# stopped trial, so stopping it changes nothing the sampler draws. Stopping sooner was faster in the
+# test landscapes but missed the best more often.
+STOP_AFTER = 25
 
 
 @dataclass(frozen=True)
@@ -216,15 +221,20 @@ def outside_space(edit: Edit, space: config.Search, layers: int, components: lis
 def at_edges(params: dict[str, Any], space: config.Search, layers: int) -> list[str]:
     """The ends of the search's ranges a trial's settings press on, where a better edit may lie just
     outside them: either end of the strength and of the direction layers read, the peak's floor and
-    the reach's ceiling. The other ends are the model's own."""
+    the reach's ceiling, unless that end is already the model's own. The other ends always are."""
     pressed = []
     if "direction_layer" in params:
         low, high = space.direction_layers(layers)
-        for end, word in ((low, "first"), (high, "last")):
-            if params["direction_layer"] == end:
+        for end, word, limit in ((low, "first", 0), (high, "last", layers - 1)):
+            if params["direction_layer"] == end != limit:
                 pressed.append(f"direction layer {end}, the {word} the search reads")
     ranges = _ranges(space, layers)
-    ends = {"strength": (True, True), "peak_layer": (True, False), "reach": (False, True)}
+    # Which ends can move: the floor, and the ceiling, short of the model's own limits.
+    ends = {
+        "strength": (True, True),
+        "peak_layer": (ranges["peak_layer"][0] > 0, False),
+        "reach": (False, ranges["reach"][1] < 1),
+    }
     for name, value in sorted(params.items()):
         setting = name.split(".")[-1]
         if setting not in ends:
@@ -269,6 +279,10 @@ def repeats(score: Score, searched: Score) -> bool:
         and score.keyword_refusals == searched.keyword_refusals
         and score.judged == searched.judged
     )
+
+
+def _key(params: dict[str, Any]) -> str:
+    return json.dumps(params, sort_keys=True)
 
 
 def _storage(folder: Path) -> JournalStorage:
@@ -322,6 +336,12 @@ def within_cap(found: Found, scope: str, cap: int) -> list[Candidate]:
     return sorted(kept, key=lambda c: (c.kl, c.refusals))
 
 
+def fewest_refused(found: Found, scope: str) -> Candidate | None:
+    """The scope's trial scored in full that refused fewest, then with least KL."""
+    kept = [c for c in _scored_in_full(found) if scope_of(c.params) == scope]
+    return min(kept, key=lambda c: (c.refusals, c.kl), default=None)
+
+
 def _changed(before: dict[str, Any], now: dict[str, Any], keys: Iterable[str] | None = None) -> list[str]:
     keys = before.keys() | now.keys() if keys is None else keys
     return sorted(key for key in keys if before.get(key) != now.get(key))
@@ -341,9 +361,12 @@ def load(run: Run) -> Found | None:
     if not (folder / "study.jsonl").exists():
         return None
     storage = _storage(folder)
-    if not set(STUDIES.values()) <= set(optuna.get_all_study_names(storage)):
+    names = set(optuna.get_all_study_names(storage))
+    if not names & set(STUDIES.values()):
         raise RunError(f"{folder} holds a search made by an older candor; move it aside or delete it")
-    return _found(optuna.load_study(study_name=STUDIES[scope], storage=storage) for scope in SCOPES)
+    return _found(
+        optuna.load_study(study_name=name, storage=storage) for name in STUDIES.values() if name in names
+    )
 
 
 def searched_score(found: Found, number: int) -> Score:
@@ -556,27 +579,35 @@ class Search:
             # it.
             for trial in study.get_trials(deepcopy=False, states=(TrialState.RUNNING,)):
                 study.tell(trial.number, state=TrialState.FAIL)
-            if not study.trials:
-                for params in spread(
-                    scope, space, layers, components, space.startup_per_scope, space.seed + i
-                ):
+            # The spread start, less the points already scored or waiting, so a point whose trial
+            # failed is queued again rather than lost.
+            kept = {
+                _key(trial.system_attrs.get("fixed_params", trial.params))
+                for trial in study.get_trials(
+                    deepcopy=False, states=(TrialState.COMPLETE, TrialState.WAITING)
+                )
+            }
+            for params in spread(scope, space, layers, components, space.startup_per_scope, space.seed + i):
+                if _key(params) not in kept:
                     study.enqueue_trial(params)
-            # The sampler starts again from its seed in each session, so the seed moves on by the trials
-            # already made; otherwise a resumed search would repeat its first trials.
+            # The sampler starts again from its seed in each session, so the seed moves on with the trials
+            # made, and a resumed search draws afresh rather than replaying the same random numbers.
             with warnings.catch_warnings():
                 warnings.simplefilter("ignore", optuna.exceptions.ExperimentalWarning)
                 study.sampler = optuna.samplers.TPESampler(
                     n_startup_trials=space.startup_per_scope,
                     n_ei_candidates=CANDIDATES,
                     multivariate=True,
-                    seed=space.seed + i + len(study.trials),
+                    seed=space.seed + len(SCOPES) * len(study.trials) + i,
                     constraints_func=_violation,
                 )
             studies[scope] = study
         return studies
 
     def _done(self, studies: dict[str, optuna.Study]) -> int:
-        return sum(len(_completed(study)) for study in studies.values())
+        """The finished trials that count towards the target: a kind's beyond its share don't."""
+        share = self.run.settings.search.trials_per_scope
+        return sum(min(len(_completed(study)), share) for study in studies.values())
 
     def _next(self, studies: dict[str, optuna.Study]) -> str:
         """The kind of edit whose turn it is: the one with fewer finished trials, that has room for more."""
@@ -616,10 +647,14 @@ class Search:
                 suggest(trial, space, layers, sorted({w.component for w in writers}), scope)
             edit = edit_from(trial.params, number, layers)
             scales = self._scales(edit, self._edit_files(edit, adapters))
-            full = [t.user_attrs["refusals"] for t in _completed(study) if not t.user_attrs["stopped"]]
-            # A trial can't win once it refuses more than the cap and more than a trial scored in full,
-            # which keeps the trial with the fewest refusals scored in full.
-            stop_above = max(space.max_refusals, min(full)) if space.stop_early and full else None
+            full = sorted(t.user_attrs["refusals"] for t in _completed(study) if not t.user_attrs["stopped"])
+            # A trial can't win once it refuses more than the cap, and the sampler can't see it stop once
+            # it also refuses more than STOP_AFTER trials of its kind scored in full.
+            stop_above = (
+                max(space.max_refusals, full[STOP_AFTER - 1])
+                if space.stop_early and len(full) >= STOP_AFTER
+                else None
+            )
             started = time.perf_counter()
             score = scorer.score(scales, stop_above)
             prompts = len(scorer.harmful)

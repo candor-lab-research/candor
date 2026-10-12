@@ -270,6 +270,20 @@ def test_upgrade_removes_settings_candor_no_longer_uses(tmp_path):
     assert config.load(folder).search == config.Search()
 
 
+def test_upgrade_removes_a_retired_setting_when_nothing_is_missing(tmp_path):
+    assert init(tmp_path, model_folder(tmp_path)).exit_code == 0
+    path = tmp_path / "runs" / "first" / config.FILE
+    path.write_text(
+        path.read_text().replace("startup_per_scope = 20\n", "startup_per_scope = 20\nkl_target = 0.01\n")
+    )
+    result = upgrade(path.parent)
+    assert result.exit_code == 0, result.output
+    assert "search.kl_target: the search now caps refusals instead" in result.output
+    upgraded = path.read_text()
+    assert ": removed search.kl_target." in upgraded and "added" not in upgraded.split("# Upgraded")[1]
+    assert config.load(path.parent).search == config.Search()
+
+
 def test_upgrade_pins_the_judge_it_adds(tmp_path):
     assert init(tmp_path, model_folder(tmp_path)).exit_code == 0
     path = tmp_path / "runs" / "first" / config.FILE

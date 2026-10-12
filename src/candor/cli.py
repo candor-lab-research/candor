@@ -669,7 +669,9 @@ def search_command(
         console.print(f"[red]The search stopped on an unexpected error:[/] {escape(_where(error))}")
         raise typer.Exit(COULD_NOT_INSPECT) from None
     table = Table(
-        title="Trials no other beats on both refusals and KL", title_justify="left", box=box.SIMPLE_HEAD
+        title="Fully scored trials no other beats on both refusals and KL",
+        title_justify="left",
+        box=box.SIMPLE_HEAD,
     )
     for heading in ["Trial", "Direction", "Refused", "Keywords", "KL"]:
         table.add_column(heading, justify="left" if heading == "Direction" else "right")
@@ -683,33 +685,36 @@ def search_command(
         )
     console.print(table)
     _, layers, _, _ = run.shape
-    best = {scope: search.within_cap(found, scope, space.max_refusals) for scope in search.SCOPES}
-    console.print(f"The least KL of each kind within the cap ({space.max_refusals} refused):")
-    for scope, kept in best.items():
-        if not kept:
-            console.print(f"  {scope}: no trial yet")
+    cap = space.max_refusals
+    console.print(f"The least KL of each kind within the cap ({cap} refused):")
+    picks = []
+    for scope in search.SCOPES:
+        kept = search.within_cap(found, scope, cap)
+        top = kept[0] if kept else search.fewest_refused(found, scope)
+        if top is None:
+            console.print(f"  {scope}: no trial scored in full yet")
             continue
-        top = kept[0]
-        console.print(
-            f"  {scope}: trial {top.trial}, {top.direction}, {top.refusals} refused, KL {top.kl:.4f}"
-        )
+        described = f"trial {top.trial}, {top.direction}, {top.refusals} refused, KL {top.kl:.4f}"
+        if kept:
+            console.print(f"  {scope}: {described}")
+        else:
+            console.print(f"  {scope}: none refused {cap} or fewer; the fewest refused: {described}")
         if edges := search.at_edges(top.params, space, layers):
             console.print(
                 f"    It presses on the edge of the search's ranges ({escape('; '.join(edges))}), so a "
                 "better edit may lie outside them."
             )
+        picks += [c.trial for c in kept[:2]] if kept else [top.trial]
     if len(found.trials) < total:
         console.print(
             f"Trials took about {seconds:.0f} s each, so all {total} would take about "
             f"{_duration(seconds * total)}. Trials that refuse almost nothing take longest, and later "
             "trials aim at them, so allow more. Run candor search again to carry on."
         )
-    elif any(best.values()):
+    elif picks:
         console.print("Measure the best of each kind on the held-out prompts:")
-        for kept in best.values():
-            for candidate in kept[:2]:
-                command = f"  uv run candor measure {folder} --trial {candidate.trial}"
-                console.print(escape(command), soft_wrap=True)
+        for number in picks:
+            console.print(escape(f"  uv run candor measure {folder} --trial {number}"), soft_wrap=True)
 
 
 def _direction(layer: float | None) -> str:

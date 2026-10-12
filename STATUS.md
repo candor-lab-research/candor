@@ -62,8 +62,10 @@ How the fix is chosen and checked, decided before any of it runs:
 The design chosen (results file, "The search fix"): the two kinds of edit searched as two studies
 taking turns, each starting from 20 evenly spread trials and aiming at the least KL within a cap of
 2 refusals, with trials that can't win stopped early. On the calibrated test landscape it got
-within 10% of the best in 83% of runs at 400 trials (today's search: 20%), 93% at equal time with
-the early stop, and was no worse on any landscape tested. It is not watertight: on the harshest
+within 10% of the best in 83% of runs at 400 trials and 93% at 600 (today's search: 20% and 23%),
+and was no worse on any landscape tested. Trials that can't win stop early only once 25 fully scored
+trials of their kind refused fewer, which leaves every trial the sampler draws unchanged; stopping
+sooner was faster but missed more on the harshest landscape (17% against 30% at 600 trials). It is not watertight: on the harshest
 landscape it still missed in most runs. Widening ranges automatically is deferred until the edge
 alarm fires on a real model.
 

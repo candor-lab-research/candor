@@ -5,6 +5,9 @@ import re
 
 import optuna
 import pytest
+from optuna.distributions import BaseDistribution, FloatDistribution, IntDistribution
+from optuna.samplers._tpe.sampler import default_gamma
+from optuna.study import StudyDirection
 from optuna.trial import FixedTrial, TrialState
 from typer.testing import CliRunner
 
@@ -54,7 +57,6 @@ def finished(run) -> list[optuna.trial.FrozenTrial]:
     """Every finished trial, by the number the search shows."""
     found = search.load(run)
     assert found is not None
-    assert list(found.trials) == list(range(1, len(found.trials) + 1))
     return list(found.trials.values())
 
 
@@ -305,7 +307,7 @@ def test_search_and_measure_a_trial_from_the_command_line(tiny):
     searched = runner.invoke(app, ["search", str(folder), "--trials", "2"])
     assert searched.exit_code == 0, searched.output
     shown = flat(searched.output)
-    assert "Trials no other beats on both refusals and KL" in shown
+    assert "Fully scored trials no other beats on both refusals and KL" in shown
     assert "so all 4 would take about" in shown
     assert "Trial 1, one layer: 1 of 3 refused, KL" in shown
     assert "Trial 2, per layer: 1 of 3 refused, KL" in shown
@@ -447,6 +449,7 @@ def test_the_sampler_is_told_each_trials_kl_and_how_far_it_goes_over_the_cap(tin
     small(tiny)
     tiny.settings.search.max_refusals = 0
     Search(tiny).search(2)
+    assert [s.direction for s in studies(tiny).values()] == [StudyDirection.MINIMIZE] * 2
     for trial in finished(tiny):
         assert trial.values == [trial.user_attrs["kl"]]
         assert trial.user_attrs["refusals"] == 1 and trial.user_attrs["judged"] == 3
@@ -498,17 +501,16 @@ def test_a_trial_is_announced_when_it_has_the_least_kl_of_its_kind_within_the_ca
     )
 
 
-def test_a_trial_stops_once_it_refuses_more_than_the_cap_and_a_trial_of_its_kind_scored_in_full(
-    tiny, monkeypatch
-):
+def test_a_trial_stops_once_it_refuses_more_than_the_cap_and_enough_trials_of_its_kind(tiny, monkeypatch):
     small(tiny, trials=3)
+    monkeypatch.setattr(search, "STOP_AFTER", 1)
     asked = scripted(
         monkeypatch,
         [
             Score(3, 0, 0, 0.0, 3),
             Score(1, 0, 0, 0.5, 3),  # 1, one layer
             Score(3, 0, 0, 0.1, 3),  # 2, per layer
-            Score(3, 0, 0, 0.6, 1),  # 3, one layer, stopped early
+            Score(3, 0, 0, 0.01, 1),  # 3, one layer, stopped early with the least KL
             Score(0, 0, 0, 0.2, 3),  # 4, per layer
             Score(1, 0, 0, 0.4, 3),  # 5, one layer
         ],
@@ -529,6 +531,36 @@ def test_a_trial_stops_once_it_refuses_more_than_the_cap_and_a_trial_of_its_kind
     asked = scripted(monkeypatch, [Score(3, 0, 0, 0.0, 3)] + [Score(1, 0, 0, 0.5, 3)] * 4)
     Search(tiny).search(4)
     assert asked == [None] * 5
+
+
+@pytest.mark.parametrize(
+    ("stop_after", "expected"), [(1, [None, None, None, 3, 3, 2]), (2, [None] * 5 + [3])]
+)
+def test_a_trial_stops_above_the_stop_after_fewest_refusals_of_its_kind(
+    tiny, monkeypatch, stop_after, expected
+):
+    small(tiny, trials=3)
+    tiny.settings.search.max_refusals = 0
+    monkeypatch.setattr(search, "STOP_AFTER", stop_after)
+    asked = scripted(
+        monkeypatch,
+        [
+            Score(3, 0, 0, 0.0, 3),
+            Score(3, 0, 0, 0.5, 3),  # 1, one layer
+            Score(3, 0, 0, 0.5, 3),  # 2, per layer
+            Score(2, 0, 0, 0.4, 3),  # 3, one layer
+            Score(3, 0, 0, 0.5, 3),  # 4, per layer
+            Score(1, 0, 0, 0.3, 3),  # 5, one layer: its kind has refused 3 and 2 in full
+        ],
+    )
+    Search(tiny).search(5)
+    assert asked == expected
+
+
+def test_by_default_a_trial_stops_only_once_25_of_its_kind_refused_fewer_in_full():
+    # TPE's good trials number at most 25, so a trial behind 25 of its kind is never one of them.
+    assert search.STOP_AFTER == 25
+    assert default_gamma(10_000) == 25
 
 
 def test_scoring_stops_at_the_end_of_the_chunk_that_goes_over(tiny, monkeypatch):
@@ -557,6 +589,9 @@ def test_scoring_stops_at_the_end_of_the_chunk_that_goes_over(tiny, monkeypatch)
         assert stopped.kl == whole.kl == 0.0
         labels[:], asked[:] = [True, True, True], []
         assert scorer.score({}).judged == 3 and asked == [2, 1]
+        labels[:], asked[:] = [True, True, False], []
+        level = scorer.score({}, stop_above=2)
+        assert (level.refusals, level.judged, asked) == (2, 3, [2, 1])
 
 
 def scorer_inputs(tiny):
@@ -795,7 +830,6 @@ def test_scoring_closes_the_judge_even_when_it_stops(tiny, monkeypatch):
 
 def test_an_edit_drawn_by_the_search_is_inside_its_space():
     params = {
-        "direction_scope": search.ONE_LAYER,
         "direction_layer": 15,
         "attn.strength": 1.2,
         "attn.peak_layer": 0.75,
@@ -806,17 +840,16 @@ def test_an_edit_drawn_by_the_search_is_inside_its_space():
         "mlp.edge_strength": 1.0,
         "mlp.reach": 0.6,
     }
-    space = config.Search()
-    for scope in (search.ONE_LAYER, search.PER_LAYER):
-        edit = search.edit_from(params | {"direction_scope": scope}, 1, 29)
-        assert search.outside_space(edit, space, 29, ["attn", "mlp"]) == []
+    per_layer = {k: v for k, v in params.items() if k != "direction_layer"}
+    for drawn in (params, per_layer):
+        edit = search.edit_from(drawn, 1, 29)
+        assert edit.direction_layer == drawn.get("direction_layer")
+        assert search.outside_space(edit, config.Search(), 29, ["attn", "mlp"]) == []
 
 
 def test_a_drawn_setting_on_the_edge_of_its_range_isnt_pushed_outside_by_rounding():
     space = config.Search(edge_strength=(0.7, 1.0), peak_layer=(0.6, 0.8))
     params = {
-        "direction_scope": search.PER_LAYER,
-        "direction_layer": 1,
         "attn.strength": 0.8,
         "attn.peak_layer": 0.8,
         "attn.edge_strength": 0.7,
@@ -1020,3 +1053,195 @@ def test_the_command_line_says_which_trials_beat_an_edit_and_which_it_beats(tiny
     shown = scoring(worse)
     assert "The search has no finished trials yet to set these beside." in shown
     assert "beats it" not in shown
+
+
+def made(number, refusals, kl, layer=None, judged=3):
+    """A finished trial as the search records it, with a direction layer for one of one layer."""
+    params = {"attn.strength": 1.0} | ({} if layer is None else {"direction_layer": layer})
+    distributions: dict[str, BaseDistribution] = {
+        k: IntDistribution(0, 30) if k == "direction_layer" else FloatDistribution(0, 2) for k in params
+    }
+    attrs = {
+        "number": number,
+        "refusals": refusals,
+        "keyword_refusals": 0,
+        "unlabelled": 0,
+        "kl": kl,
+        "judged": judged,
+        "stopped": judged < 3,
+    }
+    return optuna.trial.create_trial(params=params, distributions=distributions, value=kl, user_attrs=attrs)
+
+
+def test_within_cap_keeps_the_cap_and_puts_the_least_kl_first():
+    trials = [made(1, 0, 0.3, 5), made(2, 2, 0.1, 5), made(3, 3, 0.05, 5), made(4, 0, 0.01)]
+    found = search.Found({t.user_attrs["number"]: t for t in trials}, 1)
+    assert [c.trial for c in search.within_cap(found, search.ONE_LAYER, 2)] == [2, 1]
+    fewest = search.fewest_refused(found, search.ONE_LAYER)
+    assert fewest is not None and fewest.trial == 1
+    assert search.fewest_refused(search.Found({}, 1), search.PER_LAYER) is None
+
+
+def test_a_stopped_trial_is_never_a_candidate():
+    found = search.Found({1: made(1, 1, 0.3), 2: made(2, 3, 0.01, judged=1)}, 1)
+    assert [c.trial for c in search.candidates(found)] == [1]
+    assert search.fewest_refused(found, search.PER_LAYER).trial == 1  # pyright: ignore[reportOptionalMemberAccess]
+
+
+def test_a_new_session_announces_only_less_kl_than_the_last_sessions(tiny, monkeypatch):
+    small(tiny, trials=3)
+    scripted(
+        monkeypatch,
+        [
+            Score(3, 0, 0, 0.0, 3),
+            Score(1, 0, 0, 0.5, 3),  # 1, one layer
+            Score(3, 0, 0, 0.1, 3),  # 2, per layer: over the cap
+            Score(2, 0, 0, 0.3, 3),  # 3, one layer: at the cap, the least KL
+            Score(3, 0, 0, 0.2, 3),  # 4, per layer: over the cap, in a new session
+            Score(1, 0, 0, 0.4, 3),  # 5, one layer: more KL than trial 3
+        ],
+    )
+    said = []
+    Search(tiny).search(3, finished=said.append)
+    Search(tiny).search(5, finished=said.append)
+    assert [line and line.split(":")[0] for line in said] == [
+        "Trial 1, one layer",
+        None,
+        "Trial 3, one layer",
+        None,
+        None,
+    ]
+
+
+def test_the_spread_start_reads_the_first_and_last_layers():
+    for seed in range(5):
+        points = search.spread(search.ONE_LAYER, config.Search(), 28, ["attn"], 20, seed)
+        assert {11, 24} <= {p["direction_layer"] for p in points}
+
+
+def test_a_spread_trial_that_failed_is_queued_again(tiny, monkeypatch):
+    small(tiny, trials=3)
+    tiny.settings.search.startup_per_scope = 2
+    real = search._Scorer.score
+    calls = []
+
+    def stopping(self, scales, stop_above=None):
+        calls.append(scales)
+        if len(calls) == 3:
+            raise KeyboardInterrupt
+        return real(self, scales, stop_above)
+
+    monkeypatch.setattr(search._Scorer, "score", stopping)
+    with pytest.raises(KeyboardInterrupt):
+        Search(tiny).search(6)
+    monkeypatch.setattr(search._Scorer, "score", real)
+    Search(tiny).search(6)
+    _, layers, _, writers = tiny.shape
+    components = sorted({w.component for w in writers})
+    for i, scope in enumerate(search.SCOPES):
+        drawn = [search._key(t.params) for t in finished(tiny) if search.scope_of(t.params) == scope]
+        spread = search.spread(scope, tiny.settings.search, layers, components, 2, i)
+        assert {search._key(p) for p in spread} <= set(drawn)
+
+
+def test_more_harmless_than_harmful_test_prompts(tiny, monkeypatch):
+    small(tiny)
+
+    def prompts(spec):
+        found = fake_prompts(spec)
+        extra = "harmless" in spec.dataset and spec.split.startswith("test")
+        return [*found, f"one more {spec.dataset}"] if extra else found
+
+    monkeypatch.setattr(run, "load_prompts", prompts)
+    found, _ = Search(tiny).search(2)
+    assert [(t.user_attrs["stopped"], t.user_attrs["violation"]) for t in found.trials.values()] == [
+        (False, -1.5)
+    ] * 2
+
+
+def test_settings_near_but_not_at_an_end_arent_flagged():
+    inside = {
+        "direction_layer": 12,
+        "attn.strength": 1.45,
+        "attn.peak_layer": 0.63,
+        "attn.edge_strength": 0.5,
+        "attn.reach": 0.3,
+    }
+    assert search.at_edges(inside, config.Search(), 28) == []
+
+
+def test_an_end_that_is_already_the_models_own_isnt_flagged():
+    space = config.Search(direction_layer=(0.0, 1.0), peak_layer=(0.0, 1.0), reach=(0.01, 1.0))
+    pressed = {"direction_layer": 0, "attn.strength": 1.2, "attn.peak_layer": 0.0, "attn.reach": 1.0}
+    assert search.at_edges(pressed, space, 28) == []
+    assert search.at_edges(pressed | {"direction_layer": 27}, space, 28) == []
+
+
+def test_a_search_holding_only_one_kinds_study_still_loads(tiny):
+    folder = tiny.path("search")
+    folder.mkdir()
+    optuna.create_study(study_name=search.STUDIES[search.ONE_LAYER], storage=search._storage(folder))
+    found = search.load(tiny)
+    assert found is not None and found.trials == {}
+
+
+def test_the_report_names_each_kinds_best_its_edges_and_what_to_measure(tiny):
+    small(tiny, trials=3)
+    tiny.settings.search.strength = (1.0, 1.0)  # every trial presses on the strength's ends
+    config.write(tiny.folder.parent, "cli", tiny.settings, "made by a test")
+    folder = tiny.folder.parent / "cli"
+    result = CliRunner(env={"COLUMNS": "200"}).invoke(app, ["search", str(folder)])
+    assert result.exit_code == 0, result.output
+    shown = flat(result.output)
+    found = search.load(run.Run.open(folder))
+    assert found is not None
+    assert "Fully scored trials no other beats on both refusals and KL" in shown
+    for c in search.candidates(found):
+        row = rf"^ *{c.trial} +{c.direction} +{c.refusals} +{c.keyword_refusals} +{c.kl:.4f} *$"
+        assert re.search(row, result.output, re.M)
+    expected = []
+    for scope in search.SCOPES:
+        kept = search.within_cap(found, scope, 2)
+        assert len(kept) == 3 and kept[0].kl < kept[-1].kl
+        top = kept[0]
+        assert (
+            f"{scope}: trial {top.trial}, {top.direction}, {top.refusals} refused, KL {top.kl:.4f}" in shown
+        )
+        expected += [c.trial for c in kept[:2]]
+    commands = [line.split() for line in result.output.splitlines() if "candor measure" in line]
+    assert [int(words[-1]) for words in commands] == expected
+    assert shown.count("It presses on the edge of the search's ranges (") == 2
+    assert shown.count("attn.strength 1, at its floor 1; attn.strength 1, at its ceiling 1") == 2
+
+
+def test_with_nothing_within_the_cap_the_fewest_refused_of_each_kind_is_reported(tiny):
+    small(tiny)
+    tiny.settings.search.max_refusals = 0
+    config.write(tiny.folder.parent, "cli", tiny.settings, "made by a test")
+    folder = tiny.folder.parent / "cli"
+    result = CliRunner(env={"COLUMNS": "200"}).invoke(app, ["search", str(folder)])
+    assert result.exit_code == 0, result.output
+    shown = flat(result.output)
+    found = search.load(run.Run.open(folder))
+    assert found is not None
+    expected = []
+    for scope in search.SCOPES:
+        fewest = search.fewest_refused(found, scope)
+        assert fewest is not None
+        assert f"{scope}: none refused 0 or fewer; the fewest refused: trial {fewest.trial}," in shown
+        expected.append(fewest.trial)
+    commands = [line.split() for line in result.output.splitlines() if "candor measure" in line]
+    assert [int(words[-1]) for words in commands] == expected
+
+
+def test_scoring_a_trial_stopped_early_says_so(tiny, monkeypatch):
+    folder = cli_run(tiny, trials=1)
+    scripted(monkeypatch, [Score(1, 0, 0, 0.0, 3), Score(3, 0, 0, 0.1, 1), Score(1, 0, 0, 0.2, 3)])
+    runner = CliRunner(env={"COLUMNS": "200"})
+    assert runner.invoke(app, ["search", str(folder)]).exit_code == 0
+    monkeypatch.setattr(Search, "score", lambda self, edits: search.Scores(3, 1, [Score(3, 0, 0, 0.1, 3)]))
+    result = runner.invoke(app, ["score", str(folder), "--trial", "1"])
+    assert result.exit_code == 0, result.output
+    shown = flat(result.output)
+    assert "trial-1 was stopped early in the search, after 1 prompts" in shown
+    assert "scores differently" not in shown

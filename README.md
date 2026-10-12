@@ -68,12 +68,14 @@ uv run candor score runs/rude --heretic STUDY.jsonl --trial 170     # where it w
   Optuna's TPE sampler aims at the least KL among edits refusing at most `search.max_refusals` (2)
   of the 100 test prompts. Every adapter is loaded into one llama-server once, so a trial only sets
   strengths: it answers the test prompts eight at a time and the judge counts refusals, stopping
-  once the trial has refused more than the cap and more than a fully scored trial of its kind; KL
-  is read from the 100 harmless test prompts. Nothing a model writes is kept. It resumes where it
+  once the trial has refused more than the cap and more than 25 fully scored trials of its kind,
+  which leaves every trial the sampler draws unchanged; KL is read from the 100 harmless test
+  prompts. Nothing a model writes is kept. It resumes where it
   stopped, refuses to carry on a search made under other settings, and `--trials N` stops early to
-  time it. It ends with the trials no other beats on both refusals and KL, the least-KL trial of
-  each kind within the cap (flagged if it presses on the edge of a range), and the commands to
-  measure the best of each kind on the held-out prompts. The results file explains the design:
+  time it. It ends with the fully scored trials no other beats on both refusals and KL, the
+  least-KL trial of each kind within the cap (or, failing that, the one that refused fewest),
+  flagged if it presses on the edge of a range, and the commands to measure the best of each kind
+  on the held-out prompts. The results file explains the design:
   `results/phase-2-rude-llama.md`.
 - `score` scores one edit exactly as the search scores its trials, without adding it to the search.
   A heretic trial is scored as rebuilt, and at the nearest whole layer as the search could draw it;

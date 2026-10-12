@@ -227,8 +227,8 @@ class Search(Section):
     stop_early: StrictBool = Field(
         default=True,
         description="Stop scoring a trial once it has refused more test prompts than max_refusals and "
-        "than a fully scored trial of its kind, since it can't win. It is told to the search with its "
-        "refusals scaled to all the prompts. This makes the search about 1.5 times faster.",
+        "than 25 fully scored trials of its kind, since it can't win; the search then draws exactly "
+        "the trials it would have drawn had it scored the trial in full, in less time.",
     )
     seed: StrictInt = Field(
         default=0, ge=0, lt=2**32, description="Fixes the search's randomness, so a run can be repeated."

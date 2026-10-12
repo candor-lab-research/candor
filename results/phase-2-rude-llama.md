@@ -140,7 +140,7 @@ Results on the calibrated landscape, share of runs within 10% of the best (withi
 | --- | --- | --- | --- |
 | Today's search | 20% (0%) | 23% (0%) | 20% (0%) |
 | Two kinds apart, each capped, spread start | 83% (13%) | 93% (20%) | 77% (13%) |
-| The same, stopping trials that can't win | | | 93% (17%) |
+| The same, stopping trials sooner (after 1 fully scored trial refused fewer) | 73% (13%) | 93% (17%) | 93% (17%) |
 
 On the harshest landscape (a narrower target) the chosen design reached 17% at 400 trials against
 3%, and 37% at 1,200: better, but still a miss in most runs, with nothing inside a run to warn of it.
@@ -152,7 +152,13 @@ whether two repeats agreed did not predict a miss. Stopping when progress stalls
 Built: the two kinds as two studies taking turns, each starting from 20 scrambled Sobol points,
 multivariate TPE minimising KL with refusals above 2 of 100 as a constraint (by how far over, scaled
 to all prompts for a stopped trial), and a trial stopped once it has refused more than 2 and more
-than a fully scored trial of its kind. 300 trials of each kind by default. The search's report
+than 25 fully scored trials of its kind. TPE learns from at most 25 best trials, all of which then
+rank ahead of the stopped one, so the sampler draws exactly what it would have without stopping; a
+review ran candor's own search code on the landscapes and got the simulated design's trials one for
+one. The first build stopped after 1 trial refused fewer, which the evaluation had kept only as a
+speed mode; the review caught it, and it missed more on the harshest landscape (table above, 17%
+against 30% at 600 trials). The time saved is to be measured on rude-llama. 300 trials of each kind
+by default. The search's report
 flags a best trial pressing on the end of a range. Widening ranges automatically is deferred: the
 landscapes can't say whether it matters, and the edge alarm on a real model will.
 
