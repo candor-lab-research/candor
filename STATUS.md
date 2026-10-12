@@ -42,7 +42,10 @@ Results of each phase, numbers only, are in `results/` (phase 2: `results/phase-
    0.0920). About $2-3; the user decides when.
 3. Before phase 3, decide whether the search should score on more or other prompts: per-layer
    trials' refusals and layer-14 trials' KL didn't hold on the held-out prompts (results file).
-4. Phase 3, Qwen3.5-9B, starting with a short pilot on a pod for time and cost.
+4. Review with the user, before phase 3: greedy answers (every measurement and the search) against
+   sampled ones (`candor serve` and chat apps, at llama-server's defaults), and whether measurement
+   should sample at the settings the user chats with. Thinking models are sensitive to it.
+5. Phase 3, Qwen3.5-9B, starting with a short pilot on a pod for time and cost.
 
 ### The search fix (done 2026-10-12)
 
