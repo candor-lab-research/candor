@@ -11,10 +11,9 @@ How it works:
 2. Turn the edit into rank-1 LoRA adapters, one per edit target (each weight that writes into the
    residual stream) for each candidate direction, in the layout llama.cpp's converter gives them.
 3. Load them all into llama-server and score each candidate by setting per-layer strengths per
-   request, so nothing is re-converted between trials. (Being built: phase 2, step 5.)
+   request, so nothing is re-converted between trials.
 4. Merge the chosen edit straight into the safetensors files, copying every other file untouched,
-   then convert and quantise it to the GGUF you run. (`merge.py` exists; the export stage is phase 2,
-   step 6.)
+   then convert and quantise it to the GGUF you run, and measure that exact file.
 
 Answers to harmful prompts are only ever written to a run's `private/` folder. Commands print
 counts and measurements, never generated text.

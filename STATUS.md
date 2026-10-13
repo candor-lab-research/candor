@@ -16,7 +16,7 @@ and merged weights in Q4_K_M). (Decided 2026-10-11: the user isn't tied to Bioni
 | 0 | Score edits as per-layer LoRA adapters in llama.cpp | Adapters match merged weights, no speed cost | Done |
 | 1 | Core maths and `candor inspect` | candor's rebuild of a heretic trial matches its refusals, and measuring heretic's saved model under heretic's conditions gives heretic's numbers exactly; `inspect` reports correctly on rude-llama, Qwen3.5-9B and K2-Horizon | Done |
 | 2 | rude-llama end to end on the Mac: measure, search, export a GGUF to run in llama-server | Under the decision rule written in step 4 before any search runs, candor's shipped GGUF is at least as good as heretic's Trial 170 converted and quantised the same way: fewer or equal refusals on held-out prompts, no higher KL, no maths loss. It runs in llama-server. (A blind A/B was dropped by the user on 2026-10-12: 535 and Trial 170 are too close to tell apart by hand.) | Done 2026-10-13: trial 535, exported, passes against Trial 170 exported the same way, and ships (`runs/rude/exports/trial-535/`); see `results/milestone-rude-llama-vs-heretic.md` |
-| 3 | Qwen3.5-9B, a thinking model: scored with thinking on at your settings; residuals read on a pod | Defined at the start of the phase, against heretic's Trial 161 | |
+| 3 | Qwen3.5-9B, a thinking model: scored with thinking on at your settings; residuals read on a pod | Written in step 3 before any search runs, from the measured noise, against heretic's Trial 161 rebuilt by candor | Decisions taken 2026-10-13 (below); step 1 next |
 | 4 | K2-Horizon at your real settings | Measured honestly with its own chat template (Bionic couldn't parse it; llama-server's reader is to be checked) and the reasoning level you use, then improved | |
 
 From phase 3 a job expected to take over about 2 hours, or needing more memory than the Mac has,
@@ -34,12 +34,8 @@ Results of each phase, numbers only, are in `results/` (phase 2: `results/phase-
 
 ### Next
 
-1. Phase 3, Qwen3.5-9B. It starts with the pod bootstrap and watchdog, checked on rude-llama, then a
-   short pilot on a pod for time and cost.
-2. At the start of phase 3, review with the user: greedy answers (every measurement and the search)
-   against sampled ones (`candor serve` and chat apps, at llama-server's defaults), and whether
-   measurement should sample at the settings the user chats with. Thinking models are sensitive to it.
-3. Not blocking, each when there is a reason:
+1. Phase 3, step 1: thinking-model support (steps below).
+2. Not blocking, each when there is a reason:
    - one search on a pod with the attention peak's floor and its reach's ceiling widened (535 presses
      both, at 0.6); wider ranges become the default only if its held-out best beats 535's;
    - whether the search should score on more or other prompts: per-layer trials' refusals and
@@ -49,6 +45,42 @@ Results of each phase, numbers only, are in `results/` (phase 2: `results/phase-
      rude-llama);
    - a warning in `inspect` when a model's weights were quantised before, as rude-llama's were;
    - the export's file name says Q4_K_M when some tensors are Q8_0.
+
+### Phase 3 decisions (the user, 2026-10-13)
+
+- Thinking on everywhere: the search, every measurement and `serve`. The model is always used
+  thinking, so scoring without it wouldn't replicate use.
+- Answers are sampled, not greedy, at Qwen's recommended thinking settings (temperature 1.0, top_p
+  0.95, top_k 20, min_p 0, presence_penalty 1.5), with a fixed seed per prompt so two edits are still
+  compared prompt by prompt. `serve` uses the same settings. Greedy isn't how the model is used, and
+  thinking models tend to loop under it. Sampling adds noise greedy didn't have, so the first Qwen
+  measurement is the unedited model twice with different seeds, and the decision rule allows for it.
+- A thinking budget of 8192 tokens in real use (the user's Bionic setting; they are unsure of it):
+  after it the model is made to close its thinking and answer. Measurements and `serve` use it. The
+  search scores at a shorter budget, set by the pilot from how long answers think (numbers only),
+  since 8192 for 600 trials would take days. If answers rarely think past about 1,500 tokens, the
+  search uses 8192 too.
+- An answer still unfinished after its forced close counts against the edit.
+- KL is read at the start of the answer, after a closed thinking block, as heretic read it: the
+  first token of thinking is nearly fixed, so KL there can't tell edits apart. The pilot checks this
+  (KL at both positions for the unedited model, Trial 161 and a few random edits) and keeps the
+  position that separates edits. Directions stay read at the think start.
+- Maths: the full 1,319 GSM8K questions at 8192 on every finalist, never on search trials.
+- Pods: the pilot runs on an A40 ($0.59/hr); the search runs on the cheapest card that finishes it
+  overnight (about 12 h). The watchdog deletes the pod at a cap set per job. Expect a top-up beyond
+  $18.56 (a guess until the pilot: search $10-20, finalists $5-10).
+- Optuna stays 4.9, as the search was tested on it. The past-the-boundary variant (2605.21706) is
+  built only if Trial 161 and the search both fail with thinking on.
+
+### Phase 3 steps
+
+| Step | What | State |
+| --- | --- | --- |
+| 1 | Thinking-model settings: the template settings, sampling with a seed per prompt, the thinking budget with a forced close, the judge reading only the final answer, unfinished answers counted against, KL at the answer start; `serve` at the same settings; rebuilding a heretic trial made with a `response_prefix` (Trial 161). Checked on a tiny thinking model and SmolLM2 | |
+| 2 | Pod bootstrap, torch's CUDA build matched to llama.cpp's 12.8, Qwen3.5's fast kernels, and an in-pod watchdog that deletes the pod at a budget; checked on rude-llama (about $0.30) | |
+| 3 | Qwen3.5-9B on a pod: `init`, `run`, the unedited model measured twice (noise), Trial 161 rebuilt and measured, thinking lengths, KL at both positions. The decision rule written from them, for sign-off | |
+| 4 | A search pilot (time and cost per trial, the search's thinking budget), then the full search | |
+| 5 | The suggested trials measured at 8192, export, the final check on the shipped file, `serve` on the Mac | |
 
 ### The search fix (done 2026-10-12)
 
@@ -136,8 +168,6 @@ From the 2026-10-10 paper review, corrected after the full review read each pape
 - Models of 64 layers or more: the `--lora` list of every adapter set passes Linux's 128 KiB
   argument limit (about 34 KB for rude-llama's 28 layers, 46 KB for 32). Not needed for the three
   models in this plan; shorter adapter names would fix it.
-- Deferred to phase 3: settings for thinking models (template kwargs, reasoning level, sampling,
-  longer answers) and choosing torch's CUDA build to match llama.cpp's 12.8.
 - Reporting the llama.cpp prompt-cache bug upstream: not wanted.
 - Separate tracks, outside candor: the Qwen3.5 rude fine-tune and the Mac Studio purchase.
 
