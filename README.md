@@ -99,8 +99,9 @@ uv run candor serve runs/rude --trial 37                       # chat with it in
   serving it shows the command, the settings and how the server's own template settings render a
   first message of Hello, so a thinking model's mode is plain before you chat. The chat page can
   override both the system message and the template settings, and remembers them, so serve says what
-  to set there: the measured system message, and the reasoning menu on Default (its Low, Medium and
-  High are token budgets for thinking, not the model's effort levels). Chats are sampled with
+  to set there: the measured system message, every tool off (the page offers its own, and templates
+  such as Llama 3's turn any tool into a request for a function call), and the reasoning menu on
+  Default (its Low, Medium and High are token budgets for thinking, not the model's effort levels). Chats are sampled with
   llama-server's defaults, as apps sample; measurements answer greedily. It serves llama-server's
   chat page (`--port`, 8080) until Ctrl-C; the server's log goes to `private/`.
 - Reading residuals needs the model in 16 bits on the GPU. `run` checks this before downloading or

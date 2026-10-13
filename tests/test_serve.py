@@ -78,6 +78,7 @@ def test_serve_shows_the_mode_then_serves_until_ctrl_c(tiny, stopped_by_ctrl_c):
     assert "KV cache f16, 256 tokens of context, chat template settings: none" in shown  # the model's limit
     assert "set the system message to the one measured, between the lines:\n---\nBe brief.\n---" in shown
     assert "keep the reasoning menu on Default" in shown and "measurements answer greedily" in shown
+    assert "turn off every tool under Chat > Tools" in shown
     command = shlex.split(next(line for line in shown.splitlines() if line.endswith("--cache-type-v f16")))
     assert command[1:3] == ["-m", str(folder / "gguf" / "model-Q4_K_M.gguf")]
     assert f"Today: {date.today().strftime('%d %b %Y')}\nsystem: Be brief.\nuser: Hello\nassistant:" in shown

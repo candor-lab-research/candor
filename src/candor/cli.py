@@ -748,6 +748,11 @@ def serve_command(
                 else:
                     console.print("  leave the system message empty, as measured")
                 console.print(
+                    "  turn off every tool under Chat > Tools: the page offers its own (such as the time and "
+                    "get_info), and chat templates such as Llama 3's turn any tool into a request for a "
+                    "function call"
+                )
+                console.print(
                     "  keep the reasoning menu on Default: its other choices replace the template settings, "
                     "and its Low, Medium and High are token budgets for thinking, not the model's own effort "
                     "levels"
