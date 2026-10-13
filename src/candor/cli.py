@@ -360,8 +360,8 @@ def init(
     if close:
         console.print(
             f"[yellow]This model thinks before it answers.[/] Its thinking is capped at "
-            f"{config.THINKING_BUDGET} tokens (deployment.thinking_budget). Set [sampling] to the thinking "
-            "settings its model card recommends: the defaults answer greedily."
+            f"{config.THINKING_BUDGET} tokens (deployment.thinking_budget). Set {escape('[sampling]')} to "
+            "the thinking settings its model card recommends: the defaults answer greedily."
         )
 
 

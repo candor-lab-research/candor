@@ -181,6 +181,7 @@ def test_init_finds_a_thinking_models_close_and_gives_it_a_budget(tmp_path):
     assert result.exit_code == 0, result.output
     shown = " ".join(result.output.split())
     assert "Thinking" in shown and "This model thinks before it answers" in shown
+    assert "Set [sampling] to the thinking settings its model card recommends" in shown
     deployment = config.load(tmp_path / "runs" / "first").deployment
     assert deployment.think_close == "</think>\n\n" and deployment.thinking_budget == config.THINKING_BUDGET
     (tmp_path / "plain").mkdir()
