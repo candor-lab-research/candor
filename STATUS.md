@@ -15,7 +15,7 @@ and merged weights in Q4_K_M). (Decided 2026-10-11: the user isn't tied to Bioni
 | --- | --- | --- | --- |
 | 0 | Score edits as per-layer LoRA adapters in llama.cpp | Adapters match merged weights, no speed cost | Done |
 | 1 | Core maths and `candor inspect` | candor's rebuild of a heretic trial matches its refusals, and measuring heretic's saved model under heretic's conditions gives heretic's numbers exactly; `inspect` reports correctly on rude-llama, Qwen3.5-9B and K2-Horizon | Done |
-| 2 | rude-llama end to end on the Mac: measure, search, export a GGUF to run in llama-server | Under the decision rule written in step 4 before any search runs, candor's shipped GGUF is at least as good as heretic's Trial 170 converted and quantised the same way: fewer or equal refusals on held-out prompts, no higher KL, no maths loss. It runs in llama-server, and you prefer it in a blind A/B | In progress: steps 1-5 done; trial 535 passes the decision rule and ships; step 6 next |
+| 2 | rude-llama end to end on the Mac: measure, search, export a GGUF to run in llama-server | Under the decision rule written in step 4 before any search runs, candor's shipped GGUF is at least as good as heretic's Trial 170 converted and quantised the same way: fewer or equal refusals on held-out prompts, no higher KL, no maths loss. It runs in llama-server. (A blind A/B was dropped by the user on 2026-10-12: 535 and Trial 170 are too close to tell apart by hand.) | Done 2026-10-13: trial 535, exported, passes against Trial 170 exported the same way, and ships (`runs/rude/exports/trial-535/`); see `results/milestone-rude-llama-vs-heretic.md` |
 | 3 | Qwen3.5-9B, a thinking model: scored with thinking on at your settings; residuals read on a pod | Defined at the start of the phase, against heretic's Trial 161 | |
 | 4 | K2-Horizon at your real settings | Measured honestly with its own chat template (Bionic couldn't parse it; llama-server's reader is to be checked) and the reasoning level you use, then improved | |
 
@@ -34,18 +34,21 @@ Results of each phase, numbers only, are in `results/` (phase 2: `results/phase-
 
 ### Next
 
-1. Phase 2 step 6 for trial 535, which passed the decision rule: export, the final check on the
-   exact file shipped, `candor serve` and the blind A/B.
-2. The pod bootstrap and watchdog, checked on rude-llama. Their first real job: one search with only
-   the attention peak's floor and its reach's ceiling widened, since 535 presses both (0.6 each).
-   Widened ranges become the default only if its held-out best beats 535's (5 of 288 refused, KL
-   0.0920). About $2-3; the user decides when.
-3. Before phase 3, decide whether the search should score on more or other prompts: per-layer
-   trials' refusals and layer-14 trials' KL didn't hold on the held-out prompts (results file).
-4. Review with the user, before phase 3: greedy answers (every measurement and the search) against
-   sampled ones (`candor serve` and chat apps, at llama-server's defaults), and whether measurement
-   should sample at the settings the user chats with. Thinking models are sensitive to it.
-5. Phase 3, Qwen3.5-9B, starting with a short pilot on a pod for time and cost.
+1. Phase 3, Qwen3.5-9B. It starts with the pod bootstrap and watchdog, checked on rude-llama, then a
+   short pilot on a pod for time and cost.
+2. At the start of phase 3, review with the user: greedy answers (every measurement and the search)
+   against sampled ones (`candor serve` and chat apps, at llama-server's defaults), and whether
+   measurement should sample at the settings the user chats with. Thinking models are sensitive to it.
+3. Not blocking, each when there is a reason:
+   - one search on a pod with the attention peak's floor and its reach's ceiling widened (535 presses
+     both, at 0.6); wider ranges become the default only if its held-out best beats 535's;
+   - whether the search should score on more or other prompts: per-layer trials' refusals and
+     layer-14 trials' KL didn't hold on the held-out prompts (results file);
+   - the search scoring on the base it ships, with the edited tensors at Q8_0 there too, so search
+     and export match by design (needed only where the run's quantisation loses edits, as on
+     rude-llama);
+   - a warning in `inspect` when a model's weights were quantised before, as rude-llama's were;
+   - the export's file name says Q4_K_M when some tensors are Q8_0.
 
 ### The search fix (done 2026-10-12)
 
@@ -102,7 +105,7 @@ if not, Trial 170's recipe built by candor ships. Then phase 3, Qwen3.5-9B.
 | 3 | Fixes from the full review (see the log) | Done: every fix shown to matter by a test that fails without it; a second review was stopped as diminishing returns, so the first real rude-llama run is the check that matters |
 | 4 | Measurement, settled before any search: a held-out harmful set outside AdvBench (de-duplicated against the direction prompts, pinned); the Qwen3Guard judge with its false-refusal rate measured on answers to harmless prompts, keyword counts kept beside it; the scoring noise floor from repeat scoring; paired comparison (McNemar) with a margin; KL on 300 harmless prompts; the full GSM8K test set, paired; heretic's Trial 170 rebuilt by candor and scored as adapters, so the comparison is like for like. Written down as phase 2's decision rule | Done: measured, and the decision rule signed off |
 | 5 | The search: Optuna over a kernel per component (heretic's 0.8-1.5 strength range), stored resumably in the run folder, each trial scored in llama.cpp on the quantised GGUF, refusals counted by the judge; progress with time left, the Mac kept awake. Built on SmolLM2, then a 10-trial rude-llama pilot (time per trial) and one full search, each with the user's go | Done: the first search (200 trials) missed Trial 170's shape and none of its trials passes; the rebuilt one (600 trials, 7 h 21 min) found trial 535, which passes |
-| 6 | Export: merge, convert and quantise; the final check on the exact shipped file with your KV cache type; a `candor serve` command that runs the shipped file in llama-server at your settings (system prompt, KV cache, date); the blind A/B | |
+| 6 | Export: merge, convert and quantise; the final check on the exact shipped file with your KV cache type; a `candor serve` command that runs the shipped file in llama-server at your settings (system prompt, KV cache, date); the blind A/B | Done 2026-10-13: `export` (with a check that quantising keeps each edited weight's change, moving lossy ones to Q8_0), `measure --exported` and `serve`, each reviewed; the first export lost most of 535's edit to Q4_K and the check came from that (results file); the blind A/B dropped by the user |
 
 ## Research changes and where they land
 
@@ -114,7 +117,7 @@ From the 2026-10-10 paper review, corrected after the full review read each pape
 | Keyword judges count compliant answers with safety words as refusals (2512.13655: 72.2% vs 95.7% non-refusal on 900 abliterated answers) | Qwen3Guard-Gen-0.6B on the final answer, with its false-refusal rate measured (the vendor's refusal precision is 83-89%, 2510.14276; calibrate any judge, 2606.25487); keyword counts kept beside it | Phase 2 step 4 |
 | One count on 100 prompts can't separate close models (2609.25173 for unpaired sampled runs; heretic's transformers scoring varied by 1-2 refusals with batch size). Measured in llama-server on rude-llama: 0 of 588 held-out answers and 5 of 1,319 maths answers changed between 8 and 16 slots, KL 0.0000 | Measure the noise floor; compare paired on a held-out set; scoring is greedy, so seeds matter only for sampled checks | Phase 2 step 4 |
 | First-token KL misses lost ability (2512.13655: -4.5pp GSM8K at KL 0.043) | The full GSM8K test set, paired against the same quantised file; multiple-choice flips only as a warning (2407.09141) | Phase 2 step 4 |
-| Re-quantising after an edit can bring refusals back (2609.09793) | The last check runs on the exact file you ship, with your KV cache type (2606.09864; already used for all scoring) | Phase 2 step 6 |
+| Re-quantising after an edit can bring refusals back (2609.09793) | The last check runs on the exact file you ship, with your KV cache type (2606.09864; already used for all scoring). On rude-llama, whose weights were 4-bit before, Q4_K kept only 55-98% of each edited weight's change and refusals went from 5 to 161 of 288, so `export` measures every edited weight's kept share and quantises lossy ones as Q8_0 | Phase 2 step 6, done |
 | Thinking mode changes refusals (2509.00544); the think start and think close are decision points in distilled reasoning models (2609.18471, 2510.06036) | Score in the mode and at the level(s) you run, with answers long enough to finish thinking, judged on the final answer with unfinished answers counted separately (2609.09793). candor's directions are already read at the think start | Phases 3-4 |
 | A plain single-direction edit barely worked on Qwen3.5-9B (2605.21706: 3.3%, against 92-97% for an edit pushed a fixed margin past the refusal boundary) | Measure Qwen3.5 properly before trusting heretic's Trial 161; plan a past-the-boundary variant | Phase 3 |
 | A direction averaged over the reasoning (2507.03167: better on R1-Distill-Llama-8B, worse on Qwen3-8B); one direction from a mixed prompt pool beats per-category ones (2602.02132) | Build directions from prompts like the refusals you actually hit; a reasoning-averaged set only if refusals remain | Phases 3-4 |

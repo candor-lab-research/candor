@@ -240,3 +240,47 @@ What it shows:
 - Budget: one layer's least KL at 0 refused was 0.1046 after 200 trials, 0.1012 after 300, 0.0875
   after 400, 0.0817 after 500 and 0.0778 after 600; still falling at the end. The planned check of
   the picks after 200 and 400 trials was dropped, since one run can't cut the 600 default.
+
+## Shipping trial 535 (2026-10-12 to 2026-10-13)
+
+`candor export` merges an edit into the weights as its adapters apply it, converts and quantises;
+`candor measure --exported` measures that file. The first export of 535, plain Q4_K_M, refused
+161 of 288 held-out prompts against 5 with adapters, at KL 0.0318 from the unedited model against
+0.0920: most of the edit was gone.
+
+The merge was right (the change in every edited weight pointed along the edit, cosine 0.97-0.999);
+quantising took it back. The share of each edited weight's change the file held: Q4_K 55-71%, Q6_K
+(half the `ffn_down` layers in Q4_K_M) 94-97%, Q8_0 99.8-100%. The cause, found by three research
+agents (numbers and code only): rude-llama's F16 weights were 4-bit before (MLX, `library_name: mlx`;
+every 64-weight group of layers 0-19 holds at most 16 values on an even grid). Q4_K fits that grid
+again, so a weight moved by an edit's few percent of a step rarely changes its value. On weights
+never quantised, Q4_K keeps an edit (Gaussian rows 1.00, Qwen3Guard-0.6B 0.99-1.00), which is why
+phase 0's model kept about 90%. The papers agree on the mechanism (2609.09793 in FP8; 2410.16454 and
+follow-ups for 4-bit undoing unlearning) and none measured abliteration through GGUF; no abliteration
+tool or quantiser checks refusals after quantising.
+
+The fix (`6e47a01`): the export measures each edited weight's kept share, quantises those under 98%
+as Q8_0 through llama-quantize's tensor type file, and refuses the file if any still falls short.
+For 535: Q4_K_M kept 55.2-97.5% in all 49 edited weights; as Q8_0 each kept 99.8-100.0%; the file
+is 2.4 GB against 1.9.
+
+| Held-out | Trial 170 | 535 | Trial 170 exported | 535 exported |
+| --- | --- | --- | --- | --- |
+| Harmful refused, judge (at most the bar's) | 6 | 5 | 7 | 6 |
+| KL from unedited (no higher than the bar's) | 0.1011 | 0.0920 | 0.1186 | 0.1132 |
+| Maths correct /1319 (unedited 980) | 977 | 996 | 986 | 982 |
+| Harmless refused, judge (at most 7/300) | 2 | 2 | 2 | 3 |
+| Harmful refused, keywords | 25 | 16 | 19 | 21 |
+| KL from the same edit as adapters | | | 0.0279 | 0.0268 |
+
+- 535 exported against Trial 170 exported, the comparison phase 2's target names ("converted and
+  quantised the same way"): 6 against 7 refused (p 1), KL 0.1132 against 0.1186, maths 982 against
+  986 (p 0.76). It passes the decision rule, narrowly: the two files are KL 0.0014 apart.
+- Against Trial 170 as adapters (0.1011) 535 exported fails on KL. Both exports rose by about 0.02
+  in KL from their adapter measurements, so the rise is the export, not 535.
+- Moving the 49 edited tensors to Q8_0 with no edit at all is itself KL 0.052 from plain Q4_K_M,
+  and the edit measured against that base is 0.114. The likely reason, not proven: rude-llama's own
+  fine-tune changes in layers 20-27 are as small as an edit (0.04-0.07 of a step), so plain Q4_K_M
+  loses part of the fine-tune too, which Q8_0 keeps.
+- The blind A/B was dropped by the user (2026-10-12): 535 and Trial 170 are KL 0.0010 apart as
+  adapters, too close to tell apart by hand.
