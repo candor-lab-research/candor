@@ -1,5 +1,7 @@
 import re
+import shutil
 
+import gguf
 import pytest
 import torch
 from safetensors.torch import load_file
@@ -8,11 +10,13 @@ from typer.testing import CliRunner
 from candor import config, convert, export, measure, run
 from candor.cli import app
 from candor.convert import check_targets
+from candor.convert import quantize as real_quantize
 from candor.edit import RowNorm, rank_one
 from candor.kernel import Kernel
 from candor.measure import Edit, Measurement
 from candor.run import Run, RunError
 
+from .test_engine import LLAMA_SERVER
 from .test_measure import EDIT
 from .test_run import TEMPLATE
 from .test_search import write_journal
@@ -154,6 +158,79 @@ def test_what_killed_exports_left_behind_is_removed_before_the_disk_check(tiny, 
     monkeypatch.setattr(Run, "check_disk", check_disk)
     export.export(tiny, EDIT)
     assert checked[-1] == [False, False] and other.exists()
+
+
+def test_an_export_that_holds_the_whole_edit_keeps_all_of_it(tiny, converting):
+    shipped = export.export(tiny, EDIT)
+    held = export.kept(tiny, shipped, export.deltas(tiny, EDIT))
+    assert held and all(share == pytest.approx(1, abs=1e-4) for share in held.values())
+
+
+def losing(tiny, share, honoured=True):
+    """A quantiser that keeps share of each edit, and all of it in tensors given a type of their own
+    when honoured; the run's own quantising copies, as the tiny run's does."""
+    tiny.gguf()
+    original = load_file(tiny.model_folder / "model.safetensors")
+    made = export.deltas(tiny, EDIT)
+    asked = []
+
+    def quantize(base, destination, quantization, log, types=None):
+        if "exports" not in destination.parts:
+            return shutil.copy(base, destination)
+        asked.append(types)
+        weights = random_weights()
+        for name, (b, a) in made.items():
+            gguf_name = tiny.target_names[name]
+            kept = 1.0 if honoured and types and gguf_name in types else share
+            weights[gguf_name] = (original[name] + kept * b @ a).numpy()
+        write_model(destination, weights, chat_template=TEMPLATE)
+
+    return quantize, asked
+
+
+def test_weights_the_quantisation_rounds_the_edit_away_from_are_quantised_to_keep_it(
+    tiny, converting, monkeypatch
+):
+    quantize, asked = losing(tiny, 0.5)
+    monkeypatch.setattr(convert, "quantize", quantize)
+    said = []
+    tiny.report = said.append
+    shipped = export.export(tiny, EDIT)
+    edited = {tiny.target_names[name] for name in export.deltas(tiny, EDIT)}
+    assert asked == [None, dict.fromkeys(edited, "Q8_0")]
+    moved = f"in {len(edited)} of {len(edited)} edited weights; quantising those as Q8_0"
+    assert f"Q4_K_M keeps 50.0% to 50.0% of the edit {moved}" in said
+    assert "Each edited weight keeps 100.0% to 100.0% of its edit" in said
+    assert all(
+        share == pytest.approx(1, abs=1e-4)
+        for share in export.kept(tiny, shipped, export.deltas(tiny, EDIT)).values()
+    )
+
+
+@pytest.mark.parametrize("share", [0.0, 0.5])
+def test_an_edit_still_lost_after_quantising_to_keep_it_is_refused(tiny, converting, monkeypatch, share):
+    quantize, asked = losing(tiny, share, honoured=False)
+    monkeypatch.setattr(convert, "quantize", quantize)
+    with pytest.raises(
+        RunError, match=f"keep less than 98% of the edit even quantised to keep it, e.g. .* {share:.1%}"
+    ):
+        export.export(tiny, EDIT)
+    assert len(asked) == 2
+    assert not tiny.path("exports", "trial", "tiny-trial-Q4_K_M.gguf").exists()
+
+
+def test_llama_quantize_gives_the_named_tensors_their_own_type(tmp_path, monkeypatch):
+    if not LLAMA_SERVER.exists():
+        pytest.skip("no llama.cpp")
+    monkeypatch.setenv("CANDOR_LLAMA_BIN", str(LLAMA_SERVER.parent))
+    write_model(tmp_path / "f32.gguf", random_weights())
+    out = tmp_path / "q.gguf"
+    real_quantize(
+        tmp_path / "f32.gguf", out, "Q4_K_M", tmp_path / "log", {"blk.0.attn_output.weight": "Q8_0"}
+    )
+    types = {t.name: t.tensor_type.name for t in gguf.GGUFReader(out).tensors}
+    assert types["blk.0.attn_output.weight"] == "Q8_0"
+    assert types["blk.1.attn_output.weight"] != "Q8_0"  # the pattern is anchored: blk.0 only
 
 
 def test_a_failed_export_leaves_nothing_behind(tiny, monkeypatch):

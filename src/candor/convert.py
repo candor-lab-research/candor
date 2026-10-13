@@ -8,6 +8,7 @@ before anything is scored.
 """
 
 import json
+import re
 import subprocess
 import tempfile
 from pathlib import Path
@@ -86,9 +87,20 @@ def to_gguf(model_folder: Path, destination: Path, log: Path) -> None:
         )
 
 
-def quantize(base: Path, destination: Path, quantization: str, log: Path) -> None:
-    """Quantise an unquantised GGUF to destination."""
-    _run("llama-quantize", [toolchain.binaries() / "llama-quantize", base, destination, quantization], log)
+def quantize(
+    base: Path, destination: Path, quantization: str, log: Path, types: dict[str, str] | None = None
+) -> None:
+    """Quantise an unquantised GGUF to destination; types gives some tensors, by GGUF name, a type
+    of their own."""
+    args: list = [toolchain.binaries() / "llama-quantize"]
+    if types:
+        # llama-quantize matches each pattern as a regex anywhere in a tensor's name, lower-cased.
+        listed = destination.with_name(destination.name + ".types")
+        listed.write_text(
+            "".join(f"^{re.escape(name)}$={kind.lower()}\n" for name, kind in sorted(types.items()))
+        )
+        args += ["--tensor-type-file", listed]
+    _run("llama-quantize", [*args, base, destination, quantization], log)
 
 
 def as_converted(weight: Tensor, name: str, arch: str, config: dict[str, Any]) -> Tensor:

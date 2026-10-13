@@ -52,7 +52,7 @@ STAGES = {
     "adapters": 1,
     "measurements": 1,
     "scores": 1,
-    "exports": 1,
+    "exports": 2,
 }
 
 

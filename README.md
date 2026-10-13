@@ -88,9 +88,12 @@ uv run candor serve runs/rude --trial 37                       # chat with it in
   score, which shows the two can be compared. `--trial N` alone scores one of the search's trials.
 - `export` merges a trial's edit into a copy of the model's weights as its adapters apply it, then
   converts and quantises the copy as the run deploys, checking the edited weights reach the GGUF
-  unchanged. Only `exports/EDIT/RUN-EDIT-QUANTISATION.gguf` is kept. Merging before quantising shifts
-  the result a little, so `measure --exported` measures that exact file, and `compare` sets it against
-  the unedited model and against the trial measured with adapters.
+  unchanged. Quantising can round part of a small edit away (on rude-llama, whose weights were 4-bit
+  before, Q4_K_M kept 55-98% of trial 535's and its refusals came back), so it measures how much of
+  each edited weight's change the quantised file holds, quantises any weight that kept less than 98%
+  as Q8_0 instead, and refuses the file if one still falls short. Only
+  `exports/EDIT/RUN-EDIT-QUANTISATION.gguf` is kept. `measure --exported` measures that exact file,
+  and `compare` sets it against the unedited model and against the trial measured with adapters.
 - `serve` runs the unedited model, or a trial's current export, in llama-server as candor measures
   it: the run's KV cache type and chat template settings, with today's date as apps write it. Before
   serving it shows the command, the settings and how the server's own template settings render a

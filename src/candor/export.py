@@ -1,9 +1,13 @@
 """Merge a finished edit into the model's weights and convert it to the GGUF you run.
 
 The edit is merged as its adapters apply it: the same directions, rank-1 factors and strengths, added
-to the model's own weights before converting, then quantised as the run deploys. Merging before
-quantising shifts the result a little (phase 0: KL 0.01 between adapters and merged weights in
-Q4_K_M), so the exported file is measured again before it ships.
+to the model's own weights before converting, then quantised as the run deploys. Quantising can round
+part of a small edit away. rude-llama's weights were 4-bit before they were saved in 16 bits, and
+Q4_K finds that grid again, so its weights rarely move by an edit's few percent of a step: Q4_K_M
+kept 55-98% of trial 535's edit and its refusals came back (5 of 288 became 161). On weights that were
+never quantised, Q4_K keeps nearly all of an edit. So the export measures how much of each weight's
+edit the quantised file holds, quantises any weight that lost too much as Q8_0 instead, which keeps
+it, and refuses the file if a weight still falls short. The file is then measured before it ships.
 """
 
 import json
@@ -12,6 +16,9 @@ import tempfile
 from pathlib import Path
 from typing import TYPE_CHECKING, Any
 
+import gguf
+import numpy as np
+import torch
 from torch import Tensor
 
 from . import convert, merge, source
@@ -21,6 +28,11 @@ from .weights import ModelFiles
 
 if TYPE_CHECKING:
     from .measure import Edit
+
+# The least share of each weight's edit the shipped file may hold, and the type that keeps it when
+# the run's quantisation doesn't.
+LEAST_KEPT = 0.98
+KEEPING_TYPE = "Q8_0"
 
 
 def deltas(run: Run, edit: "Edit") -> dict[str, tuple[Tensor, Tensor]]:
@@ -74,7 +86,8 @@ def export(run: Run, edit: "Edit") -> Path:
             # The converter names the GGUF after the folder, so the copy keeps the model's name.
             merged = Path(work) / run.model_folder.name
             run.report(f"Merging {edit.name} into the weights")
-            left_out = merge.merge(run.model_folder, merged, deltas(run, edit))
+            made = deltas(run, edit)
+            left_out = merge.merge(run.model_folder, merged, made)
             if left_out:
                 run.report(f"Left out of the copy, as weights in another format: {', '.join(left_out)}")
             run.report("Converting to GGUF")
@@ -88,11 +101,58 @@ def export(run: Run, edit: "Edit") -> Path:
             partial = Path(work) / f"{shipped.name}.building"
             if quantization == float_type:
                 unquantized.rename(partial)
+                held = kept(run, partial, made)
             else:
                 run.report(f"Quantising to {quantization}")
                 convert.quantize(unquantized, partial, quantization, log)
+                held = kept(run, partial, made)
+                if lost := _short(held):
+                    run.report(
+                        f"{quantization} keeps {min(lost.values()):.1%} to {max(lost.values()):.1%} of the "
+                        f"edit in {len(lost)} of {len(held)} edited weights; quantising those as "
+                        f"{KEEPING_TYPE}"
+                    )
+                    convert.quantize(
+                        unquantized, partial, quantization, log, dict.fromkeys(lost, KEEPING_TYPE)
+                    )
+                    held = kept(run, partial, made)
+            if lost := _short(held):
+                worst = sorted(lost.items(), key=lambda item: item[1])[:5]
+                raise RunError(
+                    f"{len(lost)} of {len(held)} edited weights keep less than {LEAST_KEPT:.0%} of the edit "
+                    "even quantised to keep it, e.g. "
+                    + ", ".join(f"{name} {share:.1%}" for name, share in worst)
+                )
+            run.report(
+                f"Each edited weight keeps {min(held.values()):.1%} to {max(held.values()):.1%} of its edit"
+            )
             run.commit(partial, shipped, inputs)
     return shipped
+
+
+def _short(held: dict[str, float]) -> dict[str, float]:
+    return {name: share for name, share in held.items() if share < LEAST_KEPT}
+
+
+def kept(run: Run, model_gguf: Path, made: dict[str, tuple[Tensor, Tensor]]) -> dict[str, float]:
+    """For each edited weight, by its GGUF name, the share of its edit model_gguf holds: the part of
+    its change from the original weight that lies along the edit, over the edit. 1 when the file
+    holds the edit exactly; less when quantising rounded part of it away."""
+    _, _, arch, _ = run.shape
+    model_config = source.read_config(str(run.model_folder))
+    tensors = {tensor.name: tensor for tensor in gguf.GGUFReader(model_gguf).tensors}
+    files = ModelFiles(run.model_folder)
+    shares = {}
+    for name, (b, a) in made.items():
+        tensor = tensors[run.target_names[name]]
+        values = gguf.quants.dequantize(tensor.data, tensor.tensor_type)
+        stored = torch.from_numpy(np.array(values, dtype=np.float32)).reshape(
+            list(reversed(tensor.shape.tolist()))
+        )
+        original = convert.as_converted(files.tensor(name), name, arch, model_config).float()
+        edit = convert.as_converted(b.float() @ a.float(), name, arch, model_config)
+        shares[tensor.name] = float(((stored - original) * edit).sum() / (edit * edit).sum())
+    return shares
 
 
 def _sweep(run: Run, shipped: Path) -> None:
