@@ -16,25 +16,27 @@ and merged weights in Q4_K_M). (Decided 2026-10-11: the user isn't tied to Bioni
 | 0 | Score edits as per-layer LoRA adapters in llama.cpp | Adapters match merged weights, no speed cost | Done |
 | 1 | Core maths and `candor inspect` | candor's rebuild of a heretic trial matches its refusals, and measuring heretic's saved model under heretic's conditions gives heretic's numbers exactly; `inspect` reports correctly on rude-llama, Qwen3.5-9B and K2-Horizon | Done |
 | 2 | rude-llama end to end on the Mac: measure, search, export a GGUF to run in llama-server | Under the decision rule written in step 4 before any search runs, candor's shipped GGUF is at least as good as heretic's Trial 170 converted and quantised the same way: fewer or equal refusals on held-out prompts, no higher KL, no maths loss. It runs in llama-server. (A blind A/B was dropped by the user on 2026-10-12: 535 and Trial 170 are too close to tell apart by hand.) | Done 2026-10-13: trial 535, exported, passes against Trial 170 exported the same way, and ships (`runs/rude/exports/trial-535/`); see `results/milestone-rude-llama-vs-heretic.md` |
-| 3 | Qwen3.5-9B, a thinking model: scored with thinking on at your settings; residuals read on a pod | Written in step 3 before any search runs, from the measured noise, against heretic's Trial 161 rebuilt by candor | Decisions taken 2026-10-13 (below); step 1 next |
+| 3 | Qwen3.5-9B, a thinking model: scored with thinking on at your settings; residuals read on a pod | Written in step 4 before any search runs, from the measured noise, against heretic's own Trial 161 exported and measured as candor ships its edits | Steps 1 and 2 done 2026-10-13 (below); step 3 next |
 | 4 | K2-Horizon at your real settings | Measured honestly with its own chat template (Bionic couldn't parse it; llama-server's reader is to be checked) and the reasoning level you use, then improved | |
 
 From phase 3 a job expected to take over about 2 hours, or needing more memory than the Mac has,
 runs on a pod (the user's decision, 2026-10-12); shorter jobs (a measurement, a pilot) can run on
 the Mac. The rude-llama search of phase 2 is the last long one on the Mac. So candor's whole
-pipeline (convert, residuals, search, measure) must run on a pod. Phase 3 builds a pod bootstrap
-script and an in-pod watchdog that deletes the pod at a budget, and checks them on rude-llama first
-(about $0.30). Runpod has $18.56 (topped up 2026-10-12): spend it only where a run earns it.
+pipeline (convert, residuals, search, measure) must run on a pod: `scripts/pod.sh` and its watchdog,
+which deletes the pod at a deadline set per job (README, "On a pod"), checked on rude-llama in phase
+3 step 2. Runpod had $18.56 (topped up 2026-10-12), less about $0.51 for that check: spend it only
+where a run earns it.
 
 Every step gets an independent review before it is called done; its findings are fixed with
 tests and the fixes verified until a review comes back clean. Heavy jobs (converting a real model,
 reading residuals, a search) wait for the user's go.
 
-Results of each phase, numbers only, are in `results/` (phase 2: `results/phase-2-rude-llama.md`).
+Results of each phase, numbers only, are in `results/` (phase 2: `results/phase-2-rude-llama.md`;
+phase 3: `results/phase-3-qwen3.5-9b.md`).
 
 ### Next
 
-1. Phase 3, step 2: the pod bootstrap and watchdog (steps below).
+1. Phase 3, step 3: the method changes from the thinking-model research (decisions and steps below).
 2. Not blocking, each when there is a reason:
    - one search on a pod with the attention peak's floor and its reach's ceiling widened (535 presses
      both, at 0.6); wider ranges become the default only if its held-out best beats 535's;
@@ -44,7 +46,9 @@ Results of each phase, numbers only, are in `results/` (phase 2: `results/phase-
      and export match by design (needed only where the run's quantisation loses edits, as on
      rude-llama);
    - a warning in `inspect` when a model's weights were quantised before, as rude-llama's were;
-   - the export's file name says Q4_K_M when some tensors are Q8_0.
+   - the export's file name says Q4_K_M when some tensors are Q8_0;
+   - a local model copied to a pod gets a new fingerprint (rsync from macOS keeps file times only to
+     the second), so a run moved between machines rebuilds every stage; Hub models are unaffected.
 
 ### Phase 3 decisions (the user, 2026-10-13)
 
@@ -74,15 +78,41 @@ Results of each phase, numbers only, are in `results/` (phase 2: `results/phase-
 - Optuna stays 4.9, as the search was tested on it. The past-the-boundary variant (2605.21706) is
   built only if Trial 161 and the search both fail with thinking on.
 
+### Phase 3 decisions after the thinking-model research (the user, 2026-10-13)
+
+The user's research check found no published weight edit on Qwen3.5, or any Gated DeltaNet model,
+with thinking on; every working community recipe turns thinking off. So:
+
+- Directions are read both at the think start and after a closed thinking block, and the search
+  chooses between them: the evidence is split, our K2 directions at the two positions had a
+  per-layer cosine of only 0.2-0.5, and Trial 161, read after the close, refused none of its 35
+  thinking-on answers that finished.
+- KL is read at the answer start after the unedited model's own thinking (one saved trace per
+  harmless prompt, only those whose thinking finished), not after an empty thinking block, which
+  measures thinking-off; the empty-block KL is kept beside it. No paper validates it, so step 4
+  checks it separates the unedited model from Trial 161 by more than sampling noise.
+- Strength 0.5-3.0 for Qwen3.5. heretic's K2 run refused at best 54/100 with a ceiling of 1.5 and
+  7/100 with 5.0 (peaks 4.5-4.6, row normalisation "full"); Trial 161's peaks are 1.42-1.46 of
+  1.5; a 27B Qwen hybrid's weight edit collapsed at 2.0; Qwen3.5-2B needed 0.5. Strengths under
+  "full" and candor's "pre" aren't the same scale. K2-Horizon gets its own range in phase 4.
+- The search's miss rate is measured again on the test landscapes with the position choice and the
+  wider range, before it runs.
+- The fallback, built only if the pilot fails: 3-5 directions, or ARA, instead of 2605.21706's
+  method, which edits activations and can't be a weight edit. If candor's "pre" edits fail where
+  Trial 161 ("full") worked, row normalisation is the first suspect.
+- The biggest open risk is the search's cost with thinking on: with Trial 161, 65 of 100 harmful
+  answers were still thinking at 2048 tokens. The pilot measures it before the full search.
+
 ### Phase 3 steps
 
 | Step | What | State |
 | --- | --- | --- |
 | 1 | Thinking-model settings: sampling with a seed per prompt, the thinking budget with a forced close (llama-server's own), the judge reading only the final answer, an answer that never comes counted as a refusal, KL at the answer start; `serve` at the same settings; `measure --seed` for the noise check; `export --outside` and `measure --outside` to ship and measure heretic's own save of Trial 161 like candor's edits (the user's choice: heretic made it with row normalisation "full", rank-3, which candor can't rebuild). Checked on a tiny thinking model in the real llama-server and SmolLM2 | Done 2026-10-13, reviewed: 2 major findings (the chat page forces `\n</think>` after the message, so measurements now force the same; a heretic trial read after a `response_prefix` is refused, not rebuilt wrongly) and 6 minor ones fixed, each with a test that fails without its fix |
-| 2 | Pod bootstrap, torch's CUDA build matched to llama.cpp's 12.8, Qwen3.5's fast kernels, and an in-pod watchdog that deletes the pod at a budget; checked on rude-llama (about $0.30) | |
-| 3 | Qwen3.5-9B on a pod: `init`, `run`, the unedited model measured twice (noise), Trial 161 rebuilt and measured, thinking lengths, KL at both positions. The decision rule written from them, for sign-off | |
-| 4 | A search pilot (time and cost per trial, the search's thinking budget), then the full search | |
-| 5 | The suggested trials measured at 8192, export, the final check on the shipped file, `serve` on the Mac | |
+| 2 | Pod bootstrap, torch's CUDA build matched to llama.cpp's 12.8, and an in-pod watchdog that deletes the pod at a budget; checked on rude-llama | Done 2026-10-13: `scripts/pod.sh` and its watchdog, armed from the pod's own start command; reviewed until clean (9 findings, then a regression they caused, then none), each fixed with a test that fails without it. On an A40 the run matched the Mac (F16 GGUF and prompt ids byte-identical, directions at cosine 0.9999, the same counts on 60 answers but one maths cut-off) and the watchdog deleted the pod itself; about $0.51. Qwen3.5's fast kernels left out: transformers only reads residuals of short prompts (README). Results file |
+| 3 | The method changes above: directions at both positions with the search choosing, KL after the unedited model's thinking, strength 0.5-3.0, the miss-rate check rerun, and the research table corrected | |
+| 4 | Qwen3.5-9B on a pod: `init`, `run`, the unedited model measured twice (noise), heretic's own Trial 161 re-saved, exported and measured with `--outside`, thinking lengths, KL at each position. The decision rule written from them, for sign-off | |
+| 5 | A search pilot (time and cost per trial, the search's thinking budget), then the full search | |
+| 6 | The suggested trials measured at 8192, export on the pod, the final check on that file, copied to the Mac as it is (each machine quantises differently), `serve` on the Mac | |
 
 ### The search fix (done 2026-10-12)
 

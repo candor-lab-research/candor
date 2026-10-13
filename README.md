@@ -134,6 +134,33 @@ binaries, checked by sha256, and its converter in its own environment, pinned by
 `src/candor/data/converter-constraints.txt`) is fetched once into `~/.cache/candor`, or
 `CANDOR_CACHE`; `CANDOR_LLAMA_BIN` points at an existing b11524 build instead.
 
+## On a pod
+
+Models the Mac can't hold, and jobs over a couple of hours, run on a Runpod pod. `scripts/pod.sh`
+does everything but create and delete it (its header lists every command):
+
+1. `scripts/pod.sh args HOURS` prints the container command to create the pod with (its `entrypoint`
+   and `cmd`): Runpod's own start, and a watchdog that deletes the pod HOURS from now (at most 48)
+   whatever happens on this side, even if the pod's own start fails. Create it from
+   `runpod/pytorch:1.0.2-cu1281-torch280-ubuntu2404` with port `22/tcp`, SSH on, a CUDA floor of
+   12.8 and enough container disk for the run (about 50 GB for rude-llama, 100 GB for Qwen3.5-9B).
+2. `export CANDOR_POD=root@IP:PORT` (the pod's direct SSH address), then `scripts/pod.sh setup`
+   checks the watchdog is armed, copies this working tree and your Hugging Face token, installs
+   candor and checks that torch and llama-server both see the GPU. On Linux torch is the CUDA 12.8
+   build, as llama.cpp's release is. `scripts/pod.sh code` copies the code again after a change.
+3. `push`, `start NAME candor ...`, `log NAME`, `stop NAME` and `pull runs/NAME` move files, run a
+   command detached and bring a run's results back, leaving out its GGUFs unless named
+   (`pull runs/NAME/exports/trial-37`). Paths are the same as here, under `/root/candor` on the pod;
+   anything there that git doesn't ignore is replaced by the next `code`.
+4. `scripts/pod.sh deadline` checks the watchdog and says when it deletes the pod, and
+   `deadline HOURS` moves that to HOURS from now. Everything lives on the container disk, which
+   Runpod wipes when a pod is stopped or restarted and which a stopped pod's watchdog can't
+   delete, so pull the results, then delete the pod, never stop it.
+
+Qwen3.5's fast linear-attention kernels aren't installed: transformers runs Qwen3.5 only to read
+residuals for short prompts, the answers come from llama.cpp, and the judge (a Qwen3) has no linear
+attention. If reading Qwen3.5's residuals turns out slow, `flash-linear-attention` is the fix.
+
 ## Development
 
 ```
