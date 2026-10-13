@@ -101,7 +101,7 @@ def test_qwen35_adapters_are_built_in_the_gguf_layout(tmp_path, monkeypatch, row
     this.settings.edit.row_norm = row_norm.value
     found = F.normalize(torch.randn(LAYERS + 1, HIDDEN), dim=-1)
 
-    def fake_directions(self):
+    def fake_directions(self, answering=False):
         self.inputs["directions"] = "fixed"
         return found
 

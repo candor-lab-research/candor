@@ -50,7 +50,7 @@ def deltas(run: Run, edit: "Edit") -> dict[str, tuple[Tensor, Tensor]]:
     """Each edited weight's change as rank-1 factors (b, a), by its name in the model, with the
     strength folded into b."""
     _, _, _, writers = run.shape
-    directions = run.edit_directions(edit.name, edit.direction_layer)
+    directions = run.edit_directions(edit.name, edit.direction_layer, edit.answering)
     files = ModelFiles(run.model_folder)
     row_norm = RowNorm(run.settings.edit.row_norm)
     made = {}
@@ -64,11 +64,11 @@ def deltas(run: Run, edit: "Edit") -> dict[str, tuple[Tensor, Tensor]]:
 def _planned(run: Run, edit: "Edit") -> tuple[Path, dict[str, Any]]:
     """Where the edit's export goes and what it is built from."""
     run.gguf()
-    run.edit_directions(edit.name, edit.direction_layer)
+    run.edit_directions(edit.name, edit.direction_layer, edit.answering)
     quantization = run.settings.deployment.quantization
     path = run.path("exports", edit.name, f"{run.folder.name}-{edit.name}-{quantization}.gguf")
     inputs = {
-        **run.adapter_inputs(),
+        **run.adapter_inputs(edit.answering),
         "base": run.inputs["base"],
         "edit": edit.record(),
         "quantization": quantization,

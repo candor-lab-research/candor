@@ -4,13 +4,19 @@ Each trial is an edit of the shape heretic searches: a refusal direction the lay
 component a strength that peaks at one layer and falls off either side of it. Edits come in two kinds,
 searched as two studies that take turns: every layer reads the direction found at one layer, or each
 layer reads its own. Each study starts from evenly spread trials, then Optuna's TPE sampler aims at the
-least KL divergence among edits that refuse no more than search.max_refusals of the test prompts.
+least KL divergence among edits that refuse no more than search.max_refusals of the test prompts. For a
+thinking model each trial also draws where its directions were read, the start spread evenly over both.
 
 Searching the kinds apart, at that one goal, keeps either kind from being written off by trials that
 suit the other. A search of both at once, aiming at every trade-off of refusals against KL, missed
 heretic's Trial 170 on rude-llama: its sampler kept learning from weak edits that changed little and
 refused much, and never tried the shape that worked. Test landscapes calibrated to that search showed
 this design missing the best far less often (see results/phase-2-rude-llama.md).
+
+Strength starts in heretic's range and widens only where a kind's best edit presses an end of it. On the
+test landscapes a wide range from the start halved the hits when the best lay inside the narrow one,
+while widening on that alarm stayed close to the wide range where the best needed it (see
+results/phase-3-qwen3.5-9b.md).
 
 All of the run's adapters are loaded into one llama-server, so a trial only sets their strengths per
 request. A trial answers the harmful test prompts a chunk at a time and the judge labels each chunk;
@@ -27,15 +33,16 @@ import json
 import math
 import time
 import warnings
-from collections.abc import Callable, Iterable, Iterator
+from collections.abc import Callable, Iterable, Iterator, Sequence
 from contextlib import closing, contextmanager
-from dataclasses import asdict, dataclass
-from itertools import islice
+from dataclasses import asdict, dataclass, field
+from itertools import islice, zip_longest
 from pathlib import Path
 from typing import Any
 
 import optuna
 import torch
+from optuna.distributions import FloatDistribution
 from optuna.storages import JournalStorage
 from optuna.storages.journal import JournalFileBackend
 from optuna.trial import BaseTrial, FrozenTrial, TrialState
@@ -44,8 +51,8 @@ from . import config, kl
 from .engine import LlamaServer, Thinking
 from .judge import Guard, is_refusal, judged_refusal, read_verdict
 from .kernel import Kernel
-from .measure import Edit, answering, edit_adapters
-from .run import STAGES, Run, RunError, digest, seeds
+from .measure import Edit, edit_adapters
+from .run import ANSWER_SETS, ANSWERING, STAGES, Run, RunError, answering, digest, seeds
 
 SLOTS = 8
 # Harmful prompts judged at a time, so a trial that can't win stops early. The server answers the
@@ -61,6 +68,10 @@ PER_LAYER, ONE_LAYER = "per layer", "one layer"
 SCOPES = (ONE_LAYER, PER_LAYER)
 STUDIES = {ONE_LAYER: "candor: one layer", PER_LAYER: "candor: per layer"}
 SETTINGS = ("strength", "peak_layer", "edge_strength", "reach")
+# Where a thinking model's trials read their directions: at the end of the prompt, where its thinking
+# starts, or where its answer starts after an empty thinking block. The search draws one for each trial.
+THINK_START, ANSWER_START = "think start", "answer start"
+POSITIONS = (THINK_START, ANSWER_START)
 # How far a setting read back from an edit may stray past the search's range from rounding alone.
 ROUNDING = 1e-9
 # KL is shown to this many decimals; edits closer than that are not told apart.
@@ -72,6 +83,9 @@ EDGE = 0.05
 # stopped trial, so stopping it changes nothing the sampler draws. Stopping sooner was faster in the
 # test landscapes but missed the best more often.
 STOP_AFTER = 25
+# A kind's strength range is checked for widening once it has this many finished trials, and again every
+# WIDEN_EVERY after; a widened range starts with WIDENED_START evenly spread trials, as tested.
+WIDEN_FROM, WIDEN_EVERY, WIDENED_START = 60, 30, 10
 
 
 @dataclass(frozen=True)
@@ -90,6 +104,9 @@ class Score:
     thinking: float = 0.0
     forced: int = 0
     kl_thinking: float | None = None
+    # KL where the answer starts after an empty thinking block, as heretic read it, kept beside the KL
+    # after the unedited model's own thinking, which the search aims at.
+    kl_empty: float | None = None
 
 
 @dataclass(frozen=True)
@@ -111,10 +128,12 @@ class Candidate:
 
 @dataclass(frozen=True)
 class Found:
-    """A search's finished trials, by the number it shows each."""
+    """A search's finished trials, by the number it shows each, and the strength range of each kind
+    whose range the search widened."""
 
     trials: dict[int, FrozenTrial]
     base_refusals: int | None
+    strength: dict[str, tuple[float, float]] = field(default_factory=dict)
 
 
 def reaches(space: config.Search, layers: int) -> tuple[float, float]:
@@ -142,20 +161,58 @@ def scope_of(params: dict[str, Any]) -> str:
     return ONE_LAYER if "direction_layer" in params else PER_LAYER
 
 
-def suggest(trial: BaseTrial, space: config.Search, layers: int, components: list[str], scope: str) -> None:
-    """Draw a trial's parameters. Only an edit of one layer's direction has a direction layer."""
+def suggest(
+    trial: BaseTrial,
+    space: config.Search,
+    layers: int,
+    components: list[str],
+    scope: str,
+    positions: Sequence[str] = (),
+) -> None:
+    """Draw a trial's parameters. Only an edit of one layer's direction has a direction layer, and only a
+    thinking model's edits, given the positions its directions are read at, a position."""
     if scope == ONE_LAYER:
         trial.suggest_int("direction_layer", *space.direction_layers(layers))
     ranges = _ranges(space, layers)
     for name in _names(PER_LAYER, components):
         trial.suggest_float(name, *ranges[name.split(".")[1]])
+    if positions:
+        trial.suggest_categorical("position", positions)
 
 
 def spread(
-    scope: str, space: config.Search, layers: int, components: list[str], count: int, seed: int
+    scope: str,
+    space: config.Search,
+    layers: int,
+    components: list[str],
+    count: int,
+    seed: int,
+    positions: Sequence[str] = (),
 ) -> list[dict[str, Any]]:
     """count trials spread evenly over the scope's ranges (scrambled Sobol points), to start its study.
-    Random trials leave gaps a narrow region of good edits can fall into."""
+    Random trials leave gaps a narrow region of good edits can fall into. Given positions, the trials are
+    split evenly between them, each position's spread on its own and taken in turn, so the first trials
+    try every position."""
+    if positions:
+        shares = [
+            spread(
+                scope,
+                space,
+                layers,
+                components,
+                count // len(positions) + (j < count % len(positions)),
+                seed * len(positions) + j,
+            )
+            for j in range(len(positions))
+        ]
+        return [
+            {**params, "position": position}
+            for row in zip_longest(*shares)
+            for position, params in zip(positions, row, strict=True)
+            if params is not None
+        ]
+    if not count:
+        return []
     names = _names(scope, components)
     points = torch.quasirandom.SobolEngine(len(names), scramble=True, seed=seed).draw(count).double()
     low_layer, high_layer = space.direction_layers(layers)
@@ -186,7 +243,14 @@ def edit_from(params: dict[str, Any], number: int, layers: int) -> Edit:
             min_weight=params[f"{component}.edge_strength"] * strength,
             min_weight_distance=params[f"{component}.reach"] * last,
         )
-    return Edit(f"trial-{number}", params.get("direction_layer"), kernels)
+    answering = params.get("position") == ANSWER_START
+    return Edit(f"trial-{number}", params.get("direction_layer"), kernels, answering)
+
+
+def direction(layer: float | None, answering: bool) -> str:
+    """Which directions an edit reads, as a table shows it."""
+    read = PER_LAYER if layer is None else f"layer {layer:g}"
+    return f"{read}, {ANSWER_START}" if answering else read
 
 
 def violation(score: Score, prompts: int, cap: int) -> float:
@@ -257,6 +321,29 @@ def at_edges(params: dict[str, Any], space: config.Search, layers: int) -> list[
     return pressed
 
 
+def widened(found: Found, scope: str, space: config.Search) -> tuple[float, float]:
+    """The strength range a kind goes on with at a check: each end its best edit within the cap presses on
+    moved out to search.widest_strength, or with none within the cap, edits too weak, the ceiling."""
+    low, high = space.strength
+    widest_low, widest_high = space.widest_strength
+    best = within_cap(found, scope, space.max_refusals)
+    if not best:
+        return low, widest_high
+    strengths = [value for name, value in best[0].params.items() if name.endswith(".strength")]
+    margin = EDGE * (high - low)
+    floor = any(value - low <= margin for value in strengths)
+    ceiling = any(high - value <= margin for value in strengths)
+    return widest_low if floor else low, widest_high if ceiling else high
+
+
+def kind_space(space: config.Search, found: Found | None, scope: str) -> config.Search:
+    """The search settings a kind's trials are drawn from now: the run's, with strength as the search
+    widened it."""
+    if found is None or scope not in found.strength:
+        return space
+    return space.model_copy(update={"strength": found.strength[scope]})
+
+
 def nearest_layer(edit: Edit, space: config.Search, layers: int) -> Edit | None:
     """An edit that reads its direction between two layers, read instead at the nearest whole layer, as
     the search could draw it; None for an edit that needs no rounding or whose nearest layer the search
@@ -266,7 +353,9 @@ def nearest_layer(edit: Edit, space: config.Search, layers: int) -> Edit | None:
         return None
     whole = round(layer)
     low, high = space.direction_layers(layers)
-    return Edit(f"{edit.name} at layer {whole}", whole, edit.kernels) if low <= whole <= high else None
+    if not low <= whole <= high:
+        return None
+    return Edit(f"{edit.name} at layer {whole}", whole, edit.kernels, edit.answering)
 
 
 def beats(a: "Score | Candidate", b: "Score | Candidate") -> bool:
@@ -313,14 +402,14 @@ def _score(trial: FrozenTrial) -> Score:
         attrs.get("thinking", 0.0),
         attrs.get("forced", 0),
         attrs.get("kl_thinking"),
+        attrs.get("kl_empty"),
     )
 
 
 def _candidate(number: int, trial: FrozenTrial) -> Candidate:
-    layer = trial.params.get("direction_layer")
     return Candidate(
         number,
-        PER_LAYER if layer is None else f"layer {layer}",
+        direction(trial.params.get("direction_layer"), trial.params.get("position") == ANSWER_START),
         trial.user_attrs["refusals"],
         trial.user_attrs["keyword_refusals"],
         trial.user_attrs["kl"],
@@ -371,12 +460,43 @@ def _changed(before: dict[str, Any], now: dict[str, Any], keys: Iterable[str] | 
     return sorted(key for key in keys if before.get(key) != now.get(key))
 
 
-def _found(studies: Iterable[optuna.Study]) -> Found:
-    trials, base = {}, None
-    for study in studies:
+def _study_name(scope: str, widenings: int) -> str:
+    """The name of a kind's study after this many widenings of its strength range. Each holds every
+    finished trial of the kind."""
+    return STUDIES[scope] + (f", widened {widenings}" if widenings else "")
+
+
+def _widenings(study: optuna.Study) -> list[list[float]]:
+    """Each widening of the study's strength range so far: the trials finished then, and the new range."""
+    return study.user_attrs.get("widened", [])
+
+
+def _strength(study: optuna.Study) -> tuple[float, float] | None:
+    """The strength range the study's trials are drawn from, if the search widened it."""
+    widenings = _widenings(study)
+    return (widenings[-1][1], widenings[-1][2]) if widenings else None
+
+
+def _latest(storage: JournalStorage, scope: str) -> str | None:
+    """The name of the kind's study the search goes on in: the one made at its last widening. A widened
+    study is only whole once it records its widening, the last thing written to it."""
+    made = {study.study_name: study.user_attrs for study in storage.get_all_studies()}
+    if STUDIES[scope] not in made:
+        return None
+    widenings = 0
+    while "widened" in made.get(_study_name(scope, widenings + 1), {}):
+        widenings += 1
+    return _study_name(scope, widenings)
+
+
+def _found(studies: dict[str, optuna.Study]) -> Found:
+    trials, base, strength = {}, None, {}
+    for scope, study in studies.items():
         base = study.user_attrs.get("base_refusals", base)
         trials |= {t.user_attrs["number"]: t for t in _completed(study)}
-    return Found(dict(sorted(trials.items())), base)
+        if widened_to := _strength(study):
+            strength[scope] = widened_to
+    return Found(dict(sorted(trials.items())), base, strength)
 
 
 def load(run: Run) -> Found | None:
@@ -389,7 +509,11 @@ def load(run: Run) -> Found | None:
     if not names & set(STUDIES.values()):
         raise RunError(f"{folder} holds a search made by an older candor; move it aside or delete it")
     return _found(
-        optuna.load_study(study_name=name, storage=storage) for name in STUDIES.values() if name in names
+        {
+            scope: optuna.load_study(study_name=name, storage=storage)
+            for scope in SCOPES
+            if (name := _latest(storage, scope))
+        }
     )
 
 
@@ -400,6 +524,25 @@ def searched_score(found: Found, number: int) -> Score:
     return _score(found.trials[number])
 
 
+def _rebuilt_from(run: Run) -> dict[str, Any]:
+    """What a search's trials are rebuilt from besides their settings: the adapters for every position
+    its directions are read at, and the code that scored them. Call after run.directions()."""
+    made = [run.adapter_inputs(answering) for answering in run.positions]
+    return {
+        # A model that doesn't think reads at one position, recorded as before there were two.
+        "adapters": digest(made[0] if len(made) == 1 else made),
+        "code": {**{stage: STAGES[stage] for stage in list(STAGES)[:4]}, "search": VERSION},
+    }
+
+
+def _beside(run: Run, ids: dict[str, list[list[int]]]) -> dict[str, list[list[int]]]:
+    """For a thinking model, the harmless test prompts KL is read on beside the KL the search aims at:
+    where the thinking starts, and where the answer starts after an empty thinking block."""
+    if not run.settings.deployment.think_close:
+        return {}
+    return {"kl_thinking": ids["harmless_test"], "kl_empty": ids["harmless_test" + ANSWERING]}
+
+
 def trial_edit(run: Run, number: int) -> Edit:
     """A finished trial of this run's search, by the number the search shows. Its edit can only be
     rebuilt as it was scored while the run's directions and adapters are the ones the search used."""
@@ -408,10 +551,8 @@ def trial_edit(run: Run, number: int) -> Edit:
         raise RunError(f"{run.folder} has no search yet; run candor search")
     with run.locked():
         run.gguf()
-        ids = run.prompt_ids()
         run.directions()
-        harmless = run.kl_ids(ids, "harmless_test")
-        now = json.loads(json.dumps(Search(run).inputs(ids["harmful_test"], harmless)))
+        now = json.loads(json.dumps(_rebuilt_from(run)))
     if not (folder / "inputs.json").exists():
         raise RunError(f"{folder} holds a search with no record of its settings")
     before = json.loads((folder / "inputs.json").read_text())
@@ -431,6 +572,8 @@ class Search:
     def __init__(self, run: Run):
         self.run = run
         self.folder = run.path("search")
+        # Where trials may read their directions: a choice only for a thinking model.
+        self.positions = POSITIONS if run.settings.deployment.think_close else ()
 
     def search(
         self,
@@ -450,14 +593,16 @@ class Search:
             adapters = run.adapters()
             _, quantized = run.gguf()
             ids = run.prompt_ids()
+            # A search made from other inputs is refused before a thinking model's unedited thinking is
+            # sampled, and a new search is recorded only once that thinking exists.
+            self._check(self.inputs(ids), known=True)
             harmful, harmless = ids["harmful_test"], run.kl_ids(ids, "harmless_test")
-            starts = ids["harmless_test"] if run.settings.deployment.think_close else None
-            studies = self._studies(self.inputs(harmful, harmless))
+            studies = self._studies(self.inputs(ids, harmless))
             target = min(target, len(SCOPES) * space.trials_per_scope)
             started(self._done(studies), target)
             if self._done(studies) < target:
                 files = [path for made in adapters.values() for path in made.values()]
-                with self._scorer(quantized, files, harmful, harmless, starts) as scorer:
+                with self._scorer(quantized, files, harmful, harmless, _beside(run, ids)) as scorer:
                     first = studies[SCOPES[0]]
                     base = first.user_attrs.get("base_refusals")
                     if base is None:
@@ -467,6 +612,7 @@ class Search:
                     kept = {scope: self._within_cap(studies[scope]) for scope in SCOPES}
                     while self._done(studies) < target:
                         scope = self._next(studies)
+                        self._widen(studies, scope)
                         number, score = self._trial(studies, scope, scorer, adapters)
                         within = score.judged == len(harmful) and score.refusals <= space.max_refusals
                         shown = round(score.kl, KL_DIGITS)
@@ -483,7 +629,7 @@ class Search:
                             if best
                             else None
                         )
-            found = _found(studies.values())
+            found = _found(studies)
             seconds = [t.user_attrs["seconds"] for t in found.trials.values()]
             return found, sum(seconds) / len(seconds) if seconds else 0.0
 
@@ -500,25 +646,18 @@ class Search:
             _, quantized = run.gguf()
             ids = run.prompt_ids()
             run.directions()
+            # Checked before the adapters are brought up to date and before a thinking model's unedited
+            # thinking is sampled, so a mismatch leaves the run as it was.
+            # The Optuna version decides which trials the search draws, not how one is scored.
+            self._check(self.inputs(ids), known=True, scoring=True)
             harmful, harmless = ids["harmful_test"], run.kl_ids(ids, "harmless_test")
-            starts = ids["harmless_test"] if run.settings.deployment.think_close else None
-            # Checked before the adapters are brought up to date, so a mismatch leaves the run as it was.
-            record, journal = self.folder / "inputs.json", self.folder / "study.jsonl"
-            if record.exists():
-                before = json.loads(record.read_text())
-                now = json.loads(json.dumps(self.inputs(harmful, harmless)))
-                # The Optuna version decides which trials the search draws, not how one is scored.
-                if changed := _changed(before, now, (before.keys() | now.keys()) - {"Optuna"}):
-                    raise RunError(
-                        f"the search was made with different {' and '.join(changed)} from this run's now, "
-                        "so an edit scored now can't be set beside its trials"
-                    )
-            elif journal.exists():
-                raise RunError(f"{self.folder} holds a search with no record of its settings")
+            self._check(self.inputs(ids, harmless), scoring=True)
             adapters = run.adapters()
             made = [self._edit_files(edit, adapters) for edit in edits]
             files = [path for found in [*adapters.values(), *made] for path in found.values()]
-            with self._scorer(quantized, list(dict.fromkeys(files)), harmful, harmless, starts) as scorer:
+            with self._scorer(
+                quantized, list(dict.fromkeys(files)), harmful, harmless, _beside(run, ids)
+            ) as scorer:
                 base = scorer.score({}).refusals
                 scores = []
                 for edit, found in zip(edits, made, strict=True):
@@ -530,12 +669,13 @@ class Search:
         """The adapters an edit is scored with: the search's own for a direction it reads, or else
         adapters of its own, built as candor measure builds them. These depend only on the direction,
         so they are kept by layer."""
+        prefix = ANSWER_SETS if edit.answering else ""
         layer = edit.direction_layer
         if layer is None:
-            return adapters["per-layer"]
-        if float(layer).is_integer() and f"layer-{int(layer)}" in adapters:
-            return adapters[f"layer-{int(layer)}"]
-        return edit_adapters(self.run, edit, self.run.path("scores", f"layer-{layer!r}"))[0]
+            return adapters[prefix + "per-layer"]
+        if float(layer).is_integer() and f"{prefix}layer-{int(layer)}" in adapters:
+            return adapters[f"{prefix}layer-{int(layer)}"]
+        return edit_adapters(self.run, edit, self.run.path("scores", f"{prefix}layer-{layer!r}"))[0]
 
     def _scales(self, edit: Edit, files: dict[str, Path]) -> dict[Path, float]:
         """Each of the edit's adapters at its strength. Those at 0 are left out, which llama.cpp skips."""
@@ -549,15 +689,16 @@ class Search:
         files: list[Path],
         harmful: list[list[int]],
         harmless: list[list[int]],
-        starts: list[list[int]] | None,
+        beside: dict[str, list[list[int]]],
     ) -> Iterator["_Scorer"]:
-        """A scorer on llama-server with these adapters loaded, and the judge, for the test prompts;
-        with starts, the harmless prompts as they open a thinking model's thinking."""
+        """A scorer on llama-server with these adapters loaded, and the judge, for the test prompts; it
+        also reads KL on the harmless prompts beside, by the name of the score that keeps it."""
         run, settings = self.run, self.run.settings
         texts = run.prompt_texts()[0]["harmful_test"]
         budget = settings.scoring.thinking_budget
         answer = settings.scoring.answer_tokens + run.thinking_room(budget)
-        room = max(len(p) for p in harmful + harmless) + answer + 8
+        read = [p for prompts in [harmful, harmless, *beside.values()] for p in prompts]
+        room = max(len(p) for p in read) + answer + 8
         guard = Guard(settings.measure.judge, settings.measure.judge_revision)
         try:
             with run.server(quantized, files, context_per_slot=room, parallel=SLOTS) as server:
@@ -569,13 +710,18 @@ class Search:
                     run.thinking(server, budget),
                 )
                 yield _Scorer(
-                    server, guard, texts, harmful, harmless, settings.scoring.kl_tokens, answering, starts
+                    server, guard, texts, harmful, harmless, settings.scoring.kl_tokens, answering, beside
                 )
         finally:
             guard.close()
 
-    def inputs(self, harmful: list[list[int]], harmless: list[list[int]]) -> dict[str, Any]:
-        """What the search's scores depend on. A search is only carried on while these are the same."""
+    def inputs(
+        self, ids: dict[str, list[list[int]]], harmless: list[list[int]] | None = None
+    ) -> dict[str, Any]:
+        """What the search's scores depend on. A search is only carried on while these are the same. For a
+        thinking model that includes the unedited thinking KL is read after: named by what it was
+        sampled from, known before any is sampled, and given the KL prompts, the thinking itself, as
+        thinking sampled afresh from the same settings comes out differently."""
         settings = self.run.settings
         # Nothing for a greedy model that doesn't think, so searches made before candor sampled still
         # carry on.
@@ -584,28 +730,40 @@ class Search:
             how["sampling"]["seed"] = settings.sampling.seed
         if "thinking" in how:
             how["thinking"]["budget"] = settings.scoring.thinking_budget or how["thinking"]["budget"]
+        # Only a search that may widen strength records how far, so searches made before it could still
+        # carry on.
+        unrecorded = {"trials_per_scope"} | (set() if settings.search.widens() else {"widest_strength"})
         return {
             "model file": self.run.inputs["quantized"],
-            "adapters": digest(self.run.adapter_inputs()),
-            "test prompts": digest([harmful, harmless]),
+            **_rebuilt_from(self.run),
+            "test prompts": digest([ids["harmful_test"], ids["harmless_test"]]),
             "answer length": settings.scoring.answer_tokens,
             **how,
             "KL tokens": settings.scoring.kl_tokens,
             "judge": [settings.measure.judge, settings.measure.judge_revision],
             "KV cache": settings.deployment.kv_cache,
-            "search settings": settings.search.model_dump(exclude={"trials_per_scope"}),
-            "code": {**{stage: STAGES[stage] for stage in list(STAGES)[:4]}, "search": VERSION},
+            "search settings": settings.search.model_dump(exclude=unrecorded),
             "Optuna": optuna.__version__,
-        }
+        } | (self._thinking(harmless) if settings.deployment.think_close else {})
 
-    def _studies(self, inputs: dict[str, Any]) -> dict[str, optuna.Study]:
-        """The run's study of each kind of edit: new ones, or those already here if they were made from
-        the same inputs."""
+    def _thinking(self, harmless: list[list[int]] | None) -> dict[str, str]:
+        found = {"unedited thinking": self.run.thinking_key()}
+        return found | ({"KL prompts": digest(harmless)} if harmless is not None else {})
+
+    def _check(self, inputs: dict[str, Any], known: bool = False, scoring: bool = False) -> None:
+        """Refuse a search here made from other inputs. With known, only the inputs given are compared, as
+        those not known yet are compared once they are; scoring an edit beside the search's trials
+        compares all but the Optuna version, which decides only which trials it draws."""
         record, journal = self.folder / "inputs.json", self.folder / "study.jsonl"
-        now = json.loads(json.dumps(inputs))
         if record.exists():
-            before = json.loads(record.read_text())
-            if changed := _changed(before, now):
+            before, now = json.loads(record.read_text()), json.loads(json.dumps(inputs))
+            keys = now.keys() if known else before.keys() | now.keys()
+            if changed := _changed(before, now, keys - {"Optuna"} if scoring else keys):
+                if scoring:
+                    raise RunError(
+                        f"the search was made with different {' and '.join(changed)} from this run's now, "
+                        "so an edit scored now can't be set beside its trials"
+                    )
                 raise RunError(
                     f"{self.folder} holds a search made with a different {', '.join(changed)}; move it "
                     "aside or delete it to start a new search"
@@ -614,48 +772,131 @@ class Search:
             raise RunError(
                 f"{self.folder} holds a search with no record of its settings; move it aside or delete it"
             )
-        else:
+
+    def _studies(self, inputs: dict[str, Any]) -> dict[str, optuna.Study]:
+        """The run's study of each kind of edit: new ones, or those already here if they were made from
+        the same inputs."""
+        record = self.folder / "inputs.json"
+        self._check(inputs)
+        if not record.exists():
             self.folder.mkdir(exist_ok=True)
             partial = record.with_name("inputs.json.building")
-            partial.write_text(json.dumps(now, sort_keys=True))
+            partial.write_text(json.dumps(json.loads(json.dumps(inputs)), sort_keys=True))
             partial.replace(record)
-        space = self.run.settings.search
-        _, layers, _, writers = self.run.shape
-        components = sorted({w.component for w in writers})
         storage = _storage(self.folder)
         studies = {}
-        for i, scope in enumerate(SCOPES):
+        for scope in SCOPES:
             study = optuna.create_study(
-                study_name=STUDIES[scope], storage=storage, direction="minimize", load_if_exists=True
+                study_name=_latest(storage, scope) or STUDIES[scope],
+                storage=storage,
+                direction="minimize",
+                load_if_exists=True,
             )
             # A trial still marked running was stopped part way; the run lock means no search is running
             # it.
             for trial in study.get_trials(deepcopy=False, states=(TrialState.RUNNING,)):
                 study.tell(trial.number, state=TrialState.FAIL)
-            # The spread start, less the points already scored or waiting, so a point whose trial
-            # failed is queued again rather than lost.
-            kept = {
-                _key(trial.system_attrs.get("fixed_params", trial.params))
-                for trial in study.get_trials(
-                    deepcopy=False, states=(TrialState.COMPLETE, TrialState.WAITING)
-                )
-            }
-            for params in spread(scope, space, layers, components, space.startup_per_scope, space.seed + i):
-                if _key(params) not in kept:
-                    study.enqueue_trial(params)
-            # The sampler starts again from its seed in each session, so the seed moves on with the trials
-            # made, and a resumed search draws afresh rather than replaying the same random numbers.
-            with warnings.catch_warnings():
-                warnings.simplefilter("ignore", optuna.exceptions.ExperimentalWarning)
-                study.sampler = optuna.samplers.TPESampler(
-                    n_startup_trials=space.startup_per_scope,
-                    n_ei_candidates=CANDIDATES,
-                    multivariate=True,
-                    seed=space.seed + len(SCOPES) * len(study.trials) + i,
-                    constraints_func=_violation,
-                )
+            self._ready(study, scope)
             studies[scope] = study
         return studies
+
+    def _ready(self, study: optuna.Study, scope: str) -> None:
+        """Queue the kind's spread starts its study hasn't scored or queued yet, so a point whose trial
+        failed is queued again rather than lost, and give the study its sampler."""
+        space = self.run.settings.search
+        _, layers, _, writers = self.run.shape
+        components = sorted({w.component for w in writers})
+        i = SCOPES.index(scope)
+        # The first spread over the run's strength range, then one over each range it widened to.
+        starts = spread(
+            scope, space, layers, components, space.startup_per_scope, space.seed + i, self.positions
+        )
+        for finished, low, high in _widenings(study):
+            wider = space.model_copy(update={"strength": (low, high)})
+            seed = space.seed + len(SCOPES) * int(finished) + i
+            starts += spread(scope, wider, layers, components, WIDENED_START, seed, self.positions)
+        kept = {
+            _key(trial.system_attrs.get("fixed_params", trial.params))
+            for trial in study.get_trials(deepcopy=False, states=(TrialState.COMPLETE, TrialState.WAITING))
+        }
+        for params in starts:
+            if _key(params) not in kept:
+                study.enqueue_trial(params)
+        # The sampler starts again from its seed in each session, so the seed moves on with the trials
+        # made, and a resumed search draws afresh rather than replaying the same random numbers.
+        with warnings.catch_warnings():
+            warnings.simplefilter("ignore", optuna.exceptions.ExperimentalWarning)
+            study.sampler = optuna.samplers.TPESampler(
+                n_startup_trials=space.startup_per_scope,
+                n_ei_candidates=CANDIDATES,
+                multivariate=True,
+                seed=space.seed + len(SCOPES) * len(study.trials) + i,
+                constraints_func=_violation,
+            )
+
+    def _widen(self, studies: dict[str, optuna.Study], scope: str) -> None:
+        """At a check, widen the kind's strength range if its best edit says to (see widened). Its finished
+        trials move to a new study of the kind over the wider range, since the sampler only learns
+        settings together whose ranges every trial shares, and evenly spread trials start the new range."""
+        space = self.run.settings.search
+        study = studies[scope]
+        finished = len(_completed(study))
+        widenings = _widenings(study)
+        if (
+            finished < max(WIDEN_FROM, space.startup_per_scope + 1)
+            or (finished - WIDEN_FROM) % WIDEN_EVERY
+            # Checked already, in a session that widened here and stopped.
+            or (widenings and widenings[-1][0] == finished)
+        ):
+            return
+        found = _found({scope: study})
+        before = self._space(study)
+        wider = widened(found, scope, before)
+        if wider == before.strength:
+            return
+        storage = _storage(self.folder)
+        name = _study_name(scope, len(widenings) + 1)
+        # Left part made by a search stopped while widening.
+        if name in optuna.get_all_study_names(storage):
+            optuna.delete_study(study_name=name, storage=storage)
+        new = optuna.create_study(study_name=name, storage=storage, direction="minimize")
+        for key, value in study.user_attrs.items():
+            if key != "widened":
+                new.set_user_attr(key, value)
+        strength = FloatDistribution(*wider)
+        for trial in _completed(study):
+            distributions = {
+                param: strength if param.endswith(".strength") else distribution
+                for param, distribution in trial.distributions.items()
+            }
+            new.add_trial(
+                optuna.trial.create_trial(
+                    params=trial.params,
+                    distributions=distributions,
+                    value=trial.value,
+                    user_attrs=trial.user_attrs,
+                    system_attrs=trial.system_attrs,
+                )
+            )
+        # Written last: a study without it was left part made.
+        new.set_user_attr("widened", [*widenings, [finished, *wider]])
+        self._ready(new, scope)
+        studies[scope] = new
+        if within_cap(found, scope, space.max_refusals):
+            why = f"its best {scope} edit within the cap presses on an end of strength"
+        else:
+            why = f"no {scope} edit is within the cap yet"
+        low, high = before.strength
+        self.run.report(
+            f"After {finished} {scope} trials {why}, so its strength widens from {low:g}-{high:g} to "
+            f"{wider[0]:g}-{wider[1]:g}"
+        )
+
+    def _space(self, study: optuna.Study) -> config.Search:
+        """The search settings a kind's study draws its trials from: the run's, with strength as widened."""
+        space = self.run.settings.search
+        strength = _strength(study)
+        return space.model_copy(update={"strength": strength}) if strength else space
 
     def _done(self, studies: dict[str, optuna.Study]) -> int:
         """The finished trials that count towards the target: a kind's beyond its share don't."""
@@ -696,7 +937,14 @@ class Search:
             trial.set_user_attr("number", number)
             with warnings.catch_warnings():
                 warnings.simplefilter("ignore", optuna.exceptions.ExperimentalWarning)
-                suggest(trial, space, layers, sorted({w.component for w in writers}), scope)
+                suggest(
+                    trial,
+                    self._space(study),
+                    layers,
+                    sorted({w.component for w in writers}),
+                    scope,
+                    self.positions,
+                )
             edit = edit_from(trial.params, number, layers)
             scales = self._scales(edit, self._edit_files(edit, adapters))
             full = sorted(t.user_attrs["refusals"] for t in _completed(study) if not t.user_attrs["stopped"])
@@ -745,13 +993,13 @@ class _Scorer:
         harmless: list[list[int]],
         kl_tokens: int,
         answering: _Answering,
-        starts: list[list[int]] | None,
+        beside: dict[str, list[list[int]]],
     ):
         self.server, self.guard, self.texts = server, guard, texts
         self.harmful, self.harmless, self.kl_tokens = harmful, harmless, kl_tokens
-        self.answering, self.starts = answering, starts
+        self.answering, self.beside = answering, beside
         self.base = server.top_logprobs(harmless, kl_tokens)
-        self.base_starts = server.top_logprobs(starts, kl_tokens) if starts else None
+        self.base_beside = {name: server.top_logprobs(prompts, kl_tokens) for name, prompts in beside.items()}
 
     def score(self, scales: dict[Path, float], stop_above: int | None = None) -> Score:
         """An edit's refusals and KL divergence. The harmful prompts are judged CHUNK at a time, in
@@ -782,11 +1030,12 @@ class _Scorer:
                     break
         top = self.server.top_logprobs(self.harmless, self.kl_tokens, scales)
         divergence = kl.mean_from_top(self.base, top)
-        at_start = None
-        if self.starts and self.base_starts:
-            at_start = kl.mean_from_top(
-                self.base_starts, self.server.top_logprobs(self.starts, self.kl_tokens, scales)
+        beside = {
+            name: kl.mean_from_top(
+                self.base_beside[name], self.server.top_logprobs(prompts, self.kl_tokens, scales)
             )
+            for name, prompts in self.beside.items()
+        }
         return Score(
-            refusals, keyword_refusals, unlabelled, divergence, judged, thought / judged, forced, at_start
+            refusals, keyword_refusals, unlabelled, divergence, judged, thought / judged, forced, **beside
         )

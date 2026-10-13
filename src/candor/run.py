@@ -40,10 +40,18 @@ MODEL_FILES = ["*.json", "*.safetensors", "*.jinja", "*.txt", "*.model", "*.tikt
 PROMPT_SETS = tuple(config.Prompts.model_fields)
 # Prompt sets the search never sees, kept for comparing finished edits.
 HELD_OUT = ("harmful_held_out", "harmless_held_out")
-# The prompt sets KL is read on. For a thinking model each is also kept with its thinking closed, under
-# its name and ANSWERING, so KL is read where the answer starts.
+# The prompt sets KL is read on. For a thinking model it is read where the answer starts, after the
+# unedited model's own thinking (thinking/).
 KL_SETS = ("harmless_test", "harmless_held_out")
+# For a thinking model, these sets are also kept with an empty thinking block closed after the prompt,
+# under their names and ANSWERING: directions are read there as well as where the thinking starts, and
+# KL there is kept beside the KL the search aims at, as heretic read KL.
+CLOSED_SETS = ("harmful", "harmless", *KL_SETS)
 ANSWERING = "_answering"
+# The names of a thinking model's adapter sets read where the answer starts begin with this.
+ANSWER_SETS = "answer-"
+# How many answers the unedited model thinks at once for thinking/; sampled answers can shift with it.
+THINKING_SLOTS = 8
 # A sampled answer's seed is never llama.cpp's "pick one at random".
 RANDOM_SEED = 2**32 - 1
 # A prompt that ends by opening a thinking tag, such as Qwen3.5's <think> or K2-Horizon's <ifm|think>.
@@ -54,6 +62,9 @@ CHECKED_PER_SET = 3
 # the results it builds. Each record holds the numbers of its own stage and every stage before it, so
 # results built by older code are rebuilt along with everything after them. scores holds the adapters
 # candor score builds for edits the search has none for, and exports the GGUFs candor export ships.
+# Stages added later go last, so adding one rebuilds nothing already made: a thinking model's directions
+# where its answer starts, and its unedited thinking, after which KL is read. Each of those holds the
+# numbers of the stages in DEPENDS rather than of every stage before it.
 STAGES = {
     "gguf": 1,
     "prompts.json": 1,
@@ -62,6 +73,12 @@ STAGES = {
     "measurements": 1,
     "scores": 1,
     "exports": 2,
+    "directions_answering.pt": 1,
+    "thinking": 1,
+}
+DEPENDS = {
+    "directions_answering.pt": ("gguf", "prompts.json", "directions.pt"),
+    "thinking": ("gguf", "prompts.json"),
 }
 
 
@@ -138,6 +155,35 @@ def seeds(seed: int, count: int) -> list[int]:
     return [int.from_bytes(digest[:4]) % RANDOM_SEED for digest in made]
 
 
+def _after(closed: list[int], end: int) -> list[int]:
+    """The tokens a prompt with its thinking closed holds after the thinking's end tag: the text the
+    template writes between the thinking and the answer."""
+    return closed[len(closed) - closed[::-1].index(end) :]
+
+
+def answering(settings: config.RunConfig) -> dict[str, Any]:
+    """How the model answers, for the records of what its answers depend on: its sampling, the seed
+    left out, unless it answers greedily as by default, and a thinking model's thinking. Nothing for a
+    greedy model that doesn't think, so the records of runs made before candor sampled still match."""
+    found: dict[str, Any] = {}
+    if settings.sampling != config.Sampling(seed=settings.sampling.seed):
+        found["sampling"] = settings.sampling.model_dump(exclude={"seed"})
+    if thinking := thinking_settings(settings.deployment):
+        found["thinking"] = thinking
+    return found
+
+
+def thinking_settings(deployment: config.Deployment) -> dict[str, Any] | None:
+    """How a thinking model's answers are capped, for the records of what they depend on."""
+    if deployment.think_close is None:
+        return None
+    return {
+        "close": deployment.think_close,
+        "budget": deployment.thinking_budget,
+        "message": deployment.thinking_budget_message,
+    }
+
+
 def drop_repeats(texts: dict[str, list[str]]) -> dict[str, int]:
     """Remove from each held-out set every prompt that is also in another set, or earlier in its own,
     so the held-out sets only hold prompts the search never saw. Returns how many each set lost."""
@@ -178,10 +224,12 @@ class Run:
             yield
 
     def _with_code(self, output: Path, inputs: dict[str, Any]) -> dict[str, Any]:
-        """The inputs, and the code versions of the output's stage and every stage before it."""
+        """The inputs, and the code versions of the output's stage and the stages it depends on: every
+        stage before it, unless DEPENDS names them."""
         stages = list(STAGES)
-        stage = stages.index(output.relative_to(self.folder).parts[0])
-        return {**inputs, "code": {name: STAGES[name] for name in stages[: stage + 1]}}
+        stage = output.relative_to(self.folder).parts[0]
+        before = DEPENDS.get(stage, stages[: stages.index(stage)])
+        return {**inputs, "code": {name: STAGES[name] for name in (*before, stage)}}
 
     def current(self, output: Path, inputs: dict[str, Any]) -> bool:
         """Whether output exists and was built from exactly these inputs, by this version of candor."""
@@ -445,10 +493,109 @@ class Run:
         # A token holds at least one byte, and the engine allows a few more for the end tag.
         return budget + len(deployment.thinking_budget_message.encode()) + 16
 
-    def kl_ids(self, ids: dict[str, list[list[int]]], name: str) -> list[list[int]]:
-        """The prompts of one of KL_SETS as KL is read on them: for a thinking model, with its thinking
-        closed, so KL is read on the first token of the answer rather than of the thinking."""
-        return ids[name + ANSWERING] if self.settings.deployment.think_close else ids[name]
+    def kl_ids(self, ids: dict[str, list[list[int]]], name: str, limit: int | None = None) -> list[list[int]]:
+        """The first limit prompts of one of KL_SETS as KL is read on them: for a thinking model, after
+        the unedited model's own thinking, where its answers start in use, leaving out those whose
+        thinking didn't end by itself."""
+        if not self.settings.deployment.think_close:
+            return ids[name][:limit]
+        return [prompt for prompt in self.thinking_traces()[name][:limit] if prompt is not None]
+
+    def _thinking_inputs(self) -> dict[str, Any]:
+        ids = self.prompt_ids()
+        self.gguf()
+        settings = self.settings
+        return {
+            "model": self.inputs["quantized"],
+            "ids": digest([ids[name] for name in KL_SETS]),
+            "kv_cache": settings.deployment.kv_cache,
+            "seed": settings.sampling.seed,
+            "slots": THINKING_SLOTS,
+            **answering(settings),
+        }
+
+    def thinking_key(self) -> str:
+        """What the unedited model's thinking is sampled from, as a name. Sampled thinking can't be
+        sampled again exactly, so each is kept under its own name: a change samples afresh and keeps
+        the old, which going back finds again."""
+        if self.settings.deployment.think_close is None:
+            raise RunError("only a thinking model has thinking to read KL after")
+        return digest(self._with_code(self.path("thinking"), self._thinking_inputs()))
+
+    def thinking_traces(self) -> dict[str, list[list[int] | None]]:
+        """For each of KL_SETS, each prompt followed by the unedited model's own thinking and the text its
+        template writes after the thinking's end tag: where its answer starts in thinking-on use, so KL
+        is read there. Sampled as the run deploys the model, each prompt with its seed, at the
+        deployment's budget; None for a prompt whose thinking didn't end by itself, which KL leaves out.
+        The thinking is the model's own text, so it is kept only in the private folder, as token ids."""
+        key = self.thinking_key()
+        record, private = (
+            self.path("thinking", f"{key}.json"),
+            self.path("private", "thinking", f"{key}.json"),
+        )
+        if record.exists():
+            made = json.loads(record.read_text())
+            if private.exists() and digest(traces := json.loads(private.read_text())) == made["traces"]:
+                return traces
+            raise RunError(
+                f"the unedited model's thinking that KL is read after is missing or changed in "
+                f"{private.relative_to(self.folder)}, and sampling it again wouldn't give the same: restore "
+                f"it, or delete {record.relative_to(self.folder)} to sample afresh, after which KL can't be "
+                "compared with KL read before"
+            )
+        settings = self.settings
+        ids = self.prompt_ids()
+        _, quantized = self.gguf()
+        self.report("Thinking with the unedited model, to read KL where its answers start")
+        room = max(len(p) for name in KL_SETS for p in ids[name]) + self.thinking_room() + 8
+        traces: dict[str, list[list[int] | None]] = {}
+        with self.server(quantized, context_per_slot=room, parallel=THINKING_SLOTS) as server:
+            thinking = self.thinking(server)
+            assert thinking is not None
+            end = server.token_of(thinking.end)
+            for name in KL_SETS:
+                prompts = ids[name]
+                done = self._tenths(f"Thought through {name.replace('_', ' ')} prompts", len(prompts))
+                thoughts = server.thoughts(
+                    prompts, self.sampling(), seeds(settings.sampling.seed, len(prompts)), thinking, done
+                )
+                traces[name] = [
+                    None if thought is None else prompt + thought + _after(closed, end)
+                    for prompt, thought, closed in zip(prompts, thoughts, ids[name + ANSWERING], strict=True)
+                ]
+                if not any(traces[name]):
+                    raise RunError(
+                        f"the unedited model's thinking didn't end by itself on any of the {len(prompts)} "
+                        f"{name.replace('_', ' ')} prompts, so KL can't be read after it; raise "
+                        "deployment.thinking_budget"
+                    )
+        private.parent.mkdir(parents=True, exist_ok=True)
+        building = private.with_name(f"{private.name}.building")
+        building.write_text(json.dumps(traces))
+        sync(building)
+        building.replace(private)
+        sync(private)
+        made = {
+            "traces": digest(traces),
+            "kept": {name: sum(trace is not None for trace in traces[name]) for name in KL_SETS},
+        }
+        record.parent.mkdir(exist_ok=True)
+        partial = record.with_name(f"{record.name}.building")
+        partial.write_text(json.dumps(made))
+        self.commit(partial, record, self._thinking_inputs())
+        return traces
+
+    def _tenths(self, what: str, total: int) -> Callable[[], None]:
+        """Reports how many of total are done at every tenth of them, so a long wait shows it moves."""
+        count = 0
+
+        def done() -> None:
+            nonlocal count
+            count += 1
+            if count * 10 // total > (count - 1) * 10 // total:
+                self.report(f"{what}: {count} of {total}")
+
+        return done
 
     def chats(self, prompts: list[str]) -> list[list[dict[str, str]]]:
         system = self.settings.deployment.system_prompt
@@ -516,6 +663,7 @@ class Run:
         close = settings.deployment.think_close
         if close:
             inputs["think_close"] = close
+            inputs["closed"] = list(CLOSED_SETS)
         if self.fresh(path, inputs):
             ids = json.loads(path.read_text())
             self._check_lengths(ids)
@@ -536,7 +684,7 @@ class Run:
                     )
             ids = {name: server.chat_ids(self.chats(texts[name]), kwargs) for name in PROMPT_SETS}
             if close:
-                for name in KL_SETS:
+                for name in CLOSED_SETS:
                     ids[name + ANSWERING] = server.chat_ids(self.chats(texts[name]), kwargs, close)
         self._check_lengths(ids)
         sampled = {name: ids[name][:CHECKED_PER_SET] for name in PROMPT_SETS}
@@ -556,21 +704,43 @@ class Run:
 
     # Directions
 
-    def directions(self) -> torch.Tensor:
-        """One refusal direction per residual index, from transformers fed the run's exact prompt ids."""
+    @property
+    def positions(self) -> tuple[bool, ...]:
+        """Where the run reads directions, as answering: at the end of the prompt, and for a thinking
+        model also where its answer starts after an empty thinking block."""
+        return (False, True) if self.settings.deployment.think_close else (False,)
+
+    def _direction_plan(self, answering: bool) -> tuple[Path, dict[str, Any]]:
         ids = self.prompt_ids()
-        path = self.path("directions.pt")
-        trusted = self.settings.model.trust_remote_code
+        closed = ANSWERING if answering else ""
         inputs = {
-            "ids": digest([ids["harmful"], ids["harmless"]]),
+            "ids": digest([ids["harmful" + closed], ids["harmless" + closed]]),
             "model": self.model_fingerprint,
-            "remote_code": trusted,
+            "remote_code": self.settings.model.trust_remote_code,
         }
-        self.inputs["directions"] = digest(inputs)
-        if self.fresh(path, inputs):
-            return torch.load(path)
+        return self.path(f"directions{closed}.pt"), inputs
+
+    def directions(self, answering: bool = False) -> torch.Tensor:
+        """One refusal direction per residual index, from transformers fed the run's exact prompt ids:
+        read at the end of each prompt or, with answering, where a thinking model's answer starts after
+        an empty thinking block. A thinking model's are read at both in one pass."""
+        if answering not in self.positions:
+            raise RunError("only a thinking model has directions where its answer starts")
+        plans = {position: self._direction_plan(position) for position in self.positions}
+        self.inputs["directions"] = digest(plans[False][1])
+        if True in plans:
+            # The stage comes after the adapters in STAGES, so its code version reaches them only here.
+            self.inputs["answering directions"] = digest(self._with_code(*plans[True]))
+        if stale := {position: plan for position, plan in plans.items() if not self.fresh(*plan)}:
+            self._read_directions(stale)
+        return torch.load(plans[answering][0])
+
+    def _read_directions(self, stale: dict[bool, tuple[Path, dict[str, Any]]]) -> None:
+        """Read the residuals for each stale position, loading the model once, and save its directions."""
         self.check_memory()
+        ids = self.prompt_ids()
         device, dtype = self._device()
+        trusted = self.settings.model.trust_remote_code
         self.report(f"Reading residuals on {device}")
         from transformers import AutoModelForCausalLM
 
@@ -578,26 +748,29 @@ class Run:
             self.model_folder, dtype=dtype, device_map=device, trust_remote_code=trusted
         ).eval()
         pad_id = residuals.pad_token_id_for(self.model_folder, trusted)
-        harmful = residuals.last_token_residuals(model, ids["harmful"], pad_id)
-        harmless = residuals.last_token_residuals(model, ids["harmless"], pad_id)
+        read = {}
+        for answering in stale:
+            closed = ANSWERING if answering else ""
+            read[answering] = [
+                residuals.last_token_residuals(model, ids[name + closed], pad_id)
+                for name in ("harmful", "harmless")
+            ]
         del model
         residuals.free_memory(device)
-        if not (torch.isfinite(harmful).all() and torch.isfinite(harmless).all()):
+        if not all(torch.isfinite(found).all() for pair in read.values() for found in pair):
             raise RunError(
                 f"the model's activations overflowed in {dtype} on {device}; run on a GPU in bfloat16"
             )
-        found = directions.difference_of_means(harmful, harmless)
-        partial = path.with_name("directions.pt.building")
-        torch.save(found, partial)
-        self.commit(partial, path, inputs)
-        return found
+        for answering, (path, inputs) in stale.items():
+            partial = path.with_name(f"{path.name}.building")
+            torch.save(directions.difference_of_means(*read[answering]), partial)
+            self.commit(partial, path, inputs)
 
-    def edit_directions(self, name: str, layer: float | None) -> torch.Tensor:
+    def edit_directions(self, name: str, layer: float | None, answering: bool = False) -> torch.Tensor:
         """The direction an edit removes at each layer: each layer's own when layer is None, otherwise
-        the one read after that layer, which may fall between two."""
-        if not self.path("directions.pt").exists():
-            self.check_memory()
-        found = self.directions()
+        the one read after that layer, which may fall between two; read where the answer starts when
+        answering."""
+        found = self.directions(answering)
         _, layers, _, _ = self.shape
         if layer is None:
             return found[1:]
@@ -627,10 +800,11 @@ class Run:
             raise RunError(f"no llama.cpp name for {', '.join(unmapped[:3])}")
         return {name: str(mapped) for name, mapped in names.items()}
 
-    def adapter_inputs(self) -> dict[str, Any]:
-        """What every adapter set is built from besides its directions; call after directions()."""
+    def adapter_inputs(self, answering: bool = False) -> dict[str, Any]:
+        """What every adapter set read at one position is built from besides its directions; call after
+        directions()."""
         return {
-            "directions": self.inputs["directions"],
+            "directions": self.inputs["answering directions" if answering else "directions"],
             "row_norm": self.settings.edit.row_norm,
             "targets": sorted(self.target_names.items()),
         }
@@ -659,17 +833,22 @@ class Run:
         return {names[w.name]: folder / f"{names[w.name]}.gguf" for w in writers}
 
     def adapters(self) -> dict[str, dict[str, Path]]:
-        """For each direction set, one rank-1 adapter per edit target, named by its GGUF tensor."""
-        found = self.directions()
+        """For each direction set, one rank-1 adapter per edit target, named by its GGUF tensor. The names
+        of a thinking model's sets read where the answer starts begin with ANSWER_SETS."""
         _, layers, _, _ = self.shape
-        inputs = self.adapter_inputs()
         root = self.path("adapters")
         root.mkdir(exist_ok=True)
-        sets = self.direction_sets(found, layers)
+        sets = {}
+        for answering in self.positions:
+            found, inputs = self.directions(answering), self.adapter_inputs(answering)
+            prefix = ANSWER_SETS if answering else ""
+            sets |= {
+                prefix + name: (made, inputs) for name, made in self.direction_sets(found, layers).items()
+            }
         for leftover in root.iterdir():
             if leftover.name.removesuffix(".inputs.json") not in sets:
                 _remove(leftover)
-        return {name: self.adapter_set(root / name, directions, inputs) for name, directions in sets.items()}
+        return {name: self.adapter_set(root / name, made, inputs) for name, (made, inputs) in sets.items()}
 
     def prepare(self) -> dict[str, int]:
         """Every stage up to the search. The last stage pulls in the ones before it, and results still
@@ -682,9 +861,18 @@ class Run:
                 self.check_memory()
             made = self.adapters()
             ids = json.loads(self.path("prompts.json").read_text())
+            kept = self.thinking_traces() if self.settings.deployment.think_close else {}
+        # How many prompts of each set KL is read on, after the unedited model's thinking ended by itself.
+        thought = {
+            f"of {len(kept[name])} {name.replace('_', ' ')} prompts thought through": sum(
+                t is not None for t in kept[name]
+            )
+            for name in kept
+        }
         return {
             "edit targets": len(next(iter(made.values()))),
             "direction sets": len(made),
             "adapters": sum(map(len, made.values())),
             "prompts": sum(map(len, ids.values())),
+            **thought,
         }

@@ -1,0 +1,553 @@
+{
+ "adapter_inputs": {
+  "directions": "fixed",
+  "row_norm": "pre",
+  "targets": [
+   [
+    "model.layers.0.mlp.down_proj.weight",
+    "blk.0.ffn_down.weight"
+   ],
+   [
+    "model.layers.0.self_attn.o_proj.weight",
+    "blk.0.attn_output.weight"
+   ],
+   [
+    "model.layers.1.mlp.down_proj.weight",
+    "blk.1.ffn_down.weight"
+   ],
+   [
+    "model.layers.1.self_attn.o_proj.weight",
+    "blk.1.attn_output.weight"
+   ]
+  ]
+ },
+ "adapters/layer-0.inputs.json": {
+  "code": {
+   "adapters": 1,
+   "directions.pt": 1,
+   "gguf": 1,
+   "prompts.json": 1
+  },
+  "directions": "fixed",
+  "row_norm": "pre",
+  "targets": [
+   [
+    "model.layers.0.mlp.down_proj.weight",
+    "blk.0.ffn_down.weight"
+   ],
+   [
+    "model.layers.0.self_attn.o_proj.weight",
+    "blk.0.attn_output.weight"
+   ],
+   [
+    "model.layers.1.mlp.down_proj.weight",
+    "blk.1.ffn_down.weight"
+   ],
+   [
+    "model.layers.1.self_attn.o_proj.weight",
+    "blk.1.attn_output.weight"
+   ]
+  ]
+ },
+ "adapters/layer-1.inputs.json": {
+  "code": {
+   "adapters": 1,
+   "directions.pt": 1,
+   "gguf": 1,
+   "prompts.json": 1
+  },
+  "directions": "fixed",
+  "row_norm": "pre",
+  "targets": [
+   [
+    "model.layers.0.mlp.down_proj.weight",
+    "blk.0.ffn_down.weight"
+   ],
+   [
+    "model.layers.0.self_attn.o_proj.weight",
+    "blk.0.attn_output.weight"
+   ],
+   [
+    "model.layers.1.mlp.down_proj.weight",
+    "blk.1.ffn_down.weight"
+   ],
+   [
+    "model.layers.1.self_attn.o_proj.weight",
+    "blk.1.attn_output.weight"
+   ]
+  ]
+ },
+ "adapters/per-layer.inputs.json": {
+  "code": {
+   "adapters": 1,
+   "directions.pt": 1,
+   "gguf": 1,
+   "prompts.json": 1
+  },
+  "directions": "fixed",
+  "row_norm": "pre",
+  "targets": [
+   [
+    "model.layers.0.mlp.down_proj.weight",
+    "blk.0.ffn_down.weight"
+   ],
+   [
+    "model.layers.0.self_attn.o_proj.weight",
+    "blk.0.attn_output.weight"
+   ],
+   [
+    "model.layers.1.mlp.down_proj.weight",
+    "blk.1.ffn_down.weight"
+   ],
+   [
+    "model.layers.1.self_attn.o_proj.weight",
+    "blk.1.attn_output.weight"
+   ]
+  ]
+ },
+ "exports/trial/tiny-trial-Q4_K_M.gguf.inputs.json": {
+  "base": "6f879886c606baf9",
+  "code": {
+   "adapters": 1,
+   "directions.pt": 1,
+   "exports": 2,
+   "gguf": 1,
+   "measurements": 1,
+   "prompts.json": 1,
+   "scores": 1
+  },
+  "directions": "fixed",
+  "edit": {
+   "direction_layer": 0.4,
+   "kernels": {
+    "attn": {
+     "max_weight": 1.2,
+     "max_weight_position": 1.0,
+     "min_weight": 0.8,
+     "min_weight_distance": 1.0
+    },
+    "mlp": {
+     "max_weight": 1.0,
+     "max_weight_position": 0.0,
+     "min_weight": 0.5,
+     "min_weight_distance": 1.0
+    }
+   }
+  },
+  "quantization": "Q4_K_M",
+  "row_norm": "pre",
+  "targets": [
+   [
+    "model.layers.0.mlp.down_proj.weight",
+    "blk.0.ffn_down.weight"
+   ],
+   [
+    "model.layers.0.self_attn.o_proj.weight",
+    "blk.0.attn_output.weight"
+   ],
+   [
+    "model.layers.1.mlp.down_proj.weight",
+    "blk.1.ffn_down.weight"
+   ],
+   [
+    "model.layers.1.self_attn.o_proj.weight",
+    "blk.1.attn_output.weight"
+   ]
+  ]
+ },
+ "gguf/model-BF16.gguf.inputs.json": {
+  "code": {
+   "gguf": 1
+  },
+  "llama.cpp": "b11524",
+  "model": "22a4ef04e71ae20a"
+ },
+ "gguf/model-Q4_K_M.gguf.inputs.json": {
+  "base": "6f879886c606baf9",
+  "code": {
+   "gguf": 1
+  },
+  "quantization": "Q4_K_M"
+ },
+ "measurements/base/harmful_held_out.json.inputs.json": {
+  "code": {
+   "adapters": 1,
+   "directions.pt": 1,
+   "gguf": 1,
+   "measurements": 1,
+   "prompts.json": 1
+  },
+  "edit": null,
+  "paired": {
+   "answer_tokens": 16,
+   "ids": "c0f27aa1be0a7b77",
+   "kv_cache": "f16",
+   "model": "f0a6bb396bd1b915"
+  },
+  "slots": 8
+ },
+ "measurements/base/harmful_held_out.judged.json.inputs.json": {
+  "answers": "40122af96b6ba03e",
+  "code": {
+   "adapters": 1,
+   "directions.pt": 1,
+   "gguf": 1,
+   "measurements": 1,
+   "prompts.json": 1
+  },
+  "counting": 2,
+  "judge": [
+   "Qwen/Qwen3Guard-Gen-0.6B",
+   null
+  ]
+ },
+ "measurements/base/harmless_held_out.json.inputs.json": {
+  "code": {
+   "adapters": 1,
+   "directions.pt": 1,
+   "gguf": 1,
+   "measurements": 1,
+   "prompts.json": 1
+  },
+  "edit": null,
+  "paired": {
+   "answer_tokens": 16,
+   "ids": "d9ec503c266804a1",
+   "kl_tokens": 20,
+   "kv_cache": "f16",
+   "model": "f0a6bb396bd1b915"
+  },
+  "slots": 8
+ },
+ "measurements/base/harmless_held_out.judged.json.inputs.json": {
+  "answers": "1c8e218f3c5e86d7",
+  "code": {
+   "adapters": 1,
+   "directions.pt": 1,
+   "gguf": 1,
+   "measurements": 1,
+   "prompts.json": 1
+  },
+  "counting": 2,
+  "judge": [
+   "Qwen/Qwen3Guard-Gen-0.6B",
+   null
+  ]
+ },
+ "measurements/base/maths.json.inputs.json": {
+  "code": {
+   "adapters": 1,
+   "directions.pt": 1,
+   "gguf": 1,
+   "measurements": 1,
+   "prompts.json": 1
+  },
+  "edit": null,
+  "paired": {
+   "answer_tokens": 16,
+   "ids": "71d22faa2c0ffce6",
+   "kv_cache": "f16",
+   "model": "f0a6bb396bd1b915"
+  },
+  "slots": 8
+ },
+ "measurements/edited/adapters.inputs.json": {
+  "code": {
+   "adapters": 1,
+   "directions.pt": 1,
+   "gguf": 1,
+   "measurements": 1,
+   "prompts.json": 1
+  },
+  "direction_layer": 0.4,
+  "directions": "fixed",
+  "row_norm": "pre",
+  "targets": [
+   [
+    "model.layers.0.mlp.down_proj.weight",
+    "blk.0.ffn_down.weight"
+   ],
+   [
+    "model.layers.0.self_attn.o_proj.weight",
+    "blk.0.attn_output.weight"
+   ],
+   [
+    "model.layers.1.mlp.down_proj.weight",
+    "blk.1.ffn_down.weight"
+   ],
+   [
+    "model.layers.1.self_attn.o_proj.weight",
+    "blk.1.attn_output.weight"
+   ]
+  ]
+ },
+ "measurements/edited/harmful_held_out.json.inputs.json": {
+  "code": {
+   "adapters": 1,
+   "directions.pt": 1,
+   "gguf": 1,
+   "measurements": 1,
+   "prompts.json": 1
+  },
+  "edit": {
+   "adapters": "4e8d87954736d695",
+   "direction_layer": 0.4,
+   "kernels": {
+    "attn": {
+     "max_weight": 1.2,
+     "max_weight_position": 1.0,
+     "min_weight": 0.8,
+     "min_weight_distance": 1.0
+    },
+    "mlp": {
+     "max_weight": 1.0,
+     "max_weight_position": 0.0,
+     "min_weight": 0.5,
+     "min_weight_distance": 1.0
+    }
+   },
+   "strengths": {
+    "blk.0.attn_output.weight": 0.8,
+    "blk.0.ffn_down.weight": 1.0,
+    "blk.1.attn_output.weight": 1.2,
+    "blk.1.ffn_down.weight": 0.5
+   }
+  },
+  "paired": {
+   "answer_tokens": 16,
+   "ids": "c0f27aa1be0a7b77",
+   "kv_cache": "f16",
+   "model": "f0a6bb396bd1b915"
+  },
+  "slots": 8
+ },
+ "measurements/edited/harmful_held_out.judged.json.inputs.json": {
+  "answers": "ec4369e8574a697e",
+  "code": {
+   "adapters": 1,
+   "directions.pt": 1,
+   "gguf": 1,
+   "measurements": 1,
+   "prompts.json": 1
+  },
+  "counting": 2,
+  "judge": [
+   "Qwen/Qwen3Guard-Gen-0.6B",
+   null
+  ]
+ },
+ "measurements/edited/harmless_held_out.json.inputs.json": {
+  "code": {
+   "adapters": 1,
+   "directions.pt": 1,
+   "gguf": 1,
+   "measurements": 1,
+   "prompts.json": 1
+  },
+  "edit": {
+   "adapters": "4e8d87954736d695",
+   "direction_layer": 0.4,
+   "kernels": {
+    "attn": {
+     "max_weight": 1.2,
+     "max_weight_position": 1.0,
+     "min_weight": 0.8,
+     "min_weight_distance": 1.0
+    },
+    "mlp": {
+     "max_weight": 1.0,
+     "max_weight_position": 0.0,
+     "min_weight": 0.5,
+     "min_weight_distance": 1.0
+    }
+   },
+   "strengths": {
+    "blk.0.attn_output.weight": 0.8,
+    "blk.0.ffn_down.weight": 1.0,
+    "blk.1.attn_output.weight": 1.2,
+    "blk.1.ffn_down.weight": 0.5
+   }
+  },
+  "paired": {
+   "answer_tokens": 16,
+   "ids": "d9ec503c266804a1",
+   "kl_tokens": 20,
+   "kv_cache": "f16",
+   "model": "f0a6bb396bd1b915"
+  },
+  "slots": 8
+ },
+ "measurements/edited/harmless_held_out.judged.json.inputs.json": {
+  "answers": "1657f383eca6925d",
+  "code": {
+   "adapters": 1,
+   "directions.pt": 1,
+   "gguf": 1,
+   "measurements": 1,
+   "prompts.json": 1
+  },
+  "counting": 2,
+  "judge": [
+   "Qwen/Qwen3Guard-Gen-0.6B",
+   null
+  ]
+ },
+ "measurements/edited/maths.json.inputs.json": {
+  "code": {
+   "adapters": 1,
+   "directions.pt": 1,
+   "gguf": 1,
+   "measurements": 1,
+   "prompts.json": 1
+  },
+  "edit": {
+   "adapters": "4e8d87954736d695",
+   "direction_layer": 0.4,
+   "kernels": {
+    "attn": {
+     "max_weight": 1.2,
+     "max_weight_position": 1.0,
+     "min_weight": 0.8,
+     "min_weight_distance": 1.0
+    },
+    "mlp": {
+     "max_weight": 1.0,
+     "max_weight_position": 0.0,
+     "min_weight": 0.5,
+     "min_weight_distance": 1.0
+    }
+   },
+   "strengths": {
+    "blk.0.attn_output.weight": 0.8,
+    "blk.0.ffn_down.weight": 1.0,
+    "blk.1.attn_output.weight": 1.2,
+    "blk.1.ffn_down.weight": 0.5
+   }
+  },
+  "paired": {
+   "answer_tokens": 16,
+   "ids": "71d22faa2c0ffce6",
+   "kv_cache": "f16",
+   "model": "f0a6bb396bd1b915"
+  },
+  "slots": 8
+ },
+ "prompts.json.inputs.json": {
+  "base": "6f879886c606baf9",
+  "code": {
+   "gguf": 1,
+   "prompts.json": 1
+  },
+  "date": "01 Jan 2020",
+  "maths_instruction": "Answer.",
+  "prompts": {
+   "harmful": {
+    "column": "text",
+    "dataset": "mlabonne/harmful_behaviors",
+    "exclude": null,
+    "revision": null,
+    "split": "train[:400]",
+    "subset": null
+   },
+   "harmful_held_out": {
+    "column": "prompt",
+    "dataset": "walledai/StrongREJECT",
+    "exclude": {
+     "source": [
+      "AdvBench"
+     ]
+    },
+    "revision": null,
+    "split": "train",
+    "subset": null
+   },
+   "harmful_test": {
+    "column": "text",
+    "dataset": "mlabonne/harmful_behaviors",
+    "exclude": null,
+    "revision": null,
+    "split": "test[:100]",
+    "subset": null
+   },
+   "harmless": {
+    "column": "text",
+    "dataset": "mlabonne/harmless_alpaca",
+    "exclude": null,
+    "revision": null,
+    "split": "train[:400]",
+    "subset": null
+   },
+   "harmless_held_out": {
+    "column": "text",
+    "dataset": "mlabonne/harmless_alpaca",
+    "exclude": null,
+    "revision": null,
+    "split": "test[100:400]",
+    "subset": null
+   },
+   "harmless_test": {
+    "column": "text",
+    "dataset": "mlabonne/harmless_alpaca",
+    "exclude": null,
+    "revision": null,
+    "split": "test[:100]",
+    "subset": null
+   },
+   "maths": {
+    "column": "question",
+    "dataset": "openai/gsm8k",
+    "exclude": null,
+    "revision": null,
+    "split": "test",
+    "subset": "main"
+   }
+  },
+  "system_prompt": ""
+ },
+ "search/inputs.json": {
+  "KL tokens": 20,
+  "KV cache": "f16",
+  "Optuna": "4.9.0",
+  "adapters": "321c01bd42172887",
+  "answer length": 100,
+  "code": {
+   "adapters": 1,
+   "directions.pt": 1,
+   "gguf": 1,
+   "prompts.json": 1,
+   "search": 2
+  },
+  "judge": [
+   "Qwen/Qwen3Guard-Gen-0.6B",
+   null
+  ],
+  "model file": "f0a6bb396bd1b915",
+  "search settings": {
+   "direction_layer": [
+    0.4,
+    0.9
+   ],
+   "edge_strength": [
+    0.0,
+    1.0
+   ],
+   "max_refusals": 2,
+   "peak_layer": [
+    0.6,
+    1.0
+   ],
+   "reach": [
+    0.01,
+    0.6
+   ],
+   "seed": 0,
+   "startup_per_scope": 1,
+   "stop_early": true,
+   "strength": [
+    0.8,
+    1.5
+   ]
+  },
+  "test prompts": "31820c7278c74f26"
+ }
+}

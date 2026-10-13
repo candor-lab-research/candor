@@ -264,6 +264,35 @@ def test_upgrade_adds_missing_settings_pinned_and_keeps_every_value(tmp_path):
     assert "added prompts.harmful_held_out." in upgraded
 
 
+def test_upgrade_lets_only_a_run_without_a_search_widen_strength(tmp_path):
+    assert init(tmp_path, model_folder(tmp_path)).exit_code == 0
+    folder = tmp_path / "runs" / "first"
+    path = folder / config.FILE
+    before = path.read_text().replace("widest_strength = [0.5, 3.0]\n", "")
+    path.write_text(before)
+    result = upgrade(folder)
+    assert result.exit_code == 0, result.output
+    assert "search.widest_strength = [0.5, 3.0]" in result.output
+    assert config.load(folder).search.widens()
+    path.write_text(before)
+    (folder / "search").mkdir()
+    (folder / "search" / "inputs.json").write_text("{}")
+    result = upgrade(folder)
+    assert result.exit_code == 0, result.output
+    assert "search.widest_strength = [0.8, 1.5]" in result.output
+    assert "so the run's search carries on as it was made, never widening" in " ".join(result.output.split())
+    assert not config.load(folder).search.widens()
+    # A strength reaching past the default's is kept whole, with or without a search.
+    for searched, widest in ((True, (0.8, 5.0)), (False, (0.5, 5.0))):
+        path.write_text(before.replace("strength = [0.8, 1.5]", "strength = [0.8, 5.0]"))
+        if not searched:
+            (folder / "search" / "inputs.json").unlink()
+        result = upgrade(folder)
+        assert result.exit_code == 0, result.output
+        assert config.load(folder).search.widest_strength == widest
+        assert f"search.widest_strength = [{widest[0]}, {widest[1]}]" in result.output
+
+
 def test_upgrade_removes_settings_candor_no_longer_uses(tmp_path):
     assert init(tmp_path, model_folder(tmp_path)).exit_code == 0
     folder = tmp_path / "runs" / "first"

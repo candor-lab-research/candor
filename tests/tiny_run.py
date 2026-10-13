@@ -9,6 +9,7 @@ import torch.nn.functional as F
 from safetensors.torch import save_file
 
 from candor import config, measure, run, search
+from candor.engine import LlamaServer
 from candor.run import Run
 
 from .test_engine import LLAMA_SERVER
@@ -79,10 +80,14 @@ def write_matching_llama(folder):
     return folder
 
 
-def fixed_directions(self):
+def fixed_directions(self, answering=False):
+    """Made-up directions, different where the answer starts, instead of reading residuals."""
     self.prompt_ids()
     self.inputs["directions"] = "fixed"
-    return F.normalize(torch.randn(LAYERS + 1, HIDDEN, generator=torch.Generator().manual_seed(0)), dim=-1)
+    if self.settings.deployment.think_close:
+        self.inputs["answering directions"] = "fixed, answering"
+    seed = torch.Generator().manual_seed(1 if answering else 0)
+    return F.normalize(torch.randn(LAYERS + 1, HIDDEN, generator=seed), dim=-1)
 
 
 def tiny_run(tmp_path, monkeypatch) -> Run:
@@ -101,6 +106,25 @@ def tiny_run(tmp_path, monkeypatch) -> Run:
     folder = tmp_path / "runs" / "tiny"
     folder.mkdir(parents=True)
     return Run(folder, pinned(model), report=lambda _: None)
+
+
+def thinks_through(monkeypatch, words: int = 2, asked: list | None = None) -> list[int]:
+    """Make the unedited model's thinking end by itself on every other prompt, as the tiny random model's
+    seldom does within its budget, so KL can be read after it. Returns the made-up thinking, this many
+    words and the end tag; each call's prompts, sampling, seeds and thinking go to asked."""
+    thought: list[int] = []
+
+    def thoughts(self, prompts, sampling, seeds, thinking, done=None):
+        if asked is not None:
+            asked.append((prompts, sampling, seeds, thinking))
+        thought[:] = [*self.tokenize(" ".join(["w2"] * words)), *self.tokenize(thinking.end)]
+        for _ in prompts:
+            if done:
+                done()
+        return [list(thought) if i % 2 == 0 else None for i in range(len(prompts))]
+
+    monkeypatch.setattr(LlamaServer, "thoughts", thoughts)
+    return thought
 
 
 def thinking(tiny: Run, budget: int = 6) -> Run:

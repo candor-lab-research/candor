@@ -403,6 +403,12 @@ def upgrade(folder: Annotated[Path, typer.Argument(help="A run folder made by ca
         console.print(f"[green]Added to {escape(str(folder / config.FILE))}:[/]")
         for name in added:
             console.print(f"  {escape(config.setting(settings, name))}", soft_wrap=True)
+        if "search.widest_strength" in added and not settings.search.widens():
+            console.print(
+                "  search.widest_strength is search.strength, so the run's search carries on as it was "
+                "made, never widening. Before starting a new search, set it wider, such as [0.5, 3.0], "
+                "to let it widen."
+            )
     if retired:
         console.print(f"[green]Removed from {escape(str(folder / config.FILE))}:[/]")
         for name in retired:
@@ -959,6 +965,10 @@ def search_command(
         aimed = (
             sum(search.scope_of(t.params) == scope for t in found.trials.values()) > space.startup_per_scope
         )
+        drawn_from = search.kind_space(space, found, scope)
+        if scope in found.strength:
+            low, high = drawn_from.strength
+            console.print(f"  {scope}: the search widened strength to {low:g}-{high:g}")
         for candidate in best or [fewest]:
             described = (
                 f"trial {candidate.trial}, {candidate.direction}, {candidate.refusals} refused, "
@@ -968,7 +978,7 @@ def search_command(
                 console.print(f"  {scope}: {described}")
             else:
                 console.print(f"  {scope}: none refused {cap} or fewer; the fewest refused: {described}")
-            if aimed and (edges := search.at_edges(candidate.params, space, layers)):
+            if aimed and (edges := search.at_edges(candidate.params, drawn_from, layers)):
                 console.print(
                     f"    It presses on the edge of the search's ranges ({escape('; '.join(edges))}), "
                     "so a better edit may lie outside them."
@@ -1002,17 +1012,18 @@ def _thinking_summary(console: Console, run: Run, found: search.Found) -> None:
         f"{means[len(means) // 2]:.0f}); {sum(s.forced for s in scores)} of {judged} answers reached the "
         f"search's budget of {budget} and were made to stop."
     )
-    starts = [score.kl_thinking for score in scores if score.kl_thinking is not None]
-    if starts:
-        answers = [score.kl for score in scores if score.kl_thinking is not None]
+    read = [
+        (s.kl, s.kl_empty, s.kl_thinking)
+        for s in scores
+        if s.kl_empty is not None and s.kl_thinking is not None
+    ]
+    if read:
+        after, empty, start = (f"{min(kls):.4f} to {max(kls):.4f}" for kls in zip(*read, strict=True))
         console.print(
-            f"KL across trials: {min(answers):.4f} to {max(answers):.4f} where the answer starts, which the "
-            f"search aims at, and {min(starts):.4f} to {max(starts):.4f} where the thinking starts."
+            f"KL across trials: {after} where the answer starts after the unedited model's own thinking, "
+            f"which the search aims at; {empty} after an empty thinking block; {start} where the thinking "
+            "starts."
         )
-
-
-def _direction(layer: float | None) -> str:
-    return search.PER_LAYER if layer is None else f"layer {layer:g}"
 
 
 def _trials(numbers: list[int]) -> str:
@@ -1077,7 +1088,7 @@ def score_command(
         before = searched.get(number) if number else None
         table.add_row(
             escape(edit.name),
-            _direction(edit.direction_layer),
+            search.direction(edit.direction_layer, edit.answering),
             str(score.refusals),
             str(score.keyword_refusals),
             f"{score.kl:.4f}",
@@ -1131,7 +1142,9 @@ def score_command(
             + (f"; it beats the search's best {_trials(beaten)} on both." if beaten else ".")
         )
         console.print(verdict if reliable else f"Not reliable: {verdict}")
-        if outside := search.outside_space(edit, run.settings.search, layers, components):
+        scope = search.PER_LAYER if edit.direction_layer is None else search.ONE_LAYER
+        drawn_from = search.kind_space(run.settings.search, found, scope)
+        if outside := search.outside_space(edit, drawn_from, layers, components):
             console.print(f"  The search couldn't have drawn it: {escape('; '.join(outside))}.")
         else:
             console.print("  The search could have drawn it.")

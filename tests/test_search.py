@@ -22,7 +22,7 @@ from candor.run import RunError
 from candor.search import Score, Search
 from candor.targets import Writer
 
-from .tiny_run import ANSWERED, REFUSED, FakeGuard, fake_prompts, thinking
+from .tiny_run import ANSWERED, REFUSED, FakeGuard, fake_prompts, thinking, thinks_through
 
 CHANGES = [
     (lambda s, m: setattr(s.deployment, "quantization", "Q8_0"), "model file"),
@@ -34,6 +34,7 @@ CHANGES = [
     (lambda s, m: setattr(s.deployment, "kv_cache", "q8_0"), "KV cache"),
     (lambda s, m: setattr(s.sampling, "temperature", 0.7), "sampling"),
     (lambda s, m: setattr(s.search, "strength", (0.9, 1.4)), "search settings"),
+    (lambda s, m: setattr(s.search, "widest_strength", (0.5, 2.0)), "search settings"),
     (lambda s, m: m.setattr(search, "VERSION", search.VERSION + 1), "code"),
     (lambda s, m: m.setattr(optuna, "__version__", "9.9.9"), "Optuna"),
 ]
@@ -602,7 +603,7 @@ def test_scoring_stops_at_the_end_of_the_chunk_that_goes_over(tiny, monkeypatch)
 def scorer_inputs(tiny):
     ids = tiny.prompt_ids()
     _, quantized = tiny.gguf()
-    return quantized, [], ids["harmful_test"], ids["harmless_test"], None
+    return quantized, [], ids["harmful_test"], ids["harmless_test"], {}
 
 
 def test_the_search_shows_time_left_from_every_trial_of_the_session(tiny, monkeypatch):
@@ -941,7 +942,7 @@ def test_the_searched_score_is_the_trials_own():
     for key, value in attrs.items():
         trial.set_user_attr(key, value)
     study.tell(trial, 0.5)
-    found = search._found([study])
+    found = search._found({search.PER_LAYER: study})
     assert search.searched_score(found, 4) == Score(3, 2, 1, 0.5, 8)
     with pytest.raises(RunError, match="the search has no finished trial 1"):
         search.searched_score(found, 1)
@@ -1295,23 +1296,37 @@ def test_scoring_a_trial_stopped_early_says_so(tiny, monkeypatch):
 
 
 def test_the_search_scores_a_thinking_model_at_its_own_budget_with_the_same_seeds(tiny, monkeypatch):
+    thinks_through(monkeypatch)
     small(thinking(tiny, budget=8))
     tiny.settings.scoring.thinking_budget = 6
-    asked = []
-    real = LlamaServer.answers
+    asked, first_tokens = [], []
+    real, real_top = LlamaServer.answers, LlamaServer.top_logprobs
 
     def recording(self, *args, **kwargs):
         asked.append(args)
         yield from real(self, *args, **kwargs)
 
+    def reading(self, prompts, *args, **kwargs):
+        first_tokens.append(prompts)
+        return real_top(self, prompts, *args, **kwargs)
+
     monkeypatch.setattr(LlamaServer, "answers", recording)
+    monkeypatch.setattr(LlamaServer, "top_logprobs", reading)
     Search(tiny).search(2)
     assert {args[5].budget for args in asked} == {6} and all(args[4] == asked[0][4] for args in asked)
     assert all(args[3]["temperature"] == 1.0 for args in asked)
+    ids = tiny.prompt_ids()
+    # The unedited model's first tokens: after its own thinking, where it starts, after an empty block.
+    assert first_tokens[:3] == [
+        tiny.kl_ids(ids, "harmless_test"),
+        ids["harmless_test"],
+        ids["harmless_test" + run.ANSWERING],
+    ]
     inputs = json.loads(tiny.path("search", "inputs.json").read_text())
     assert inputs["thinking"]["budget"] == 6 and inputs["sampling"]["temperature"] == 1.0
     scores = [search._score(trial) for trial in finished(tiny)]
     assert sum(score.thinking for score in scores) > 0 and all(0 <= s.forced <= s.judged for s in scores)
+    assert all(score.kl_thinking is not None and score.kl_empty is not None for score in scores)
     config.write(tiny.folder.parent, "cli", tiny.settings, "made by a test")
     shown = flat(
         CliRunner(env={"COLUMNS": "200"})
@@ -1321,10 +1336,173 @@ def test_the_search_scores_a_thinking_model_at_its_own_budget_with_the_same_seed
     assert (
         "tokens per answer on average across trials" in shown and "reached the search's budget of 6" in shown
     )
-    assert (
-        "where the answer starts, which the search aims at" in shown and "where the thinking starts" in shown
-    )
-    assert all(score.kl_thinking is not None for score in scores)
+    for where in (
+        "where the answer starts after the unedited model's own thinking, which the search aims at",
+        "after an empty thinking block",
+        "where the thinking starts",
+    ):
+        assert where in shown
+
+
+def test_a_thinking_search_draws_where_each_trial_reads_its_directions(tiny, monkeypatch):
+    thinks_through(monkeypatch)
+    small(thinking(tiny), trials=3)
+    Search(tiny).search(6)
+    drawn = [trial.params["position"] for trial in finished(tiny)]
+    assert len(drawn) == 6 and set(drawn) <= set(search.POSITIONS)
+    for scope in search.SCOPES:
+        start = search.spread(scope, config.Search(), 28, ["attn", "mlp"], 20, 7, search.POSITIONS)
+        assert [p["position"] for p in start] == list(search.POSITIONS) * 10
+
+
+@pytest.mark.parametrize("count", [20, 10, 5, 1])
+def test_a_thinking_models_spread_is_split_evenly_each_position_spread_on_its_own(count):
+    space = config.Search()
+    for scope in search.SCOPES:
+        start = search.spread(scope, space, 28, ["attn", "mlp"], count, 7, search.POSITIONS)
+        # Taken in turn, so the first trials of a pilot try both positions.
+        assert [p["position"] for p in start] == [search.POSITIONS[i % 2] for i in range(count)]
+        for j, position in enumerate(search.POSITIONS):
+            own = [p for p in start if p["position"] == position]
+            own = [{k: v for k, v in p.items() if k != "position"} for p in own]
+            assert own == search.spread(scope, space, 28, ["attn", "mlp"], len(own), 7 * 2 + j)
+
+
+def test_a_trial_reading_where_the_answer_starts_uses_the_adapters_read_there(tiny, monkeypatch):
+    thinks_through(monkeypatch)
+    thinking(tiny)
+    adapters = tiny.adapters()
+    params = {f"{c}.{s}": 0.5 for c in ("attn", "mlp") for s in search.SETTINGS}
+    for position, prefix in ((search.THINK_START, ""), (search.ANSWER_START, run.ANSWER_SETS)):
+        per_layer = search.edit_from({**params, "position": position}, 1, 2)
+        one = search.edit_from({**params, "position": position, "direction_layer": 1}, 2, 2)
+        assert per_layer.answering == one.answering == (position == search.ANSWER_START)
+        found = Search(tiny)
+        assert found._edit_files(per_layer, adapters) == adapters[prefix + "per-layer"]
+        assert found._edit_files(one, adapters) == adapters[prefix + "layer-1"]
+    assert search.direction(None, True) == "per layer, answer start"
+    assert search.direction(12, False) == "layer 12"
+
+
+def test_a_model_that_doesnt_think_is_searched_and_recorded_as_before(tiny):
+    tiny.gguf()
+    tiny.directions()
+    # Its adapters are recorded as they were before directions were read at two places.
+    assert search._rebuilt_from(tiny)["adapters"] == run.digest(tiny.adapter_inputs())
+    assert Search(tiny).positions == ()
+    trial = optuna.create_study().ask()
+    search.suggest(trial, config.Search(), 4, ["attn"], search.PER_LAYER)
+    assert "position" not in trial.params
+    start = search.spread(search.ONE_LAYER, config.Search(), 4, ["attn"], 5, 0)
+    assert all("position" not in params for params in start)
+    assert search.edit_from(start[0], 1, 4).answering is False
+
+
+def test_a_search_after_other_unedited_thinking_is_refused_before_any_is_sampled(tiny, monkeypatch):
+    thinks_through(monkeypatch)
+    small(thinking(tiny, budget=8))
+    Search(tiny).search(1)
+    sampled = []
+    real = LlamaServer.thoughts
+    monkeypatch.setattr(LlamaServer, "thoughts", lambda *a, **k: sampled.append(1) or real(*a, **k))
+    tiny.settings.deployment.thinking_budget = 9
+    with pytest.raises(RunError, match="unedited thinking"):
+        Search(tiny).search(2)
+    with pytest.raises(RunError, match="unedited thinking"):
+        Search(tiny).score([search.edit_from(finished(tiny)[0].params, 1, 2)])
+    assert sampled == []
+    tiny.settings.deployment.thinking_budget = 8
+    Search(tiny).search(2)
+    assert sampled == [] and len(finished(tiny)) == 2
+
+
+def test_a_search_isnt_carried_on_after_thinking_sampled_afresh_from_the_same_settings(tiny, monkeypatch):
+    thinks_through(monkeypatch)
+    small(thinking(tiny, budget=8))
+    Search(tiny).search(1)
+    key = tiny.thinking_key()
+    tiny.path("private", "thinking", f"{key}.json").unlink()
+    tiny.path("thinking", f"{key}.json").unlink()
+
+    def otherwise(self, prompts, sampling, seeds, thinking, done=None):
+        return [[*self.tokenize("w7"), *self.tokenize(thinking.end)]] * len(prompts)
+
+    monkeypatch.setattr(LlamaServer, "thoughts", otherwise)
+    with pytest.raises(RunError, match="different KL prompts"):
+        Search(tiny).search(2)
+    with pytest.raises(RunError, match="different KL prompts"):
+        Search(tiny).score([search.edit_from(finished(tiny)[0].params, 1, 2)])
+    assert len(finished(tiny)) == 1
+
+
+def test_a_search_whose_unedited_thinking_fails_leaves_nothing_to_move_aside(tiny, monkeypatch):
+    monkeypatch.setattr(LlamaServer, "thoughts", lambda self, prompts, *a, **k: [None] * len(prompts))
+    small(thinking(tiny, budget=8))
+    with pytest.raises(RunError, match=r"raise deployment\.thinking_budget"):
+        Search(tiny).search(1)
+    assert not tiny.path("search", "inputs.json").exists() and not tiny.path("search", "study.jsonl").exists()
+    thinks_through(monkeypatch)
+    tiny.settings.deployment.thinking_budget = 9
+    Search(tiny).search(1)
+    assert len(finished(tiny)) == 1
+
+
+def test_kl_after_long_unedited_thinking_fits_the_scorers_context(tiny, monkeypatch):
+    # The deployment's budget, which the unedited model thinks to, is longer than the search's.
+    # Long enough to need more than the room for a harmful prompt's answer, short enough for the tiny
+    # model's 256 tokens.
+    thinks_through(monkeypatch, words=15)
+    small(thinking(tiny, budget=64))
+    tiny.settings.scoring.thinking_budget = 6
+    asked = []
+    real = run.Run.server
+    monkeypatch.setattr(run.Run, "server", lambda self, *a, **k: asked.append(k) or real(self, *a, **k))
+    Search(tiny).search(1)
+    longest = max(len(p) for p in tiny.kl_ids(tiny.prompt_ids(), "harmless_test"))
+    answer_room = tiny.settings.scoring.answer_tokens + tiny.thinking_room(6)
+    assert longest > max(len(p) for p in tiny.prompt_ids()["harmful_test"]) + answer_room + 8
+    # llama-server pads a small model's slots, so the room asked for is checked rather than the answers.
+    assert asked[-1]["context_per_slot"] > longest
+
+
+def test_the_unedited_thinking_is_sampled_as_deployed_each_prompt_with_its_seed(tiny, monkeypatch):
+    asked = []
+    thinks_through(monkeypatch, asked=asked)
+    thinking(tiny, budget=8)
+    tiny.settings.scoring.thinking_budget = 4
+    tiny.settings.sampling.seed = 5
+    said = []
+    tiny.report = said.append
+    tiny.thinking_traces()
+    ids = tiny.prompt_ids()
+    assert [prompts for prompts, *_ in asked] == [ids[name] for name in run.KL_SETS]
+    for prompts, sampling, drawn, how in asked:
+        assert sampling == tiny.sampling() and sampling["temperature"] == 1.0
+        assert drawn == run.seeds(5, len(prompts))
+        assert how.budget == 8
+    assert [line for line in said if line.startswith("Thought through")] == [
+        f"Thought through {name.replace('_', ' ')} prompts: {count} of 3"
+        for name in run.KL_SETS
+        for count in (1, 2, 3)
+    ]
+
+
+def test_run_reports_how_many_prompts_the_unedited_model_thought_through(tiny, monkeypatch):
+    thinks_through(monkeypatch)
+    done = thinking(tiny).prepare()
+    assert done["of 3 harmless test prompts thought through"] == 2
+    assert done["of 3 harmless held out prompts thought through"] == 2
+    assert done["direction sets"] == 2 * len(tiny.direction_sets(tiny.directions(), tiny.shape[1]))
+
+
+def test_a_trial_is_rebuilt_without_thinking_again(tiny, monkeypatch):
+    thinks_through(monkeypatch)
+    small(thinking(tiny))
+    Search(tiny).search(1)
+    monkeypatch.setattr(run.Run, "thinking_traces", lambda self: pytest.fail("thought again"))
+    [trial] = finished(tiny)
+    edit = search.trial_edit(tiny, trial.user_attrs["number"])
+    assert edit.answering == (trial.params["position"] == search.ANSWER_START)
 
 
 def test_a_sampled_search_isnt_carried_on_with_another_seed_and_a_greedy_one_is(tiny):
@@ -1339,3 +1517,294 @@ def test_a_sampled_search_isnt_carried_on_with_another_seed_and_a_greedy_one_is(
     tiny.settings.sampling.seed = 5
     with pytest.raises(RunError, match="made with a different sampling"):
         Search(tiny).search(2)
+
+
+def widening_soon(monkeypatch):
+    """Check a kind's strength range from its 2nd finished trial and every 2nd after, starting a widened
+    range with 2 spread points, so a tiny search widens."""
+    monkeypatch.setattr(search, "WIDEN_FROM", 2)
+    monkeypatch.setattr(search, "WIDEN_EVERY", 2)
+    monkeypatch.setattr(search, "WIDENED_START", 2)
+
+
+def refusing(monkeypatch, refusals=3, stop_at=None):
+    """Every edit refuses this many of the 3 test prompts, with KL growing call by call; the stop_at-th
+    call, counting the unedited model's, is stopped part way."""
+    calls = []
+
+    def score(self, scales, stop_above=None):
+        calls.append(scales)
+        if len(calls) == stop_at:
+            raise KeyboardInterrupt
+        return Score(refusals, 0, 0, 0.01 * len(calls), 3)
+
+    monkeypatch.setattr(search._Scorer, "score", score)
+
+
+def latest(run, scope) -> optuna.Study:
+    storage = search._storage(run.path("search"))
+    name = search._latest(storage, scope)
+    assert name is not None
+    return optuna.load_study(study_name=name, storage=storage)
+
+
+def kind_spread(run, scope, strength, count, seed):
+    space = run.settings.search.model_copy(update={"strength": strength})
+    _, layers, _, writers = run.shape
+    return search.spread(scope, space, layers, sorted({w.component for w in writers}), count, seed)
+
+
+def test_with_no_edit_within_the_cap_a_kinds_strength_ceiling_widens_and_its_trials_go_on(tiny, monkeypatch):
+    widening_soon(monkeypatch)
+    refusing(monkeypatch)
+    small(tiny, trials=6)
+    said = []
+    tiny.report = said.append
+    found, _ = Search(tiny).search(12)
+    storage = search._storage(tiny.path("search"))
+    names = set(optuna.get_all_study_names(storage))
+    seed = tiny.settings.search.seed
+    for i, scope in enumerate(search.SCOPES):
+        first = optuna.load_study(study_name=search.STUDIES[scope], storage=storage)
+        study = latest(tiny, scope)
+        # Checked again at 4, where the ceiling is already at its widest.
+        assert study.study_name == search._study_name(scope, 1) and search._study_name(scope, 2) not in names
+        assert study.user_attrs["widened"] == [[2, 0.8, 3.0]]
+        old = first.get_trials(states=(TrialState.COMPLETE,))
+        new = study.get_trials(states=(TrialState.COMPLETE,))
+        assert len(old) == 2 and len(new) == 6
+        for a, b in zip(old, new, strict=False):
+            assert (a.params, a.user_attrs, a.system_attrs, a.value) == (
+                b.params,
+                b.user_attrs,
+                b.system_attrs,
+                b.value,
+            )
+        # The wider range starts with its own spread, then the sampler draws from it.
+        assert [t.params for t in new[2:4]] == kind_spread(tiny, scope, (0.8, 3.0), 2, seed + 2 * 2 + i)
+        for trial in new:
+            for name, distribution in trial.distributions.items():
+                if name.endswith(".strength"):
+                    assert distribution == FloatDistribution(0.8, 3.0)
+        # Every trial shares strength's range, so the sampler learns it with the other settings.
+        joint = optuna.search_space.IntersectionSearchSpace().calculate(study)
+        assert {"attn.strength", "mlp.strength"} <= set(joint)
+    assert latest(tiny, search.ONE_LAYER).user_attrs["base_refusals"] == 3
+    assert sorted(found.trials) == list(range(1, 13))
+    loaded = search.load(tiny)
+    assert loaded is not None
+    assert found.strength == loaded.strength == {scope: (0.8, 3.0) for scope in search.SCOPES}
+    for number in (1, 12):
+        search.trial_edit(tiny, number)
+    assert [line for line in said if "widens" in line] == [
+        "After 2 one layer trials no one layer edit is within the cap yet, so its strength widens from "
+        "0.8-1.5 to 0.8-3",
+        "After 2 per layer trials no per layer edit is within the cap yet, so its strength widens from "
+        "0.8-1.5 to 0.8-3",
+    ]
+
+
+def test_a_search_stopped_after_widening_goes_on_in_the_wider_study_without_checking_again(tiny, monkeypatch):
+    widening_soon(monkeypatch)
+    small(tiny, trials=6)
+    checked = []
+    real = search.widened
+
+    def checking(found, scope, space):
+        checked.append((scope, len(found.trials)))
+        return real(found, scope, space)
+
+    monkeypatch.setattr(search, "widened", checking)
+    # The unedited model, trials 1-4, then the first of the wider range is stopped part way.
+    refusing(monkeypatch, stop_at=6)
+    with pytest.raises(KeyboardInterrupt):
+        Search(tiny).search(12)
+    assert checked == [(search.ONE_LAYER, 2)]
+    refusing(monkeypatch)
+    Search(tiny).search(12)
+    assert checked == [
+        (search.ONE_LAYER, 2),
+        (search.PER_LAYER, 2),
+        (search.ONE_LAYER, 4),
+        (search.PER_LAYER, 4),
+    ]
+    study = latest(tiny, search.ONE_LAYER)
+    assert study.user_attrs["widened"] == [[2, 0.8, 3.0]]
+    drawn = {search._key(t.params) for t in study.get_trials(states=(TrialState.COMPLETE,))}
+    start = kind_spread(tiny, search.ONE_LAYER, (0.8, 3.0), 2, tiny.settings.search.seed + 4)
+    assert {search._key(params) for params in start} <= drawn
+    assert len(drawn) == 6
+
+
+def test_a_widened_study_left_part_made_is_ignored_and_made_again(tiny, monkeypatch):
+    widening_soon(monkeypatch)
+    refusing(monkeypatch)
+    small(tiny, trials=6)
+    Search(tiny).search(4)
+    storage = search._storage(tiny.path("search"))
+    part = optuna.create_study(study_name=search._study_name(search.ONE_LAYER, 1), storage=storage)
+    part.set_user_attr("base_refusals", 3)
+    found = search.load(tiny)
+    assert found is not None and len(found.trials) == 4 and found.strength == {}
+    Search(tiny).search(12)
+    study = latest(tiny, search.ONE_LAYER)
+    assert study.study_name == search._study_name(search.ONE_LAYER, 1)
+    assert study.user_attrs["widened"] == [[2, 0.8, 3.0]]
+    assert len(study.get_trials(states=(TrialState.COMPLETE,))) == 6
+    assert sorted(finished(tiny), key=lambda t: t.user_attrs["number"])[-1].user_attrs["number"] == 12
+
+
+def test_a_search_that_may_not_widen_never_does_and_records_nothing_of_it(tiny, monkeypatch):
+    widening_soon(monkeypatch)
+    refusing(monkeypatch)
+    small(tiny, trials=6)
+    tiny.settings.search.widest_strength = tiny.settings.search.strength
+    found, _ = Search(tiny).search(12)
+    assert found.strength == {}
+    assert sorted(optuna.get_all_study_names(search._storage(tiny.path("search")))) == sorted(
+        search.STUDIES.values()
+    )
+    recorded = json.loads(tiny.path("search", "inputs.json").read_text())["search settings"]
+    assert "widest_strength" not in recorded
+
+
+def test_a_search_that_may_widen_records_how_far(tiny):
+    small(tiny)
+    Search(tiny).search(1)
+    recorded = json.loads(tiny.path("search", "inputs.json").read_text())["search settings"]
+    assert recorded["widest_strength"] == [0.5, 3.0]
+
+
+def at_strengths(number, refusals, kl, attn, mlp, judged=3):
+    """A per layer trial with these strengths, as the search records it."""
+    params = {"attn.strength": attn, "mlp.strength": mlp}
+    return optuna.trial.create_trial(
+        params=params,
+        distributions={name: FloatDistribution(0, 5) for name in params},
+        value=kl,
+        user_attrs=made(number, refusals, kl, judged=judged).user_attrs,
+    )
+
+
+@pytest.mark.parametrize(
+    ("trials", "strength"),
+    [
+        ([at_strengths(1, 0, 0.1, 1.49, 1.0)], (0.8, 3.0)),
+        ([at_strengths(1, 2, 0.1, 1.0, 0.83)], (0.5, 1.5)),
+        ([at_strengths(1, 0, 0.1, 1.47, 0.81)], (0.5, 3.0)),
+        ([at_strengths(1, 0, 0.1, 1.0, 1.2)], (0.8, 1.5)),
+        # Only the best within the cap counts.
+        ([at_strengths(1, 0, 0.1, 1.0, 1.2), at_strengths(2, 0, 0.2, 1.5, 0.8)], (0.8, 1.5)),
+        ([at_strengths(1, 3, 0.05, 1.5, 0.8), at_strengths(2, 1, 0.2, 1.0, 1.2)], (0.8, 1.5)),
+        # Just further than EDGE of the range from either end.
+        ([at_strengths(1, 0, 0.1, 1.46, 0.84)], (0.8, 1.5)),
+        # None within the cap: the edits are too weak.
+        ([at_strengths(1, 3, 0.1, 1.0, 1.0)], (0.8, 3.0)),
+        ([at_strengths(1, 0, 0.1, 1.0, 1.0, judged=1)], (0.8, 3.0)),
+        ([], (0.8, 3.0)),
+    ],
+)
+def test_strength_widens_at_each_end_the_best_edit_within_the_cap_presses(trials, strength):
+    found = search.Found({t.user_attrs["number"]: t for t in trials}, 99)
+    assert search.widened(found, search.PER_LAYER, config.Search()) == strength
+
+
+def test_an_end_of_strength_already_at_its_widest_stays():
+    space = config.Search(strength=(0.5, 1.5), widest_strength=(0.5, 3.0))
+    found = search.Found({1: at_strengths(1, 0, 0.1, 0.51, 1.0)}, 99)
+    assert search.widened(found, search.PER_LAYER, space) == (0.5, 1.5)
+    assert not config.Search(widest_strength=(0.8, 1.5)).widens() and config.Search().widens()
+
+
+def test_each_kind_is_judged_by_its_own_widened_strength():
+    space = config.Search()
+    found = search.Found({}, 1, {search.ONE_LAYER: (0.8, 3.0)})
+    assert search.kind_space(space, found, search.ONE_LAYER).strength == (0.8, 3.0)
+    assert search.kind_space(space, found, search.PER_LAYER) is space
+    assert search.kind_space(space, None, search.ONE_LAYER) is space
+    edit = Edit("strong", 12, {"attn": Kernel(2.0, 20, 1.0, 5)})
+    assert search.outside_space(edit, space, 28, ["attn"]) == ["attn.strength 2 (0.8-1.5)"]
+    assert search.outside_space(edit, search.kind_space(space, found, search.ONE_LAYER), 28, ["attn"]) == []
+
+
+def test_the_report_shows_a_widened_strength_and_judges_its_edges_by_it(tiny, monkeypatch):
+    widening_soon(monkeypatch)
+    refusing(monkeypatch)
+    small(tiny, trials=4)
+    tiny.settings.search.strength = (1.0, 1.0)  # every trial at 1, on both ends until the ceiling widens
+    tiny.settings.search.widest_strength = (1.0, 3.0)
+    config.write(tiny.folder.parent, "cli", tiny.settings, "made by a test")
+    result = CliRunner(env={"COLUMNS": "200"}).invoke(app, ["search", str(tiny.folder.parent / "cli")])
+    assert result.exit_code == 0, result.output
+    shown = flat(result.output)
+    assert "After 2 one layer trials no one layer edit is within the cap yet" in shown
+    assert shown.count("the search widened strength to 1-3") == 2
+    # The fewest refused of each kind is its first trial, at strength 1: on the floor, far from 3.
+    assert shown.count("attn.strength 1, at its floor 1") == 2
+    assert "at its ceiling 1" not in shown
+
+
+def test_score_says_whether_the_search_could_have_drawn_an_edit_from_its_widened_strength(tiny, monkeypatch):
+    widening_soon(monkeypatch)
+    refusing(monkeypatch)
+    folder = cli_run(tiny, trials=4)
+    journal = write_journal(tiny.folder.parent / "heretic.jsonl", 0.25)
+    journal.write_text(journal.read_text().replace('"max_weight": 1.2', '"max_weight": 2.0'))
+    runner = CliRunner(env={"COLUMNS": "200"})
+    # Two trials of each kind: not yet checked for widening.
+    assert runner.invoke(app, ["search", str(folder), "--trials", "4"]).exit_code == 0
+    before = runner.invoke(app, ["score", str(folder), "--heretic", str(journal), "--trial", "1"])
+    assert before.exit_code == 0, before.output
+    assert "heretic-1 at layer 0: " in flat(before.output)
+    assert "couldn't have drawn it: attn.strength 2 (0.8-1.5)." in flat(before.output)
+    assert runner.invoke(app, ["search", str(folder)]).exit_code == 0
+    after = runner.invoke(app, ["score", str(folder), "--heretic", str(journal), "--trial", "1"])
+    assert after.exit_code == 0, after.output
+    assert "attn.strength" not in flat(after.output)
+
+
+def test_strength_isnt_checked_for_widening_until_the_start_spread_is_done(tiny, monkeypatch):
+    widening_soon(monkeypatch)
+    refusing(monkeypatch)
+    small(tiny, trials=6)
+    tiny.settings.search.startup_per_scope = 3
+    checked = []
+    real = search.widened
+
+    def checking(found, scope, space):
+        checked.append((scope, len(found.trials)))
+        return real(found, scope, space)
+
+    monkeypatch.setattr(search, "widened", checking)
+    Search(tiny).search(12)
+    assert checked == [(search.ONE_LAYER, 4), (search.PER_LAYER, 4)]
+
+
+def test_a_search_killed_while_widening_loses_and_repeats_no_trial(tiny, monkeypatch):
+    widening_soon(monkeypatch)
+    refusing(monkeypatch)
+    small(tiny, trials=6)
+    real = optuna.Study.add_trial
+    copied = []
+
+    def dying(self, trial):
+        if self.study_name.endswith("widened 1") and trial.state == TrialState.COMPLETE:
+            copied.append(trial)
+            if len(copied) == 2:
+                raise KeyboardInterrupt
+        real(self, trial)
+
+    monkeypatch.setattr(optuna.Study, "add_trial", dying)
+    with pytest.raises(KeyboardInterrupt):
+        Search(tiny).search(12)
+    monkeypatch.setattr(optuna.Study, "add_trial", real)
+    Search(tiny).search(12)
+    found = search.load(tiny)
+    assert found is not None and sorted(found.trials) == list(range(1, 13))
+    for scope in search.SCOPES:
+        study = latest(tiny, scope)
+        assert study.user_attrs["widened"] == [[2, 0.8, 3.0]]
+        done = [search._key(t.params) for t in study.get_trials(states=(TrialState.COMPLETE,))]
+        assert len(done) == len(set(done)) == 6
+        waiting = study.get_trials(states=(TrialState.WAITING,))
+        assert not {search._key(t.system_attrs["fixed_params"]) for t in waiting} & set(done)

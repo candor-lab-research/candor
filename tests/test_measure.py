@@ -13,7 +13,7 @@ from candor.targets import Writer
 
 from .test_heretic import PARAMETERS
 from .tiny_gguf import END_THINK, THINK, THINKING_TOKENS
-from .tiny_run import FakeGuard, fake_prompts, thinking
+from .tiny_run import FakeGuard, fake_prompts, thinking, thinks_through
 
 EDIT = Edit("trial", 0.4, {"attn": Kernel(1.2, 1.0, 0.8, 1.0), "mlp": Kernel(1.0, 0.0, 0.5, 1.0)})
 
@@ -38,6 +38,20 @@ def test_a_measurement_keeps_numbers_per_prompt_and_answers_only_in_private(tiny
         assert (private / f"{name}.judged.json").exists() == (name in run.HELD_OUT)
         for answer in texts["answers"]:
             assert len(answer) < 4 or json.dumps(answer)[1:-1] not in numbers
+
+
+def test_an_edits_record_names_where_it_reads_its_directions_only_where_the_answer_starts():
+    assert "answering" not in EDIT.record()
+    assert Edit(EDIT.name, EDIT.direction_layer, EDIT.kernels, answering=True).record()["answering"] is True
+
+
+def test_an_edit_read_where_the_answer_starts_gets_adapters_read_there(tiny):
+    thinking(tiny)
+    answering = Edit(EDIT.name, EDIT.direction_layer, EDIT.kernels, answering=True)
+    files, inputs = measure.edit_adapters(tiny, answering, tiny.path("measurements", "answering", "adapters"))
+    built, start = measure.edit_adapters(tiny, EDIT, tiny.path("measurements", "start", "adapters"))
+    assert inputs["directions"] == tiny.inputs["answering directions"] != start["directions"]
+    assert all(files[name].read_bytes() != built[name].read_bytes() for name in files)
 
 
 def test_a_finished_measurement_is_reused_without_answering_again(tiny, monkeypatch):
@@ -336,13 +350,92 @@ def test_a_thinking_models_prompts_are_also_kept_with_their_thinking_closed(tiny
     ids = thinking(tiny).prompt_ids()
     think, end = THINKING_TOKENS.index(THINK), THINKING_TOKENS.index(END_THINK)
     assert all(think in prompt and end not in prompt for prompt in ids["harmful_test"])
-    for name in run.KL_SETS:
+    for name in run.CLOSED_SETS:
         closed = ids[name + run.ANSWERING]
         assert [len(p) for p in closed] > [len(p) for p in ids[name]] and all(end in p for p in closed)
-        assert tiny.kl_ids(ids, name) == closed
+
+
+def after_the_end_tag(ids: dict[str, list[list[int]]], name: str) -> list[int]:
+    closed = ids[name + run.ANSWERING][0]
+    return closed[closed.index(THINKING_TOKENS.index(END_THINK)) + 1 :]
+
+
+def test_kl_is_read_after_the_unedited_models_own_thinking_where_it_ended_by_itself(tiny, monkeypatch):
+    thought = thinks_through(monkeypatch)
+    ids = thinking(tiny).prompt_ids()
+    tiny.thinking_traces()
+    for name in run.KL_SETS:
+        after = after_the_end_tag(ids, name)
+        assert after and THINKING_TOKENS.index(END_THINK) not in after
+        expected = [prompt + thought + after for prompt in ids[name][::2]]
+        assert tiny.kl_ids(ids, name) == expected and len(expected) == 2
+        # The first two prompts, of which the second's thinking ran out its budget.
+        assert tiny.kl_ids(ids, name, limit=2) == expected[:1]
+    key = tiny.thinking_key()
+    record = json.loads(tiny.path("thinking", f"{key}.json").read_text())
+    assert record["kept"] == dict.fromkeys(run.KL_SETS, 2)
+    # The thinking is the model's own text: only its digest is outside the private folder.
+    private = json.loads(tiny.path("private", "thinking", f"{key}.json").read_text())
+    assert private == {
+        name: [
+            p if i % 2 == 0 else None
+            for i, p in enumerate([prompt + thought + after_the_end_tag(ids, name) for prompt in ids[name]])
+        ]
+        for name in run.KL_SETS
+    }
+
+
+def test_the_unedited_thinking_is_kept_for_each_set_of_settings_and_never_sampled_over(tiny, monkeypatch):
+    thinks_through(monkeypatch)
+    first = thinking(tiny).thinking_traces()
+    calls = []
+    real = LlamaServer.thoughts
+    monkeypatch.setattr(LlamaServer, "thoughts", lambda *a, **k: calls.append(1) or real(*a, **k))
+    assert tiny.thinking_traces() == first and calls == []
+    tiny.settings.sampling.seed = 3
+    tiny.thinking_traces()
+    assert len(calls) == len(run.KL_SETS)
+    # Going back finds the thinking sampled before, as it can't be sampled again exactly.
+    tiny.settings.sampling.seed = 0
+    assert tiny.thinking_traces() == first and len(calls) == len(run.KL_SETS)
+    key = tiny.thinking_key()
+    tiny.path("private", "thinking", f"{key}.json").unlink()
+    with pytest.raises(
+        RunError, match=r"missing or changed in private/thinking/.*restore it, or delete thinking/"
+    ):
+        tiny.thinking_traces()
+    assert len(calls) == len(run.KL_SETS)
+
+
+@pytest.mark.parametrize(
+    "stage", ["adapters", "measurements", "scores", "exports", "directions_answering.pt"]
+)
+def test_the_unedited_thinking_doesnt_depend_on_the_stages_it_doesnt_use(tiny, monkeypatch, stage):
+    key = thinking(tiny).thinking_key()
+    monkeypatch.setitem(run.STAGES, stage, run.STAGES[stage] + 1)
+    assert tiny.thinking_key() == key
+    monkeypatch.setitem(run.STAGES, "thinking", run.STAGES["thinking"] + 1)
+    assert tiny.thinking_key() != key
+
+
+def test_a_limit_that_leaves_no_thinking_ended_by_itself_is_refused(tiny, monkeypatch):
+    def last_only(self, prompts, sampling, seeds, thinking, done=None):
+        return [None] * (len(prompts) - 1) + [[*self.tokenize("w2"), *self.tokenize(thinking.end)]]
+
+    monkeypatch.setattr(LlamaServer, "thoughts", last_only)
+    with pytest.raises(RunError, match="none of the first 2 held-out harmless prompts"):
+        Measurement(thinking(tiny), None, "base", limit=2).measure()
+
+
+def test_kl_cant_be_read_after_thinking_that_never_ends_by_itself(tiny, monkeypatch):
+    monkeypatch.setattr(LlamaServer, "thoughts", lambda self, prompts, *a, **k: [None] * len(prompts))
+    with pytest.raises(RunError, match="didn't end by itself on any of the 3 harmless test prompts"):
+        thinking(tiny).thinking_traces()
+    assert not tiny.path("thinking").exists() or not any(tiny.path("thinking").iterdir())
 
 
 def test_a_thinking_model_is_judged_on_its_answers_alone_and_kl_is_read_where_they_start(tiny, monkeypatch):
+    thinks_through(monkeypatch)
     thinking(tiny)
     generated, first_tokens = recording(monkeypatch, "generate"), recording(monkeypatch, "top_logprobs")
     results = Measurement(tiny, None, "base").measure()
@@ -350,16 +443,27 @@ def test_a_thinking_model_is_judged_on_its_answers_alone_and_kl_is_read_where_th
     assert FakeGuard.read == [a.text for a in held_out] and sum(a.thinking for a in held_out) > 0
     for name in measure.SETS:
         assert len(results[name]["thinking"]) == len(results[name]["forced"]) == 3
-    assert first_tokens[0][0] == tiny.prompt_ids()["harmless_held_out" + run.ANSWERING]
+    ids = tiny.prompt_ids()
+    # After the unedited model's own thinking, where it started, and after an empty thinking block.
+    assert [read[0] for read in first_tokens] == [
+        tiny.kl_ids(ids, "harmless_held_out"),
+        ids["harmless_held_out"],
+        ids["harmless_held_out" + run.ANSWERING],
+    ]
+    harmless = results["harmless_held_out"]
+    assert [len(harmless[key]) for key in ("first_token", "first_token_thinking", "first_token_empty")] == [
+        2,
+        3,
+        3,
+    ]
     rows = dict(measure.summary(results))
     assert rows["Harmful, thinking cut"].endswith("/3") and rows["Maths, thinking tokens"].startswith(
         "median"
     )
-    assert len(results["harmless_held_out"]["first_token_thinking"]) == 3
-    assert first_tokens[1][0] == tiny.prompt_ids()["harmless_held_out"]
 
 
-def test_the_same_seed_samples_the_same_answers_and_another_is_still_compared(tiny):
+def test_the_same_seed_samples_the_same_answers_and_another_is_still_compared(tiny, monkeypatch):
+    thinks_through(monkeypatch)
     thinking(tiny)
     first = Measurement(tiny, None, "base").measure()
     again = Measurement(tiny, None, "again").measure()
@@ -369,6 +473,22 @@ def test_the_same_seed_samples_the_same_answers_and_another_is_still_compared(ti
     rows = {row[0]: row for row in measure.compare(first, other)}
     assert rows["Sampling seed"][1:3] == ("0", "5") and "Harmful, thinking cut" in rows
     assert "Sampling seed" not in {row[0] for row in measure.compare(first, again)}
+
+
+def test_measurements_after_different_unedited_thinking_arent_compared(tiny, monkeypatch):
+    thinks_through(monkeypatch)
+    thinking(tiny)
+    first = Measurement(tiny, None, "base").measure()
+
+    def other_thinking(self, prompts, sampling, seeds, thinking, done=None):
+        return [[*self.tokenize("w5"), *self.tokenize(thinking.end)]] * len(prompts)
+
+    monkeypatch.setattr(LlamaServer, "thoughts", other_thinking)
+    # A new seed thinks again, and here the unedited model's thinking comes out differently.
+    tiny.settings.sampling.seed = 7
+    other = Measurement(tiny, None, "other-thinking").measure()
+    with pytest.raises(RunError, match="differ in more than the edit"):
+        measure.compare(first, other)
 
 
 def test_a_template_that_doesnt_open_the_thinking_is_refused(tiny):
@@ -383,10 +503,10 @@ def test_a_template_that_doesnt_open_the_thinking_is_refused(tiny):
 def test_a_greedy_model_that_doesnt_think_keeps_the_records_it_had_before_candor_sampled(tiny):
     tiny.gguf()
     measurement = Measurement(tiny, None, "base")
-    inputs = measurement._answer_inputs("maths", [[1]], None)
+    inputs = measurement._answer_inputs("maths", [[1]], None, [])
     assert set(inputs) == {"paired", "edit", "slots"} and not {"sampling", "thinking"} & set(inputs["paired"])
     tiny.settings.sampling.temperature = 0.6
-    inputs = measurement._answer_inputs("maths", [[1]], None)
+    inputs = measurement._answer_inputs("maths", [[1]], None, [])
     assert inputs["seed"] == 0 and inputs["paired"]["sampling"]["temperature"] == 0.6
 
 
@@ -398,11 +518,15 @@ def test_a_prompt_that_opens_thinking_needs_a_think_close(tiny):
         Measurement(tiny, None, "base").measure()
 
 
-def test_comparing_thinking_measurements_shows_kl_where_the_thinking_starts(tiny):
+def test_comparing_thinking_measurements_shows_kl_at_each_place_it_is_read(tiny, monkeypatch):
+    thinks_through(monkeypatch)
     thinking(tiny)
     base = Measurement(tiny, None, "base").measure()
     edited = Measurement(tiny, EDIT, "edited").measure()
     rows = {row[0]: row for row in measure.compare(base, edited)}
-    assert (
-        float(rows["Harmless KL from A, thinking start"][2]) > 0 and float(rows["Harmless KL from A"][2]) > 0
-    )
+    for label in (
+        "Harmless KL from A",
+        "Harmless KL from A, empty thinking",
+        "Harmless KL from A, thinking start",
+    ):
+        assert float(rows[label][2]) > 0

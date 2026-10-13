@@ -344,7 +344,47 @@ class LlamaServer:
             payload = {"prompt": prompt, "n_predict": max_tokens, **settings}
             result = self._checked(payload, self._complete(payload))
             return Answer(result["content"], result["tokens_predicted"], result["stop_type"] != "limit")
-        end = self._single(thinking.end)
+        thought, closed, made_to_stop = self._think(prompt, settings, thinking)
+        if not closed:
+            # The model ended without closing its thinking, so it never answered.
+            return Answer("", 0, False, len(thought))
+        # The thinking's length leaves out the end tag.
+        if stopped is not None and stopped.is_set():
+            return Answer("", 0, False, len(thought) - 1, made_to_stop)
+        payload = {"prompt": prompt + thought, "n_predict": max_tokens, **settings}
+        result = self._checked(payload, self._complete(payload))
+        finished = result["stop_type"] != "limit"
+        return Answer(result["content"], result["tokens_predicted"], finished, len(thought) - 1, made_to_stop)
+
+    def thoughts(
+        self,
+        prompts: list[list[int]],
+        sampling: Mapping[str, float],
+        seeds: list[int],
+        thinking: Thinking,
+        done: Callable[[], None] | None = None,
+    ) -> list[list[int] | None]:
+        """Each prompt's thinking, up to and with its end tag, sampled with the prompt's seed; None where
+        the model didn't end its thinking by itself: its budget ran out and it was made to stop, or it
+        never closed it."""
+        lora = self.lora(None)
+
+        def one(prompt: list[int], seed: int) -> list[int] | None:
+            thought, closed, made_to_stop = self._think(
+                prompt, {**sampling, "seed": seed, "lora": lora}, thinking
+            )
+            return thought if closed and not made_to_stop else None
+
+        return self._all(
+            [partial(one, prompt, seed) for prompt, seed in zip(prompts, seeds, strict=True)], done
+        )
+
+    def _think(
+        self, prompt: list[int], settings: dict[str, Any], thinking: Thinking
+    ) -> tuple[list[int], bool, bool]:
+        """A thinking model's thinking: the tokens it thought, up to and with its end tag when it closed
+        its thinking; whether it closed it; and whether its budget ran out so it was made to stop."""
+        end = self.token_of(thinking.end)
         # What the server makes the model write when its budget runs out, built as the server does.
         forced = self.tokenize(thinking.message) + self.tokenize(thinking.close)
         if forced[-1] != end:
@@ -369,8 +409,7 @@ class LlamaServer:
                 raise ServerError(
                     f"llama-server didn't hold a thinking model to its budget of {thinking.budget}"
                 )
-            # The model ended without closing its thinking, so it never answered.
-            return Answer("", 0, False, len(thought))
+            return thought, False, False
         closed = thought.index(end) + 1
         # The budget also counts the open's tokens after the start tag, as the server tokenizes it.
         opened = len(self.tokenize(thinking.opened)) - 1
@@ -378,15 +417,10 @@ class LlamaServer:
         made_to_stop = (
             closed >= thought_freely + len(forced) and thought[closed - len(forced) : closed] == forced
         )
-        if stopped is not None and stopped.is_set():
-            return Answer("", 0, False, closed - 1, made_to_stop)
-        payload = {"prompt": prompt + thought[:closed], "n_predict": max_tokens, **settings}
-        result = self._checked(payload, self._complete(payload))
-        finished = result["stop_type"] != "limit"
-        # The thinking's length leaves out the end tag.
-        return Answer(result["content"], result["tokens_predicted"], finished, closed - 1, made_to_stop)
+        return thought[:closed], True, made_to_stop
 
-    def _single(self, tag: str) -> int:
+    def token_of(self, tag: str) -> int:
+        """The one token a think tag is in this model."""
         ids = self.tokenize(tag)
         if len(ids) != 1:
             raise ServerError(f"the think tag {tag!r} isn't one token in this model but {len(ids)}")

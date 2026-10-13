@@ -22,7 +22,7 @@ from .test_measure import EDIT
 from .test_run import TEMPLATE
 from .test_search import write_journal
 from .tiny_gguf import HIDDEN, random_weights, write_model
-from .tiny_run import HF_NAMES
+from .tiny_run import HF_NAMES, thinking
 
 GGUF_NAMES = {hf: kind for kind, hf in HF_NAMES.items()}
 
@@ -86,6 +86,44 @@ def test_each_edited_weight_gains_its_strength_times_its_factors(tiny, convertin
             torch.testing.assert_close(
                 deltas[writer.name][0] @ deltas[writer.name][1], EDIT.strength(writer) * b @ a
             )
+
+
+def test_an_edit_read_where_the_answer_starts_ships_that_direction(tiny, converting):
+    thinking(tiny)
+    answering = replace(EDIT, name="trial-answering", answering=True)
+    deltas = export.deltas(tiny, answering)
+    directions = tiny.edit_directions(EDIT.name, EDIT.direction_layer, answering=True)
+    assert not torch.equal(directions, tiny.edit_directions(EDIT.name, EDIT.direction_layer))
+    original = load_file(tiny.model_folder / "model.safetensors")
+    for writer in tiny.shape[3]:
+        if EDIT.strength(writer):
+            b, a = rank_one(
+                original[writer.name], directions[writer.layer], RowNorm(tiny.settings.edit.row_norm)
+            )
+            torch.testing.assert_close(
+                deltas[writer.name][0] @ deltas[writer.name][1], EDIT.strength(writer) * b @ a
+            )
+    export.export(tiny, EDIT)
+    export.export(tiny, answering)
+    assert len(converting) == 2
+
+
+def test_an_edit_read_where_the_answer_starts_is_exported_again_when_those_directions_change(
+    tiny, converting, monkeypatch
+):
+    thinking(tiny)
+    answering = replace(EDIT, answering=True)
+    export.export(tiny, answering)
+    real = Run.directions
+
+    def changed(self, answering=False):
+        found = real(self, answering)
+        self.inputs["answering directions"] = "changed"
+        return found
+
+    monkeypatch.setattr(Run, "directions", changed)
+    export.export(tiny, answering)
+    assert len(converting) == 2
 
 
 def test_an_export_is_reused_until_the_edit_or_the_quantisation_changes(tiny, converting):

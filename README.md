@@ -48,9 +48,16 @@ uv run candor serve runs/rude --trial 37                       # chat with it in
 - A model that thinks before it answers (its chat template opens the thinking, as Qwen3.5's does) is
   scored thinking, as you run it. `init` finds the text that closes its thinking and gives it a
   budget of 8192 tokens (`deployment.thinking_budget`): past it, llama-server makes the model stop
-  thinking and answer. Only the answer is judged, KL is read where the answer starts, and each
-  answer's thinking length is kept as a number. The search can score at a shorter budget
-  (`scoring.thinking_budget`) and the edits it suggests are measured at the deployment's.
+  thinking and answer. Only the answer is judged, and each answer's thinking length is kept as a
+  number. The search can score at a shorter budget (`scoring.thinking_budget`) and the edits it
+  suggests are measured at the deployment's.
+- For a thinking model, refusal directions are read both where the thinking starts and where the
+  answer starts after an empty thinking block, and the search chooses between them for each trial.
+  KL is read where the answer starts after the unedited model's own thinking, leaving out prompts
+  whose thinking ran out its budget. That thinking is sampled once for each set of settings and
+  kept, never sampled over, since sampling it again wouldn't give the same (`thinking/`; the
+  thinking itself only as token ids in `private/`). KL after an empty thinking block, as heretic
+  read it, and where the thinking starts are kept beside it.
 - Answers are greedy unless `[sampling]` says otherwise. Set it to the settings you chat with, such as
   a thinking model card's recommended ones: the search, measurements and `serve` then all sample
   that way, each prompt with a seed of its own that is the same for every edit, so two edits are
@@ -86,14 +93,20 @@ uv run candor serve runs/rude --trial 37                       # chat with it in
   strengths: it answers the test prompts eight at a time and the judge counts refusals, stopping
   once the trial has refused more than the cap and more than 25 fully scored trials of its kind,
   which leaves every trial the sampler draws unchanged; KL is read from the 100 harmless test
-  prompts. Nothing a model writes is kept. It resumes where it
+  prompts. Nothing a model writes is kept. Strength starts at heretic's 0.8-1.5. From a kind's
+  60th trial, and every 30th after, if its best edit within the cap presses an end of that range
+  (or none is within the cap yet: the ceiling), that end moves out to `search.widest_strength`
+  (0.5-3.0), once; the kind's trials carry on and 10 evenly spread trials start the wider range.
+  For a thinking model the 20 start points are split evenly between the two places directions are
+  read. It resumes where it
   stopped, refuses to carry on a search made under other settings, and `--trials N` stops early to
   time it. It ends with the fully scored trials no other beats on both refusals and KL; for each
-  kind, the least-KL trial at each count within the cap unless one refusing fewer has less (or,
-  failing that, the one that refused fewest), each flagged if it presses on the edge of a range;
-  and the commands to measure each on the held-out prompts, since 100 test prompts can't tell 0
-  refused from 2. The results file explains the design:
-  `results/phase-2-rude-llama.md`.
+  kind, any strength it widened to, and the least-KL trial at each count within the cap unless one
+  refusing fewer has less (or, failing that, the one that refused fewest), each flagged if it
+  presses on the edge of a range; and the commands to measure each on the held-out prompts, since
+  100 test prompts can't tell 0 refused from 2. The results files explain the design:
+  `results/phase-2-rude-llama.md` and, for widening and the two places, `results/phase-3-qwen3.5-9b.md`.
+  `candor upgrade` keeps a run whose search was made before strength could widen from widening it.
 - `score` scores one edit exactly as the search scores its trials, without adding it to the search.
   A heretic trial is scored as rebuilt, and at the nearest whole layer as the search could draw it;
   it shows which of the search's best trials beat it on both refusals and KL, and whether the search
@@ -125,9 +138,9 @@ uv run candor serve runs/rude --trial 37                       # chat with it in
   converting anything: rude-llama fits on an 18 GB Mac; Qwen3.5-9B and K2-Horizon need a pod.
 
 A run folder holds `candor.toml`, `inspect.json`, `gguf/` (the model as an unquantised GGUF of its
-own float type, the deployment quantisation, and `convert.log`), `prompts.json`, `directions.pt`,
-`adapters/`, `measurements/`, `search/` (Optuna's journal and a record of the settings it was made
-with), `scores/` (adapters `score` builds for directions the search has none for), `exports/` (the
+own float type, the deployment quantisation, and `convert.log`), `prompts.json`, `directions.pt`
+(and for a thinking model `directions_answering.pt` and `thinking/`), `adapters/`,
+`measurements/`, `search/` (Optuna's journal and a record of the settings it was made with), `scores/` (adapters `score` builds for directions the search has none for), `exports/` (the
 GGUFs `export` makes), `private/` and
 `logs/`, each result beside a `.inputs.json` record. llama.cpp itself (release b11524: the
 binaries, checked by sha256, and its converter in its own environment, pinned by

@@ -493,6 +493,21 @@ def test_a_model_that_never_closes_its_thinking_gives_no_answer(monkeypatch):
     assert answer == Answer("", 0, False, 2) and len(asked) == 1
 
 
+def test_only_thinking_the_model_ended_by_itself_is_kept_whole(monkeypatch):
+    thinking = Thinking(THINK, END_THINK, END_THINK, THINK, 3, "stop")
+    for reply, kept in [
+        # Closed by the model before its budget: kept up to and with the end tag, and not answered.
+        ({"tokens": [5, 8, 9, 99, 4], "content": "", "stop_type": "word"}, [5, 8, 9, 99]),
+        # Made to stop by its budget, or never closed: nothing to read KL after.
+        ({"tokens": [5, 6, 7, 8, 9, 99], "content": "", "stop_type": "word"}, None),
+        ({"tokens": [5, 6], "content": "", "stop_type": "eos"}, None),
+    ]:
+        s, asked = thinking_server(monkeypatch, reply)
+        assert s.thoughts([[1]], SAMPLED, [3], thinking) == [kept]
+        [payload] = asked
+        assert payload["seed"] == 3 and payload["temperature"] == 1.0 and payload["stop"] == [END_THINK]
+
+
 def test_a_server_that_ignores_the_budget_is_refused(monkeypatch):
     s, _ = thinking_server(monkeypatch, {"tokens": [5] * 59, "content": "", "stop_type": "limit"})
     with pytest.raises(ServerError, match="didn't hold a thinking model to its budget of 50"):

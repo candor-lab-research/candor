@@ -5,6 +5,7 @@ import shutil
 import zlib
 from pathlib import Path
 from types import SimpleNamespace
+from typing import Any
 
 import gguf
 import pytest
@@ -13,7 +14,7 @@ import torch.nn.functional as F
 from datasets.exceptions import DatasetNotFoundError
 from safetensors.torch import save_file
 
-from candor import config, run, targets
+from candor import config, directions, run, targets
 from candor.edit import RowNorm, rank_one
 from candor.engine import LlamaServer
 from candor.run import Run, RunError
@@ -69,7 +70,7 @@ def current(tmp_path, model, monkeypatch, directions_by_seed):
     folder.mkdir(parents=True)
     messages = []
 
-    def fake_directions(self):
+    def fake_directions(self, answering=False):
         self.inputs["directions"] = f"seed-{state['seed']}"
         return found()
 
@@ -81,13 +82,18 @@ class Loaded(torch.nn.Module):
     """Stands in for a model loaded by transformers when the residuals are faked."""
 
 
+def residuals_of(prompts: list[list[int]]) -> torch.Tensor:
+    """The residuals fake_residuals gives for these prompts."""
+    generator = torch.Generator().manual_seed(zlib.crc32(json.dumps(prompts).encode()))
+    return torch.randn(len(prompts), LAYERS + 1, HIDDEN, generator=generator)
+
+
 def fake_residuals(monkeypatch) -> SimpleNamespace:
     """Residuals fixed by the prompts they are read for. Returns how each model and tokenizer was loaded."""
     loads = SimpleNamespace(models=[], tokenizers=[])
 
     def residuals(model, prompts, pad_id):
-        generator = torch.Generator().manual_seed(zlib.crc32(json.dumps(prompts).encode()))
-        return torch.randn(len(prompts), LAYERS + 1, HIDDEN, generator=generator)
+        return residuals_of(prompts)
 
     def load_model(folder, **kwargs):
         loads.models.append(kwargs)
@@ -592,6 +598,107 @@ def test_new_directions_rebuild_the_adapters_built_from_them(tmp_path, model, mo
     assert rebuilt(messages) == {"directions.pt"} | ADAPTERS
 
 
+THINKS = config.Deployment(think_close="\n</think>\n\n", thinking_budget=8, thinking_budget_message="")
+
+
+def thinking_run(tmp_path, model, monkeypatch, report=lambda _: None) -> tuple[Run, dict[str, Any]]:
+    """A run of a thinking model whose prompt ids and residuals are faked: its prompts, and the same
+    prompts with an empty thinking block closed after them."""
+    settings = config.RunConfig(model=config.Model(source=str(model)), deployment=THINKS)
+    ids = {
+        "harmful": [[1, 2]],
+        "harmless": [[3, 4]],
+        "harmful_answering": [[1, 2, 9]],
+        "harmless_answering": [[3, 4, 9]],
+    }
+    monkeypatch.setattr(Run, "prompt_ids", lambda self: ids)
+    return Run(tmp_path, settings, report=report), ids
+
+
+def test_a_thinking_model_reads_directions_where_its_thinking_and_its_answer_start_in_one_load(
+    tmp_path, model, monkeypatch
+):
+    this, ids = thinking_run(tmp_path, model, monkeypatch)
+    loads = fake_residuals(monkeypatch)
+    start, answer = this.directions(), this.directions(answering=True)
+    assert len(loads.models) == 1
+    read = {name: residuals_of(ids[name]) for name in ids}
+    assert torch.equal(start, directions.difference_of_means(read["harmful"], read["harmless"]))
+    assert torch.equal(
+        answer, directions.difference_of_means(read["harmful_answering"], read["harmless_answering"])
+    )
+    ids["harmful_answering"] = [[1, 2, 8]]
+    assert not torch.equal(this.directions(answering=True), answer)
+    assert len(loads.models) == 2 and torch.equal(this.directions(), start)
+
+
+def test_only_a_thinking_model_has_directions_where_its_answer_starts(tmp_path, model):
+    this = Run(tmp_path, config.RunConfig(model=config.Model(source=str(model))), report=lambda _: None)
+    with pytest.raises(RunError, match="only a thinking model"):
+        this.directions(answering=True)
+
+
+def test_a_thinking_models_adapters_are_read_at_both_places_and_rebuilt_apart(tmp_path, model, monkeypatch):
+    messages = []
+    this, ids = thinking_run(tmp_path, model, monkeypatch, messages.append)
+    fake_residuals(monkeypatch)
+    made = this.adapters()
+    assert set(made) == {
+        f"{prefix}{name}" for prefix in ("", run.ANSWER_SETS) for name in ("per-layer", "layer-0", "layer-1")
+    }
+    start, answer = (
+        adapter_factors(made["layer-1"]["blk.0.attn_output.weight"]),
+        adapter_factors(made["answer-layer-1"]["blk.0.attn_output.weight"]),
+    )
+    assert not torch.equal(start[0], answer[0])
+    messages.clear()
+    ids["harmless_answering"] = [[3, 4, 8]]
+    this.adapters()
+    assert rebuilt(messages) == {"directions_answering.pt"} | {
+        "adapters/answer-" + a.split("/")[1] for a in ADAPTERS
+    }
+
+
+def test_a_new_version_of_the_answer_start_directions_rebuilds_their_adapters(tmp_path, model, monkeypatch):
+    messages = []
+    this, _ = thinking_run(tmp_path, model, monkeypatch, messages.append)
+    fake_residuals(monkeypatch)
+    this.adapters()
+    messages.clear()
+    monkeypatch.setitem(run.STAGES, "directions_answering.pt", run.STAGES["directions_answering.pt"] + 1)
+    this.adapters()
+    assert rebuilt(messages) == {"directions_answering.pt"} | {
+        "adapters/answer-" + a.split("/")[1] for a in ADAPTERS
+    }
+
+
+@pytest.mark.parametrize("stage", ["adapters", "measurements", "scores", "exports"])
+def test_the_answer_start_directions_dont_depend_on_the_stages_they_dont_use(
+    tmp_path, model, monkeypatch, stage
+):
+    this, _ = thinking_run(tmp_path, model, monkeypatch)
+    loads = fake_residuals(monkeypatch)
+    this.adapters()
+    made = this.adapter_inputs(answering=True)
+    monkeypatch.setitem(run.STAGES, stage, run.STAGES[stage] + 1)
+    this.directions(answering=True)
+    assert len(loads.models) == 1 and this.adapter_inputs(answering=True) == made
+    monkeypatch.setitem(run.STAGES, "directions.pt", run.STAGES["directions.pt"] + 1)
+    this.directions(answering=True)
+    assert len(loads.models) == 2 and this.adapter_inputs(answering=True) != made
+
+
+def test_a_change_where_the_thinking_starts_rebuilds_only_whats_read_there(tmp_path, model, monkeypatch):
+    messages = []
+    this, ids = thinking_run(tmp_path, model, monkeypatch, messages.append)
+    fake_residuals(monkeypatch)
+    this.adapters()
+    messages.clear()
+    ids["harmful"] = [[1, 2, 7]]
+    this.adapters()
+    assert rebuilt(messages) == {"directions.pt"} | ADAPTERS
+
+
 TEMPLATE = (
     "{%- if not date_string is defined %}{%- set date_string = strftime_now('%d %b %Y') %}{%- endif %}"
     "<s>Today: {{ date_string }}\n{% for m in messages %}{{ m['role'] }}: {{ m['content'] }}\n{% endfor %}"
@@ -944,9 +1051,9 @@ def test_prepare_runs_each_stage_once(pipeline, monkeypatch):
     for stage in ("gguf", "prompt_ids", "directions", "adapters"):
         real = getattr(Run, stage)
 
-        def counted(self, real=real, stage=stage):
+        def counted(self, *args, real=real, stage=stage):
             calls.append(stage)
-            return real(self)
+            return real(self, *args)
 
         monkeypatch.setattr(Run, stage, counted)
     again()

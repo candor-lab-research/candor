@@ -328,6 +328,13 @@ class Search(Section):
         "the weights write with every row scaled to length 1; scaling the rows back leaves a part no "
         "strength removes, larger the more the rows' lengths differ.",
     )
+    widest_strength: Range = Field(
+        default=(0.5, 3.0),
+        description="How far the search may widen strength for a kind of edit. From a kind's 60th trial, "
+        "and every 30th after, if its best edit within max_refusals presses an end of strength, or none "
+        "is within it yet (then the ceiling), that end moves out to this one, once. Its trials so far "
+        "carry on and a few evenly spread trials start the wider range. Set it to strength to never widen.",
+    )
     peak_layer: Range = Field(
         default=(0.6, 1.0), description="Where the edit is strongest, as a fraction of the model's depth."
     )
@@ -344,7 +351,7 @@ class Search(Section):
         description="Which layer's refusal direction a single-direction trial uses, as a fraction of depth.",
     )
 
-    @field_validator("strength", "peak_layer", "edge_strength", "reach", "direction_layer")
+    @field_validator("strength", "widest_strength", "peak_layer", "edge_strength", "reach", "direction_layer")
     @classmethod
     def _ordered(cls, value: tuple[float, float]) -> tuple[float, float]:
         if value[0] > value[1]:
@@ -358,7 +365,7 @@ class Search(Section):
             raise ValueError("must be fractions between 0 and 1")
         return value
 
-    @field_validator("strength")
+    @field_validator("strength", "widest_strength")
     @classmethod
     def _positive(cls, value: tuple[float, float]) -> tuple[float, float]:
         if value[0] <= 0:
@@ -377,6 +384,16 @@ class Search(Section):
         if self.startup_per_scope > self.trials_per_scope:
             raise ValueError("startup_per_scope can't be more than trials_per_scope")
         return self
+
+    @model_validator(mode="after")
+    def _widest_holds_strength(self) -> "Search":
+        if not self.widest_strength[0] <= self.strength[0] <= self.strength[1] <= self.widest_strength[1]:
+            raise ValueError("widest_strength must hold all of strength")
+        return self
+
+    def widens(self) -> bool:
+        """Whether the search may widen strength at all."""
+        return self.widest_strength != self.strength
 
 
 class RunConfig(Section):
@@ -444,13 +461,39 @@ def _retired(data: dict[str, Any]) -> list[str]:
     return found
 
 
-def _validated(text: str, where: str, retired: list[str] | None = None) -> RunConfig:
+def _filled(data: dict[str, Any], searched: bool) -> list[str]:
+    """Fill in search.widest_strength for a run from before it, as it must hold the run's own strength:
+    a run with a search keeps it at that strength, so the search carries on as it was made, and another
+    widens as far as the default or its own strength, whichever reaches further. Names what it filled."""
+    search = data.get("search")
+    if not isinstance(search, dict) or "widest_strength" in search:
+        return []
+    try:
+        low, high = (float(value) for value in search["strength"])
+    except (KeyError, TypeError, ValueError):
+        # Missing or malformed, which the checks explain.
+        return []
+    widest_low, widest_high = Search.model_fields["widest_strength"].default
+    search["widest_strength"] = [low, high] if searched else [min(low, widest_low), max(high, widest_high)]
+    return ["search.widest_strength"]
+
+
+def _validated(
+    text: str,
+    where: str,
+    retired: list[str] | None = None,
+    added: list[str] | None = None,
+    searched: bool = False,
+) -> RunConfig:
     """The settings, with any the text leaves out at their defaults. Retired settings are refused, or
-    with retired given, dropped and named there."""
+    with retired given, dropped and named there. With added given, settings filled in before they are
+    checked, for a run that has a search when searched, are named there."""
     try:
         data = tomllib.loads(text)
     except tomllib.TOMLDecodeError as error:
         raise ConfigError(f"{where} isn't valid TOML: {error}") from None
+    if added is not None:
+        added += _filled(data, searched)
     dropped = _retired(data)
     if retired is not None:
         retired += dropped
@@ -493,17 +536,19 @@ def load(folder: Path) -> RunConfig:
 
 
 def load_for_upgrade(folder: Path) -> tuple[RunConfig, list[str], list[str], str]:
-    """The settings with those the file leaves out at their defaults, the names of those, the retired
-    settings it held, and the file's header."""
+    """The settings with those the file leaves out added (see _filled) or at their defaults, the names
+    of those, the retired settings it held, and the file's header."""
     path, text = _read(folder)
     retired: list[str] = []
-    settings = _validated(text, str(path), retired)
+    filled: list[str] = []
+    searched = (folder / "search" / "inputs.json").exists()
+    settings = _validated(text, str(path), retired, filled, searched)
     header = []
     for line in text.splitlines():
         if not line.startswith("#"):
             break
         header.append(line.removeprefix("#").removeprefix(" "))
-    return settings, _missing(settings), retired, "\n".join(header)
+    return settings, _missing(settings) + filled, retired, "\n".join(header)
 
 
 def rewrite(folder: Path, settings: RunConfig, header: str) -> None:

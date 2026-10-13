@@ -16,7 +16,7 @@ and merged weights in Q4_K_M). (Decided 2026-10-11: the user isn't tied to Bioni
 | 0 | Score edits as per-layer LoRA adapters in llama.cpp | Adapters match merged weights, no speed cost | Done |
 | 1 | Core maths and `candor inspect` | candor's rebuild of a heretic trial matches its refusals, and measuring heretic's saved model under heretic's conditions gives heretic's numbers exactly; `inspect` reports correctly on rude-llama, Qwen3.5-9B and K2-Horizon | Done |
 | 2 | rude-llama end to end on the Mac: measure, search, export a GGUF to run in llama-server | Under the decision rule written in step 4 before any search runs, candor's shipped GGUF is at least as good as heretic's Trial 170 converted and quantised the same way: fewer or equal refusals on held-out prompts, no higher KL, no maths loss. It runs in llama-server. (A blind A/B was dropped by the user on 2026-10-12: 535 and Trial 170 are too close to tell apart by hand.) | Done 2026-10-13: trial 535, exported, passes against Trial 170 exported the same way, and ships (`runs/rude/exports/trial-535/`); see `results/milestone-rude-llama-vs-heretic.md` |
-| 3 | Qwen3.5-9B, a thinking model: scored with thinking on at your settings; residuals read on a pod | Written in step 4 before any search runs, from the measured noise, against heretic's own Trial 161 exported and measured as candor ships its edits | Steps 1 and 2 done 2026-10-13 (below); step 3 next |
+| 3 | Qwen3.5-9B, a thinking model: scored with thinking on at your settings; residuals read on a pod | Written in step 4 before any search runs, from the measured noise, against heretic's own Trial 161 exported and measured as candor ships its edits | Steps 1-3 done 2026-10-13 (below); step 4 next |
 | 4 | K2-Horizon at your real settings | Measured honestly with its own chat template (Bionic couldn't parse it; llama-server's reader is to be checked) and the reasoning level you use, then improved | |
 
 From phase 3 a job expected to take over about 2 hours, or needing more memory than the Mac has,
@@ -36,7 +36,7 @@ phase 3: `results/phase-3-qwen3.5-9b.md`).
 
 ### Next
 
-1. Phase 3, step 3: the method changes from the thinking-model research (decisions and steps below).
+1. Phase 3, step 4: Qwen3.5-9B on a pod (steps below), with the user's go and the price first.
 2. Not blocking, each when there is a reason:
    - one search on a pod with the attention peak's floor and its reach's ceiling widened (535 presses
      both, at 0.6); wider ranges become the default only if its held-out best beats 535's;
@@ -91,12 +91,16 @@ with thinking on; every working community recipe turns thinking off. So:
   harmless prompt, only those whose thinking finished), not after an empty thinking block, which
   measures thinking-off; the empty-block KL is kept beside it. No paper validates it, so step 4
   checks it separates the unedited model from Trial 161 by more than sampling noise.
-- Strength 0.5-3.0 for Qwen3.5. heretic's K2 run refused at best 54/100 with a ceiling of 1.5 and
-  7/100 with 5.0 (peaks 4.5-4.6, row normalisation "full"); Trial 161's peaks are 1.42-1.46 of
-  1.5; a 27B Qwen hybrid's weight edit collapsed at 2.0; Qwen3.5-2B needed 0.5. Strengths under
-  "full" and candor's "pre" aren't the same scale. K2-Horizon gets its own range in phase 4.
-- The search's miss rate is measured again on the test landscapes with the position choice and the
-  wider range, before it runs.
+- Strength may reach 0.5-3.0 for Qwen3.5. heretic's K2 run refused at best 54/100 with a ceiling
+  of 1.5 and 7/100 with 5.0 (peaks 4.5-4.6, row normalisation "full"); Trial 161's peaks are
+  1.42-1.46 of 1.5; a 27B Qwen hybrid's weight edit collapsed at 2.0; Qwen3.5-2B needed 0.5.
+  Strengths under "full" and candor's "pre" aren't the same scale. K2-Horizon gets its own range in
+  phase 4.
+- The miss-rate check, rerun on the test landscapes, changed that (results file, step 3): a fixed
+  0.5-3.0 halved the hits when the best lies inside 0.8-1.5. So the search starts at 0.8-1.5 and
+  widens an end to 0.5 or 3.0 itself when a kind's best edit presses it, which stayed within about
+  12 points of the wide range where the best needed it. The position is a parameter of each kind's
+  study, its 20 start points split evenly; four studies were 12-17 points worse. 600 trials stay.
 - The fallback, built only if the pilot fails: 3-5 directions, or ARA, instead of 2605.21706's
   method, which edits activations and can't be a weight edit. If candor's "pre" edits fail where
   Trial 161 ("full") worked, row normalisation is the first suspect.
@@ -109,7 +113,7 @@ with thinking on; every working community recipe turns thinking off. So:
 | --- | --- | --- |
 | 1 | Thinking-model settings: sampling with a seed per prompt, the thinking budget with a forced close (llama-server's own), the judge reading only the final answer, an answer that never comes counted as a refusal, KL at the answer start; `serve` at the same settings; `measure --seed` for the noise check; `export --outside` and `measure --outside` to ship and measure heretic's own save of Trial 161 like candor's edits (the user's choice: heretic made it with row normalisation "full", rank-3, which candor can't rebuild). Checked on a tiny thinking model in the real llama-server and SmolLM2 | Done 2026-10-13, reviewed: 2 major findings (the chat page forces `\n</think>` after the message, so measurements now force the same; a heretic trial read after a `response_prefix` is refused, not rebuilt wrongly) and 6 minor ones fixed, each with a test that fails without its fix |
 | 2 | Pod bootstrap, torch's CUDA build matched to llama.cpp's 12.8, and an in-pod watchdog that deletes the pod at a budget; checked on rude-llama | Done 2026-10-13: `scripts/pod.sh` and its watchdog, armed from the pod's own start command; reviewed until clean (9 findings, then a regression they caused, then none), each fixed with a test that fails without it. On an A40 the run matched the Mac (F16 GGUF and prompt ids byte-identical, directions at cosine 0.9999, the same counts on 60 answers but one maths cut-off) and the watchdog deleted the pod itself; about $0.51. Qwen3.5's fast kernels left out: transformers only reads residuals of short prompts (README). Results file |
-| 3 | The method changes above: directions at both positions with the search choosing, KL after the unedited model's thinking, strength 0.5-3.0, the miss-rate check rerun, and the research table corrected | |
+| 3 | The method changes above: directions at both positions with the search choosing, KL after the unedited model's thinking, strength widened up to 0.5-3.0 where a kind's best presses 0.8-1.5, the miss-rate check rerun, and the research table corrected | Done 2026-10-13, reviewed: no correctness bug, 6 findings fixed (a kill while widening and how the unedited thinking is sampled were untested; `upgrade` refused a strength past 3.0; the `--lora` limit below; no progress while the unedited model thinks; a misleading upgrade message), each with a test that fails without its fix. Miss-rate numbers in the results file |
 | 4 | Qwen3.5-9B on a pod: `init`, `run`, the unedited model measured twice (noise), heretic's own Trial 161 re-saved, exported and measured with `--outside`, thinking lengths, KL at each position. The decision rule written from them, for sign-off | |
 | 5 | A search pilot (time and cost per trial, the search's thinking budget), then the full search | |
 | 6 | The suggested trials measured at 8192, export on the pod, the final check on that file, copied to the Mac as it is (each machine quantises differently), `serve` on the Mac | |
@@ -129,7 +133,7 @@ sampler draws unchanged. On the calibrated test landscape it got within 10% of t
 runs at 400 trials and 93% at 600 (the first design: 20% and 23%), and was no worse on any landscape
 tested. It is not watertight: on the harshest landscape it still missed in most runs. Repeats aren't
 built (whether two agreed didn't predict a miss); the search flags suggested trials that press the
-end of a range instead.
+end of a range instead, and from phase 3 widens strength itself when a kind's best presses it.
 
 The check, set before it ran: one search with no heretic recipe as a start passes if a trial it
 suggests refuses at most 6 of 288 held-out prompts at KL 0.1041 or less. Trial 535 refuses 5 at KL
@@ -182,10 +186,11 @@ From the 2026-10-10 paper review, corrected after the full review read each pape
 | One count on 100 prompts can't separate close models (2609.25173 for unpaired sampled runs; heretic's transformers scoring varied by 1-2 refusals with batch size). Measured in llama-server on rude-llama: 0 of 588 held-out answers and 5 of 1,319 maths answers changed between 8 and 16 slots, KL 0.0000 | Measure the noise floor; compare paired on a held-out set; scoring is greedy, so seeds matter only for sampled checks | Phase 2 step 4 |
 | First-token KL misses lost ability (2512.13655: -4.5pp GSM8K at KL 0.043) | The full GSM8K test set, paired against the same quantised file; multiple-choice flips only as a warning (2407.09141) | Phase 2 step 4 |
 | Re-quantising after an edit can bring refusals back (2609.09793) | The last check runs on the exact file you ship, with your KV cache type (2606.09864; already used for all scoring). On rude-llama, whose weights were 4-bit before, Q4_K kept only 55-98% of each edited weight's change and refusals went from 5 to 161 of 288, so `export` measures every edited weight's kept share and quantises lossy ones as Q8_0 | Phase 2 step 6, done |
-| Thinking mode changes refusals (2509.00544); the think start and think close are decision points in distilled reasoning models (2609.18471, 2510.06036) | Score in the mode and at the level(s) you run, with answers long enough to finish thinking, judged on the final answer with unfinished answers counted separately (2609.09793). candor's directions are already read at the think start | Phases 3-4 |
-| A plain single-direction edit barely worked on Qwen3.5-9B (2605.21706: 3.3%, against 92-97% for an edit pushed a fixed margin past the refusal boundary) | Measure Qwen3.5 properly before trusting heretic's Trial 161; plan a past-the-boundary variant | Phase 3 |
-| A direction averaged over the reasoning (2507.03167: better on R1-Distill-Llama-8B, worse on Qwen3-8B); one direction from a mixed prompt pool beats per-category ones (2602.02132) | Build directions from prompts like the refusals you actually hit; a reasoning-averaged set only if refusals remain | Phases 3-4 |
-| Multi-direction edits (2511.08379; about 10% on Qwen3.5-9B in 2605.21706) and cleaned directions (2601.08489, single author, untuned baseline) | Not planned | |
+| Thinking mode changes refusals (2509.00544). Whether to read a direction at the think start or the think close is split: refuse-or-comply is predictable at the first thinking token (2606.25013: AUROC 0.84-0.95, rarely changing after 20% of the thinking), 2510.06036 finds a refusal cliff at the think close but little in Qwen3-Thinking, and our K2 directions at the two places had a cosine of 0.2-0.5. (2609.18471, cited here before, never looks at the think close.) | Score in the mode and at the level(s) you run, with answers long enough to finish thinking, judged on the final answer with unfinished answers counted against the edit (2609.09793). Directions read at both places, the search choosing per trial | Phases 3-4; phase 3 step 3 |
+| One direction at a strength near 1 fails on Qwen-family thinking models of 8B and up: 7% attack success on Qwen3-8B (2607.02396), heretic's default on Qwen3.5-9B still refusing 70/100 after 800 trials (heretic #404, confounded by keywords read in the thinking). 2605.21706's 3.3% doesn't bear on this: it edits activations along SVM-probe directions with a margin searched per layer, and never thinks. Strengths that worked: 1.4-1.6 on a 27B Qwen hybrid's weights (2.0 collapsed it), 4.5-4.6 on K2-Horizon under heretic's "full" row normalisation, 0.5 on Qwen3.5-2B | Measure Qwen3.5 properly before trusting heretic's Trial 161; strength from 0.8-1.5, widened up to 0.5-3.0 where a kind's best edit presses it | Phase 3 |
+| A direction averaged over the reasoning (2507.03167: clearly better on R1-Distill-Llama-8B, 0.4% against 10.1% refused; a tie on Qwen3-8B's full set, 7.5% against 8.5%); one direction from a mixed prompt pool beats per-category ones (2602.02132) | Build directions from prompts like the refusals you actually hit; a reasoning-averaged set only if refusals remain | Phases 3-4 |
+| More directions help on Qwen3-8B: 7% attack success with one, 62% with three, 73% with five (2607.02396); heretic's unreleased ARA, a rank-50 edit pushing harmful outputs past harmless ones, took Qwen3.5-4B from over 50/100 refused to 4/100 at KL 0.14. Cleaned directions (2601.08489, single author, untuned baseline) | 3-5 directions or ARA only if the phase 3 pilot fails | Phase 3, if needed |
+| First-token KL after an empty thinking block measures the model thinking-off. Ablation can make thinking run on (2507.03167: unfinished thinking from 2.4% to 39.9%), heretic #253 reports thinking loops KL didn't catch, and Arditi's most sensitive damage measure was loss on the unedited model's own completions (2406.11717) | KL read after the unedited model's own thinking; KL after an empty block and the thinking's length kept beside it | Phase 3 step 3 |
 
 ## Not in this plan
 
@@ -198,8 +203,11 @@ From the 2026-10-10 paper review, corrected after the full review read each pape
   sampler that found Trial 170. Optuna 5 changed multivariate TPE's bandwidth and its
   multi-objective weights; worth trying once candor has its own baseline, for example on Qwen3.5.
 - Models of 64 layers or more: the `--lora` list of every adapter set passes Linux's 128 KiB
-  argument limit (about 34 KB for rude-llama's 28 layers, 46 KB for 32). Not needed for the three
-  models in this plan; shorter adapter names would fix it.
+  argument limit (about 34 KB for rude-llama's 28 layers, 46 KB for 32). A thinking model loads
+  adapters for both places directions are read, about doubling it: Qwen3.5-9B's 32 layers come to
+  about 97 KB, 118 KB once `score` adds its own, so a thinking model of more than about 36 layers
+  won't start (the server check fails loudly). Check K2-Horizon's layers before phase 4; shorter
+  adapter names would fix it.
 - Reporting the llama.cpp prompt-cache bug upstream: not wanted.
 - Separate tracks, outside candor: the Qwen3.5 rude fine-tune and the Mac Studio purchase.
 

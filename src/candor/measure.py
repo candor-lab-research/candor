@@ -16,11 +16,11 @@ from dataclasses import asdict, dataclass
 from pathlib import Path
 from typing import Any
 
-from . import config, export, heretic, kl
+from . import export, heretic, kl
 from .engine import LlamaServer, Thinking
 from .judge import Guard, is_refusal, judged_refusal, read_verdict
 from .kernel import Kernel
-from .run import HELD_OUT, Run, RunError, digest, load_prompts, seeds, sync
+from .run import ANSWERING, HELD_OUT, Run, RunError, answering, digest, load_prompts, seeds, sync
 from .targets import Writer
 
 SETS = ("harmful_held_out", "harmless_held_out", "maths")
@@ -49,12 +49,14 @@ def no_progress(_description: str, _total: int) -> Callable[[], None]:
 
 @dataclass(frozen=True)
 class Edit:
-    """A finished edit: the refusal direction every layer uses (None: each layer its own) and how
-    strongly each component is edited at each layer."""
+    """A finished edit: the refusal direction every layer uses (None: each layer its own), read where a
+    thinking model's answer starts rather than at the end of the prompt when answering, and how strongly
+    each component is edited at each layer."""
 
     name: str
     direction_layer: float | None
     kernels: dict[str, Kernel]
+    answering: bool = False
 
     def strength(self, writer: Writer) -> float:
         kernel = self.kernels.get(writer.component)
@@ -66,7 +68,9 @@ class Edit:
 
     def record(self) -> dict[str, Any]:
         kernels = {component: asdict(kernel) for component, kernel in sorted(self.kernels.items())}
-        return {"direction_layer": self.direction_layer, "kernels": kernels}
+        # Only when set, so the records of edits read at the end of the prompt are as they were.
+        position = {"answering": True} if self.answering else {}
+        return {"direction_layer": self.direction_layer, "kernels": kernels, **position}
 
 
 def heretic_trial(journal_path: Path, number: int, row_norm: str) -> Edit:
@@ -104,32 +108,9 @@ def heretic_trial(journal_path: Path, number: int, row_norm: str) -> Edit:
 def edit_adapters(run: Run, edit: Edit, folder: Path) -> tuple[dict[str, Path], dict[str, Any]]:
     """An edit's own adapters, one per edit target along the direction it reads, written to folder
     unless already there, by GGUF tensor name; and what they are built from."""
-    directions = run.edit_directions(edit.name, edit.direction_layer)
-    inputs = {**run.adapter_inputs(), "direction_layer": edit.direction_layer}
+    directions = run.edit_directions(edit.name, edit.direction_layer, edit.answering)
+    inputs = {**run.adapter_inputs(edit.answering), "direction_layer": edit.direction_layer}
     return run.adapter_set(folder, directions, inputs), inputs
-
-
-def answering(settings: config.RunConfig) -> dict[str, Any]:
-    """How the model answers, for the records of what its answers depend on: its sampling, the seed
-    left out, unless it answers greedily as by default, and a thinking model's thinking. Nothing for a
-    greedy model that doesn't think, so the records of runs made before candor sampled still match."""
-    found: dict[str, Any] = {}
-    if settings.sampling != config.Sampling(seed=settings.sampling.seed):
-        found["sampling"] = settings.sampling.model_dump(exclude={"seed"})
-    if thinking := thinking_settings(settings.deployment):
-        found["thinking"] = thinking
-    return found
-
-
-def thinking_settings(deployment: config.Deployment) -> dict[str, Any] | None:
-    """How a thinking model's answers are capped, for the records of what they depend on."""
-    if deployment.think_close is None:
-        return None
-    return {
-        "close": deployment.think_close,
-        "budget": deployment.thinking_budget,
-        "message": deployment.thinking_budget_message,
-    }
 
 
 def gold_number(answer: str) -> float:
@@ -220,9 +201,17 @@ class Measurement:
                 edit = {"exported": digest(made_from)}
             elif self.edit:
                 scales, edit = self._adapters()
+            # For a thinking model, KL is read after the unedited model's own thinking, which every
+            # measurement compared with this one must share.
+            kl_ids = run.kl_ids(all_ids, "harmless_held_out", self.limit)
+            if not kl_ids:
+                raise RunError(
+                    f"the unedited model's thinking ended by itself on none of the first {self.limit} "
+                    "held-out harmless prompts, so KL can't be read after it; measure more of them"
+                )
             answered, todo = {}, []
             for name in SETS:
-                inputs = self._answer_inputs(name, ids[name], edit)
+                inputs = self._answer_inputs(name, ids[name], edit, kl_ids)
                 reused = self._reused(name, inputs)
                 if reused is None:
                     todo.append((name, inputs))
@@ -239,11 +228,16 @@ class Measurement:
                     for name, inputs in todo:
                         prompts = self._texts(name)
                         run.check_prompts(server, name, prompts, ids[name])
-                        kl_ids = (
-                            run.kl_ids(all_ids, name)[: self.limit] if name == "harmless_held_out" else []
-                        )
+                        firsts = {}
+                        if name == "harmless_held_out":
+                            firsts["first_token"] = kl_ids
+                            if thinking:
+                                # Also where the thinking starts, and where the answer starts after an
+                                # empty thinking block, to see which of the three tells edits apart.
+                                firsts["first_token_thinking"] = ids[name]
+                                firsts["first_token_empty"] = all_ids[name + ANSWERING][: self.limit]
                         answered[name] = self._answer(
-                            server, name, ids[name], kl_ids, prompts, scales, thinking, inputs
+                            server, name, ids[name], firsts, prompts, scales, thinking, inputs
                         )
             try:
                 judged = {name: self._judged(name, answered[name]) for name in HELD_OUT}
@@ -261,7 +255,9 @@ class Measurement:
         scales = {files[name]: strength for name, strength in strengths.items() if strength}
         return scales, {"adapters": digest(inputs), **self.edit.record(), "strengths": strengths}
 
-    def _answer_inputs(self, name: str, ids: list[list[int]], edit: dict[str, Any] | None) -> dict[str, Any]:
+    def _answer_inputs(
+        self, name: str, ids: list[list[int]], edit: dict[str, Any] | None, kl_ids: list[list[int]]
+    ) -> dict[str, Any]:
         """What a set's answers depend on. Everything but the edit and the slots must match for two
         measurements to be compared. An export counts as its edit: it is the run's model, quantised
         the same way, with the edit merged in."""
@@ -276,6 +272,8 @@ class Measurement:
         }
         if name == "harmless_held_out":
             paired["kl_tokens"] = run.settings.scoring.kl_tokens
+            if deployment.think_close:
+                paired["kl_ids"] = digest(kl_ids)
         inputs = {"paired": paired, "edit": edit, "slots": self.slots}
         # The seed decides which random draws sampled answers meet. Two measurements with different
         # seeds are still compared, prompt by prompt, to see how much sampling alone moves the counts.
@@ -312,7 +310,7 @@ class Measurement:
         server: LlamaServer,
         name: str,
         ids: list[list[int]],
-        kl_ids: list[list[int]],
+        firsts: dict[str, list[list[int]]],
         prompts: list[str],
         scales: dict[Path, float],
         thinking: Thinking | None,
@@ -351,14 +349,10 @@ class Measurement:
             result["correct"] = [
                 is_correct(a.text, g, a.finished) for a, g in zip(answers, gold, strict=True)
             ]
-        if name == "harmless_held_out":
-            done = self.progress(f"{SHORT_LABELS[name]}: first tokens", len(kl_ids))
-            top = server.top_logprobs(kl_ids, settings.scoring.kl_tokens, scales, done)
-            result["first_token"] = [[[t, p] for t, p in sorted(found.items())] for found in top]
-            if thinking:
-                # Also where the thinking starts, to see which of the two tells edits apart.
-                top = server.top_logprobs(ids, settings.scoring.kl_tokens, scales)
-                result["first_token_thinking"] = [[[t, p] for t, p in sorted(found.items())] for found in top]
+        for key, prompts_read in firsts.items():
+            done = self.progress(f"{SHORT_LABELS[name]}: first tokens", len(prompts_read))
+            top = server.top_logprobs(prompts_read, settings.scoring.kl_tokens, scales, done)
+            result[key] = [[[t, p] for t, p in sorted(found.items())] for found in top]
         result |= {
             "seconds": time.perf_counter() - started,
             "slots": self.slots,
@@ -538,9 +532,9 @@ def compare(a: dict[str, dict[str, Any]], b: dict[str, dict[str, Any]]) -> list[
     rows.append(
         ("Harmless KL from A", "", f"{_kl(harmless_a['first_token'], harmless_b['first_token']):.4f}")
     )
-    if "first_token_thinking" in harmless_a and "first_token_thinking" in harmless_b:
-        divergence = _kl(harmless_a["first_token_thinking"], harmless_b["first_token_thinking"])
-        rows.append(("Harmless KL from A, thinking start", "", f"{divergence:.4f}"))
+    for key, where in (("first_token_empty", "empty thinking"), ("first_token_thinking", "thinking start")):
+        if key in harmless_a and key in harmless_b:
+            rows.append((f"Harmless KL from A, {where}", "", f"{_kl(harmless_a[key], harmless_b[key]):.4f}"))
     rows = [(*row, *[""] * (6 - len(row))) for row in rows]
     seed_a, seed_b = a["maths"].get("seed"), b["maths"].get("seed")
     if seed_a != seed_b:
