@@ -1,6 +1,7 @@
 """Write an edited copy of a model folder without going through transformers."""
 
 import shutil
+from collections.abc import Callable, Mapping
 from pathlib import Path
 
 from safetensors import safe_open
@@ -11,6 +12,8 @@ from .source import INDEX, local_headers, weight_files
 from .targets import QUANTIZATION
 
 EDITABLE = {"BF16", "F16", "F32"}
+# How a weight is edited: by adding b @ a, or by a function of the original weight giving the edited one.
+Change = tuple[Tensor, Tensor] | Callable[[Tensor], Tensor]
 OTHER_WEIGHT_FORMATS = {".bin", ".pt", ".pth", ".ckpt", ".gguf", ".h5", ".msgpack"}
 
 
@@ -32,8 +35,16 @@ def _check(source: Path, names: set[str]) -> None:
             )
 
 
-def merge(source: Path, destination: Path, deltas: dict[str, tuple[Tensor, Tensor]]) -> list[str]:
-    """Copy a model folder, adding b @ a to each named weight, and return the files left out.
+def edited(weight: Tensor, change: Change) -> Tensor:
+    """The weight after its change, in float32."""
+    if callable(change):
+        return change(weight).float()
+    b, a = change
+    return weight.float() + b.float() @ a.float()
+
+
+def merge(source: Path, destination: Path, changes: Mapping[str, Change]) -> list[str]:
+    """Copy a model folder with each named weight changed, and return the files left out.
 
     Every other file, config and tokenizer included, is copied byte for byte, so nothing gets
     rewritten the way transformers' save_pretrained does it. Weight files the model's index doesn't
@@ -45,14 +56,14 @@ def merge(source: Path, destination: Path, deltas: dict[str, tuple[Tensor, Tenso
     shards = weight_files(source)
     if not shards:
         raise FileNotFoundError(f"{source} has no model.safetensors and no {INDEX}")
-    _check(source, set(deltas))
+    _check(source, set(changes))
     if destination.exists():
         raise FileExistsError(f"{destination} already exists")
     partial = destination.with_name(destination.name + ".partial")
     if partial.exists():
         shutil.rmtree(partial)
     partial.mkdir(parents=True)
-    pending = dict(deltas)
+    pending = dict(changes)
     left_out = []
     for path in sorted(source.iterdir()):
         if not path.is_file():
@@ -70,9 +81,8 @@ def merge(source: Path, destination: Path, deltas: dict[str, tuple[Tensor, Tenso
             metadata = f.metadata()
         tensors = load_file(path)
         for name in tensors.keys() & pending.keys():
-            b, a = pending.pop(name)
             weight = tensors[name]
-            tensors[name] = (weight.float() + b.float() @ a.float()).to(weight.dtype)
+            tensors[name] = edited(weight, pending.pop(name)).to(weight.dtype)
         save_file(tensors, partial / path.name, metadata=metadata)
     partial.rename(destination)
     return left_out

@@ -1,13 +1,14 @@
 import re
 import shutil
+from dataclasses import replace
 
 import gguf
 import pytest
 import torch
-from safetensors.torch import load_file
+from safetensors.torch import load_file, save_file
 from typer.testing import CliRunner
 
-from candor import config, convert, export, measure, run
+from candor import config, convert, export, measure, merge, run
 from candor.cli import app
 from candor.convert import check_targets
 from candor.convert import quantize as real_quantize
@@ -20,7 +21,7 @@ from .test_engine import LLAMA_SERVER
 from .test_measure import EDIT
 from .test_run import TEMPLATE
 from .test_search import write_journal
-from .tiny_gguf import random_weights, write_model
+from .tiny_gguf import HIDDEN, random_weights, write_model
 from .tiny_run import HF_NAMES
 
 GGUF_NAMES = {hf: kind for kind, hf in HF_NAMES.items()}
@@ -51,7 +52,7 @@ def converting(tiny, monkeypatch):
 
 
 def kl_between(a, b):
-    return float(measure.compare(a, b)[-1][2])
+    return float(next(row for row in measure.compare(a, b) if row[0] == "Harmless KL from A")[2])
 
 
 @pytest.mark.parametrize("row_norm", ["pre", "none"])
@@ -290,3 +291,100 @@ def test_export_and_measure_it_from_the_command_line(tiny, converting):
 def test_exported_needs_a_trial(tiny):
     result = CliRunner().invoke(app, ["measure", str(tiny.folder), "--exported"])
     assert result.exit_code == 2 and "--trial" in result.output
+
+
+def saved_elsewhere(tiny, rename=lambda name: name, called="saved"):
+    """A copy of the tiny model with EDIT merged in, as another tool would save it."""
+    folder = tiny.folder.parent / called
+    merge.merge(tiny.model_folder, folder, export.deltas(tiny, EDIT))
+    weights = load_file(folder / "model.safetensors")
+    save_file({rename(name): tensor for name, tensor in weights.items()}, folder / "model.safetensors")
+    return folder
+
+
+def test_a_model_edited_elsewhere_ships_and_measures_as_the_same_edit_of_candors(tiny, converting):
+    tiny.gguf()
+    folder = saved_elsewhere(tiny)
+    said = []
+    tiny.report = said.append
+    shipped = export.export_outside(tiny, "saved", folder)
+    assert shipped == tiny.path("exports", "saved", "tiny-saved-Q4_K_M.gguf")
+    assert f"Taking the {len(export.deltas(tiny, EDIT))} edited weights from {folder}" in said
+    export.export(tiny, EDIT)
+    theirs = Measurement(tiny, None, "saved", outside="saved").measure()
+    ours = Measurement(tiny, EDIT, "merged", exported=True).measure()
+    assert kl_between(ours, theirs) < 1e-5
+    assert export.export_outside(tiny, "saved", folder) == shipped and len(converting) == 2
+
+
+def test_a_model_edited_elsewhere_is_exported_again_once_it_changes(tiny, converting):
+    tiny.gguf()
+    folder = saved_elsewhere(tiny)
+    export.export_outside(tiny, "saved", folder)
+    weights = folder / "model.safetensors"
+    save_file(load_file(weights), weights)
+    with pytest.raises(RunError, match="saved's export no longer matches this run or"):
+        Measurement(tiny, None, "saved", outside="saved").measure()
+    export.export_outside(tiny, "saved", folder)
+    assert len(converting) == 2
+    Measurement(tiny, None, "saved", outside="saved").measure()
+
+
+def test_a_model_edited_elsewhere_names_its_layers_without_language_model(tiny, converting, monkeypatch):
+    tiny.gguf()
+    folder = saved_elsewhere(tiny)
+    _, layers, arch, writers = tiny.shape
+    wrapped = [replace(w, name=w.name.replace("model.", "model.language_model.", 1)) for w in writers]
+    monkeypatch.setitem(tiny.__dict__, "shape", (HIDDEN, layers, arch, wrapped))
+    monkeypatch.setattr(export, "ModelFiles", wrapping(tiny.model_folder))
+    changes = export.taken_from(tiny, folder)
+    assert set(changes) == {w.name for w in wrapped if EDIT.strength(w)}
+
+
+def wrapping(model_folder):
+    """ModelFiles that read model_folder as if its layers were named model.language_model.*, as a
+    multimodal model's are."""
+    real = export.ModelFiles
+
+    class Wrapped(real):
+        def tensor(self, name):
+            return super().tensor(name.replace("model.language_model.", "model.", 1))
+
+    return lambda folder: Wrapped(folder) if folder == model_folder else real(folder)
+
+
+def test_models_edited_elsewhere_that_cant_be_taken_are_refused(tiny, converting):
+    tiny.gguf()
+    with pytest.raises(RunError, match="holds the run's model unchanged in every edit target"):
+        export.export_outside(tiny, "same", tiny.model_folder)
+    for reserved in ("trial-3", "base", "heretic-161-exported"):
+        with pytest.raises(RunError, match=f"{reserved} is how candor names its own edits and measurements"):
+            export.export_outside(tiny, reserved, tiny.model_folder)
+    saved_elsewhere(tiny)
+    folder = saved_elsewhere(tiny, lambda name: name.replace("down_proj", "w2"), "renamed")
+    with pytest.raises(
+        RunError, match=re.escape("has no weight for the edit target model.layers.0.mlp.down_proj.weight")
+    ):
+        export.export_outside(tiny, "renamed", folder)
+    with pytest.raises(RunError, match="has no export in Q4_K_M; run candor export --outside first"):
+        Measurement(tiny, None, "missing", outside="missing").measure()
+
+
+def test_the_command_line_exports_and_measures_a_model_edited_elsewhere(tiny, converting):
+    tiny.gguf()
+    folder = saved_elsewhere(tiny)
+    config.write(tiny.folder.parent, "cli", tiny.settings, "made by a test")
+    run_folder = tiny.folder.parent / "cli"
+    runner = CliRunner(env={"COLUMNS": "200"})
+    unnamed = runner.invoke(app, ["export", str(run_folder), "--outside", str(folder)])
+    assert unnamed.exit_code == 2 and "--name" in unnamed.output
+    both = runner.invoke(
+        app, ["export", str(run_folder), "--trial", "1", "--outside", str(folder), "--name", "x"]
+    )
+    assert both.exit_code == 2
+    exported = runner.invoke(app, ["export", str(run_folder), "--outside", str(folder), "--name", "saved"])
+    assert exported.exit_code == 0, exported.output
+    assert f"uv run candor measure {run_folder} --outside saved" in exported.output
+    measured = runner.invoke(app, ["measure", str(run_folder), "--outside", "saved"])
+    assert measured.exit_code == 0, measured.output
+    assert (run_folder / "measurements" / "saved" / "maths.json").exists()

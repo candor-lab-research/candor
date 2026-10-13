@@ -12,7 +12,8 @@ from candor.run import RunError
 from candor.targets import Writer
 
 from .test_heretic import PARAMETERS
-from .tiny_run import FakeGuard, fake_prompts
+from .tiny_gguf import END_THINK, THINK, THINKING_TOKENS
+from .tiny_run import FakeGuard, fake_prompts, thinking
 
 EDIT = Edit("trial", 0.4, {"attn": Kernel(1.2, 1.0, 0.8, 1.0), "mlp": Kernel(1.0, 0.0, 0.5, 1.0)})
 
@@ -292,6 +293,14 @@ def test_a_heretic_trial_is_read_as_an_edit(tmp_path):
         ({"row_normalization": "pre", "winsorization_quantile": 0.95}, "winsorised"),
         ({"row_normalization": "pre", "orthogonalize_direction": False}, "orthogonalising"),
         ({"row_normalization": "pre"}, "orthogonalising"),
+        (
+            {
+                "row_normalization": "pre",
+                "orthogonalize_direction": True,
+                "response_prefix": "\n</think>\n\n",
+            },
+            "response prefix",
+        ),
     ],
 )
 def test_a_heretic_trial_built_differently_is_refused(tmp_path, settings, problem):
@@ -307,3 +316,93 @@ def test_an_unreadable_journal_is_named(tmp_path):
         RunError, match=r"couldn't read .*study\.jsonl as a heretic study \(JSONDecodeError\)"
     ):
         measure.heretic_trial(broken, 1, "pre")
+
+
+def recording(monkeypatch, method: str) -> list:
+    """Every call to one of the server's methods: its prompts, and what it returned."""
+    calls = []
+    real = getattr(LlamaServer, method)
+
+    def record(self, prompts, *args, **kwargs):
+        result = real(self, prompts, *args, **kwargs)
+        calls.append((prompts, result))
+        return result
+
+    monkeypatch.setattr(LlamaServer, method, record)
+    return calls
+
+
+def test_a_thinking_models_prompts_are_also_kept_with_their_thinking_closed(tiny):
+    ids = thinking(tiny).prompt_ids()
+    think, end = THINKING_TOKENS.index(THINK), THINKING_TOKENS.index(END_THINK)
+    assert all(think in prompt and end not in prompt for prompt in ids["harmful_test"])
+    for name in run.KL_SETS:
+        closed = ids[name + run.ANSWERING]
+        assert [len(p) for p in closed] > [len(p) for p in ids[name]] and all(end in p for p in closed)
+        assert tiny.kl_ids(ids, name) == closed
+
+
+def test_a_thinking_model_is_judged_on_its_answers_alone_and_kl_is_read_where_they_start(tiny, monkeypatch):
+    thinking(tiny)
+    generated, first_tokens = recording(monkeypatch, "generate"), recording(monkeypatch, "top_logprobs")
+    results = Measurement(tiny, None, "base").measure()
+    held_out = [answer for _, found in generated[: len(run.HELD_OUT)] for answer in found]
+    assert FakeGuard.read == [a.text for a in held_out] and sum(a.thinking for a in held_out) > 0
+    for name in measure.SETS:
+        assert len(results[name]["thinking"]) == len(results[name]["forced"]) == 3
+    assert first_tokens[0][0] == tiny.prompt_ids()["harmless_held_out" + run.ANSWERING]
+    rows = dict(measure.summary(results))
+    assert rows["Harmful, thinking cut"].endswith("/3") and rows["Maths, thinking tokens"].startswith(
+        "median"
+    )
+    assert len(results["harmless_held_out"]["first_token_thinking"]) == 3
+    assert first_tokens[1][0] == tiny.prompt_ids()["harmless_held_out"]
+
+
+def test_the_same_seed_samples_the_same_answers_and_another_is_still_compared(tiny):
+    thinking(tiny)
+    first = Measurement(tiny, None, "base").measure()
+    again = Measurement(tiny, None, "again").measure()
+    other = Measurement(tiny, None, "base-seed-5", seed=5).measure()
+    assert first["maths"]["answers"] == again["maths"]["answers"] != other["maths"]["answers"]
+    assert other["maths"]["seed"] == 5
+    rows = {row[0]: row for row in measure.compare(first, other)}
+    assert rows["Sampling seed"][1:3] == ("0", "5") and "Harmful, thinking cut" in rows
+    assert "Sampling seed" not in {row[0] for row in measure.compare(first, again)}
+
+
+def test_a_template_that_doesnt_open_the_thinking_is_refused(tiny):
+    tiny.settings.deployment = config.Deployment(
+        think_close="</think>", thinking_budget=6, thinking_budget_message=""
+    )
+    tiny.settings.scoring.answer_tokens = 16
+    with pytest.raises(RunError, match="doesn't end a prompt by opening the thinking with <think>"):
+        Measurement(tiny, None, "base").measure()
+
+
+def test_a_greedy_model_that_doesnt_think_keeps_the_records_it_had_before_candor_sampled(tiny):
+    tiny.gguf()
+    measurement = Measurement(tiny, None, "base")
+    inputs = measurement._answer_inputs("maths", [[1]], None)
+    assert set(inputs) == {"paired", "edit", "slots"} and not {"sampling", "thinking"} & set(inputs["paired"])
+    tiny.settings.sampling.temperature = 0.6
+    inputs = measurement._answer_inputs("maths", [[1]], None)
+    assert inputs["seed"] == 0 and inputs["paired"]["sampling"]["temperature"] == 0.6
+
+
+def test_a_prompt_that_opens_thinking_needs_a_think_close(tiny):
+    thinking(tiny).settings.deployment = config.Deployment()
+    with pytest.raises(
+        RunError, match=r"ends by opening the model's thinking, but deployment\.think_close isn't set"
+    ):
+        Measurement(tiny, None, "base").measure()
+
+
+def test_comparing_thinking_measurements_shows_kl_where_the_thinking_starts(tiny):
+    thinking(tiny)
+    base = Measurement(tiny, None, "base").measure()
+    edited = Measurement(tiny, EDIT, "edited").measure()
+    rows = {row[0]: row for row in measure.compare(base, edited)}
+    assert (
+        float(rows["Harmless KL from A, thinking start"][2]) > 0 and float(rows["Harmless KL from A"][2]) > 0
+    )

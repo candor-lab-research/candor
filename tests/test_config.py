@@ -213,3 +213,37 @@ def test_settings_candor_no_longer_uses_are_refused_and_upgrade_removes_them(tmp
     assert retired == ["search.trials", "search.startup_trials", "search.kl_target"]
     assert added == ["search.trials_per_scope", "search.startup_per_scope"]
     assert upgraded.search == config.Search()
+
+
+def test_a_thinking_model_needs_a_budget_and_one_end_tag():
+    thinking = config.Deployment(think_close="\n</think>\n\n", thinking_budget=8192)
+    assert thinking.tags() == ("<think>", "</think>")
+    assert config.Deployment(think_close="</ifm|think>", thinking_budget=5).tags() == (
+        "<ifm|think>",
+        "</ifm|think>",
+    )
+    with pytest.raises(ValidationError, match="needs a thinking_budget"):
+        config.Deployment(think_close="</think>")
+    with pytest.raises(ValidationError, match="the model doesn't think"):
+        config.Deployment(thinking_budget=5)
+    for close in ["<think>", "</think> answer", "</think></think>", "think"]:
+        with pytest.raises(ValidationError, match="one end tag"):
+            config.Deployment(think_close=close, thinking_budget=5)
+
+
+def test_a_search_budget_needs_a_model_that_thinks():
+    with pytest.raises(ValidationError, match="doesn't think"):
+        RunConfig(model=Model(source="org/model"), scoring=config.Scoring(thinking_budget=100))
+    thinking = config.Deployment(think_close="</think>", thinking_budget=8192)
+    RunConfig(
+        model=Model(source="org/model"), deployment=thinking, scoring=config.Scoring(thinking_budget=100)
+    )
+
+
+def test_thinking_and_sampling_settings_read_back(tmp_path):
+    written = settings()
+    written.deployment = config.Deployment(think_close="\n</think>\n\n", thinking_budget=8192)
+    written.sampling = config.Sampling(temperature=1.0, top_k=20, min_p=0.0, presence_penalty=1.5, seed=7)
+    written.scoring.thinking_budget = 1024
+    folder = config.write(tmp_path, "run", written, "made by a test").parent
+    assert config.load(folder) == written

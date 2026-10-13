@@ -36,12 +36,26 @@ uv run candor measure runs/rude --trial 37                     # one of its tria
 uv run candor score runs/rude --heretic STUDY.jsonl --trial 170     # where it would sit in the search
 uv run candor export runs/rude --trial 37                      # merge it into the GGUF you run
 uv run candor measure runs/rude --trial 37 --exported          # measure that exact file
+uv run candor measure runs/rude --seed 1                       # sampled again with other draws: the noise
+uv run candor export runs/rude --outside ~/heretic-save --name heretic-saved   # another tool's edit
+uv run candor measure runs/rude --outside heretic-saved        # measured like candor's own
 uv run candor serve runs/rude --trial 37                       # chat with it in llama-server
 ```
 
 - `inspect` reads only the config, tokenizer and file headers, so it is quick and needs no GPU. Its
   check that Bionic and LM Studio can parse the chat template needs Node.js and a one-time
   `npm install --prefix src/candor/js`; without them that check is reported as skipped.
+- A model that thinks before it answers (its chat template opens the thinking, as Qwen3.5's does) is
+  scored thinking, as you run it. `init` finds the text that closes its thinking and gives it a
+  budget of 8192 tokens (`deployment.thinking_budget`): past it, llama-server makes the model stop
+  thinking and answer. Only the answer is judged, KL is read where the answer starts, and each
+  answer's thinking length is kept as a number. The search can score at a shorter budget
+  (`scoring.thinking_budget`) and the edits it suggests are measured at the deployment's.
+- Answers are greedy unless `[sampling]` says otherwise. Set it to the settings you chat with, such as
+  a thinking model card's recommended ones: the search, measurements and `serve` then all sample
+  that way, each prompt with a seed of its own that is the same for every edit, so two edits are
+  still compared prompt by prompt. `measure --seed N` samples with other draws, to see how much
+  sampling alone moves the counts.
 - `init` runs the same checks and refuses a model candor can't edit. `candor.toml` holds every
   setting the run uses, each explained by a comment; edit it freely, and every later command checks
   it. Hugging Face models and the prompt datasets are pinned to the commits that were checked, and
@@ -93,15 +107,19 @@ uv run candor serve runs/rude --trial 37                       # chat with it in
   as Q8_0 instead, and refuses the file if one still falls short. Only
   `exports/EDIT/RUN-EDIT-QUANTISATION.gguf` is kept. `measure --exported` measures that exact file,
   and `compare` sets it against the unedited model and against the trial measured with adapters.
+  `export --outside FOLDER --name NAME` ships a copy of the model edited elsewhere, such as heretic's
+  own save of one of its trials, the same way (the run's model with each edited weight taken from
+  the copy, so it is converted, quantised and checked alike), and `measure --outside NAME` measures it.
 - `serve` runs the unedited model, or a trial's current export, in llama-server as candor measures
-  it: the run's KV cache type and chat template settings, with today's date as apps write it. Before
+  it: the run's KV cache type, chat template settings, sampling and thinking budget, with today's
+  date as apps write it. Before
   serving it shows the command, the settings and how the server's own template settings render a
   first message of Hello, so a thinking model's mode is plain before you chat. The chat page can
   override both the system message and the template settings, and remembers them, so serve says what
   to set there: the measured system message, every tool off (the page offers its own, and templates
   such as Llama 3's turn any tool into a request for a function call), and the reasoning menu on
-  Default (its Low, Medium and High are token budgets for thinking, not the model's effort levels). Chats are sampled with
-  llama-server's defaults, as apps sample; measurements answer greedily. It serves llama-server's
+  Default (its Low, Medium and High are token budgets for thinking, not the model's effort levels), and
+  its sampling settings empty, so the server's apply. It serves llama-server's
   chat page (`--port`, 8080) until Ctrl-C; the server's log goes to `private/`.
 - Reading residuals needs the model in 16 bits on the GPU. `run` checks this before downloading or
   converting anything: rude-llama fits on an 18 GB Mac; Qwen3.5-9B and K2-Horizon need a pod.

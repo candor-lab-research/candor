@@ -21,9 +21,19 @@ import torch.nn.functional as F
 from candor import engine, kl, toolchain
 from candor.adapters import write_adapter
 from candor.edit import RowNorm, rank_one
-from candor.engine import MAX_ARGUMENT, LlamaServer, ServerError
+from candor.engine import MAX_ARGUMENT, Answer, LlamaServer, ServerError, Thinking
+from candor.run import seeds as run_seeds
 
-from .tiny_gguf import FIRST_WORD, HIDDEN, SPECIAL, random_weights, write_model
+from .tiny_gguf import (
+    END_THINK,
+    FIRST_WORD,
+    HIDDEN,
+    SPECIAL,
+    THINK,
+    THINKING_TOKENS,
+    random_weights,
+    write_model,
+)
 
 
 def installed_server() -> Path:
@@ -390,3 +400,133 @@ def test_a_failure_stops_the_requests_still_queued(monkeypatch):
         s._complete_all([{}] * 40, done)
     time.sleep(0.1)
     assert len(sent) <= 4
+
+
+# Sampling that keeps every token, so seeds decide the answers.
+SAMPLED = {"temperature": 1.0, "top_k": 0, "top_p": 1.0, "min_p": 0.0}
+NEWLINE = len(SPECIAL) + 0x0A
+THINKING_PROMPTS = [[*p, THINKING_TOKENS.index(THINK), NEWLINE] for p in PROMPTS]
+
+
+def one_slot(folder: Path, model: str) -> LlamaServer:
+    """A server answering one prompt at a time, so no other answer in the batch can tip a near tie."""
+    return LlamaServer(LLAMA_SERVER, folder / model, folder / "server.log", parallel=1, context_per_slot=96)
+
+
+def test_sampled_answers_repeat_with_their_seeds(files):
+    folder, _, _ = files
+    seven, eight = [7] * len(PROMPTS), [8] * len(PROMPTS)
+    with one_slot(folder, "base.gguf") as s:
+        first = [a.text for a in s.generate(PROMPTS, 8, sampling=SAMPLED, seeds=seven)]
+        again = [a.text for a in s.generate(PROMPTS, 8, sampling=SAMPLED, seeds=seven)]
+        other = [a.text for a in s.generate(PROMPTS, 8, sampling=SAMPLED, seeds=eight)]
+        greedy = [[a.text for a in s.generate(PROMPTS, 8, seeds=seeds)] for seeds in (seven, eight)]
+    assert first == again and first != other
+    assert greedy[0] == greedy[1]
+
+
+@pytest.mark.parametrize("close", [END_THINK, f"\n{END_THINK}"], ids=["tag", "newline and tag"])
+def test_a_thinking_model_is_made_to_stop_at_its_budget_then_answers(files, close):
+    folder, _, _ = files
+    write_model(folder / "thinking.gguf", random_weights(), thinking=True)
+    thinking = Thinking(THINK, END_THINK, close, f"{THINK}\n", 6, "w1w2")
+    with one_slot(folder, "thinking.gguf") as s:
+        # Made to stop, the model writes the message and the close, tokenized apart, as the server does.
+        forced = s.tokenize("w1w2") + s.tokenize(close)
+        # The budget also counts the open's tokens after the start tag, as the server tokenizes it.
+        free = 6 - (len(s.tokenize(f"{THINK}\n")) - 1)
+        answers = s.generate(THINKING_PROMPTS, 5, sampling=SAMPLED, seeds=list(range(6)), thinking=thinking)
+    made_to_stop = [a for a in answers if a.forced]
+    # The thinking's length leaves out the end tag, and a model made to stop may finish a character first.
+    least = free + len(forced) - 1
+    assert len(made_to_stop) >= 4 and all(least <= a.thinking <= least + 8 for a in made_to_stop)
+    assert all(a.thinking < free for a in answers if not a.forced)
+    assert all(a.tokens <= 5 for a in answers) and any(a.text for a in answers)
+
+
+def thinking_server(monkeypatch, thought: dict, answer: dict | None = None) -> tuple[LlamaServer, list]:
+    """A server whose model thinks the given tokens, then answers, recording each request."""
+    replies = [thought, answer or {}]
+    s = LlamaServer(LLAMA_SERVER, Path("model.gguf"), Path("server.log"))
+    words = {END_THINK: [99], "": [], "stop": [8, 9], THINK: [98], f"{THINK}\n": [98, 10]}
+    monkeypatch.setattr(s, "tokenize", lambda text: words[text])
+    asked = []
+
+    def complete(payload):
+        asked.append(payload)
+        reply = replies[len(asked) - 1]
+        return {"truncated": False, "tokens_predicted": len(reply.get("tokens", [0, 0])), **reply}
+
+    monkeypatch.setattr(s, "_complete", complete)
+    return s, asked
+
+
+def test_the_answer_goes_on_from_where_the_thinking_ended(monkeypatch):
+    thought = {"tokens": [5, 6, 99, 7], "content": "", "stop_type": "word"}
+    s, asked = thinking_server(monkeypatch, thought, {"content": "the answer", "stop_type": "eos"})
+    thinking = Thinking(THINK, END_THINK, END_THINK, f"{THINK}\n", 50, "")
+    [answer] = s.generate([[1, 2]], 9, sampling=SAMPLED, seeds=[3], thinking=thinking)
+    assert answer == Answer("the answer", 2, True, 2, False)
+    first, then = asked
+    assert first["reasoning_budget_tokens"] == 50 and first["reasoning_budget_message"] == ""
+    assert first["reasoning_budget_start_tag"] == THINK and first["reasoning_budget_end_tags"] == [END_THINK]
+    assert first["generation_prompt"] == f"{THINK}\n" and first["stop"] == [END_THINK]
+    assert then["prompt"] == [1, 2, 5, 6, 99] and then["n_predict"] == 9
+    assert first["seed"] == then["seed"] == 3 and first["temperature"] == then["temperature"] == 1.0
+
+
+def test_thinking_made_to_stop_by_its_budget_is_reported(monkeypatch):
+    thought = {"tokens": [5, 6, 7, 8, 9, 99], "content": "", "stop_type": "word"}
+    s, _ = thinking_server(monkeypatch, thought, {"content": "late", "stop_type": "limit"})
+    [answer] = s.generate([[1]], 9, thinking=Thinking(THINK, END_THINK, END_THINK, THINK, 3, "stop"))
+    assert answer == Answer("late", 2, False, 5, True)
+    # The same tokens closed one token sooner were the model's own close, before its budget ran out.
+    early = {"tokens": [5, 8, 9, 99], "content": "", "stop_type": "word"}
+    s, _ = thinking_server(monkeypatch, early, {"content": "late", "stop_type": "limit"})
+    [answer] = s.generate([[1]], 9, thinking=Thinking(THINK, END_THINK, END_THINK, THINK, 3, "stop"))
+    assert answer == Answer("late", 2, False, 3, False)
+
+
+def test_a_model_that_never_closes_its_thinking_gives_no_answer(monkeypatch):
+    s, asked = thinking_server(monkeypatch, {"tokens": [5, 6], "content": "", "stop_type": "eos"})
+    [answer] = s.generate([[1]], 9, thinking=Thinking(THINK, END_THINK, END_THINK, THINK, 50, ""))
+    assert answer == Answer("", 0, False, 2) and len(asked) == 1
+
+
+def test_a_server_that_ignores_the_budget_is_refused(monkeypatch):
+    s, _ = thinking_server(monkeypatch, {"tokens": [5] * 59, "content": "", "stop_type": "limit"})
+    with pytest.raises(ServerError, match="didn't hold a thinking model to its budget of 50"):
+        s.generate([[1]], 9, thinking=Thinking(THINK, END_THINK, END_THINK, THINK, 50, ""))
+
+
+def test_each_prompt_has_a_seed_of_its_own_that_never_changes():
+    # A resumed search records only the base seed, so the seeds made from it must never change.
+    assert run_seeds(0, 3) == [2893166218, 4011020074, 2468915676]
+    assert run_seeds(1, 2) == [2791857979, 3602223452]
+
+
+def test_a_thinking_model_whose_answer_no_one_wants_any_more_doesnt_answer(monkeypatch):
+    s = LlamaServer(LLAMA_SERVER, Path("model.gguf"), Path("server.log"), parallel=2)
+    monkeypatch.setattr(s, "tokenize", lambda text: {END_THINK: [99], "": []}.get(text, [98, 10]))
+    asked = {"thinking": 0, "answering": 0}
+
+    def complete(payload):
+        if "reasoning_budget_tokens" in payload:
+            asked["thinking"] += 1
+            time.sleep(0.05)
+            return {
+                "tokens": [5, 99],
+                "content": "",
+                "stop_type": "word",
+                "truncated": False,
+                "tokens_predicted": 2,
+            }
+        asked["answering"] += 1
+        return {"content": "x", "stop_type": "eos", "truncated": False, "tokens_predicted": 1}
+
+    monkeypatch.setattr(s, "_complete", complete)
+    thinking = Thinking(THINK, END_THINK, END_THINK, THINK, 50, "")
+    answering = s.answers([[i] for i in range(20)], 4, thinking=thinking)
+    next(answering)
+    answering.close()
+    assert asked["thinking"] >= 3 and asked["answering"] < asked["thinking"]

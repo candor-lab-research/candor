@@ -2,6 +2,7 @@ import filecmp
 import itertools
 import json
 import re
+import shutil
 
 import optuna
 import pytest
@@ -21,7 +22,7 @@ from candor.run import RunError
 from candor.search import Score, Search
 from candor.targets import Writer
 
-from .tiny_run import ANSWERED, REFUSED, FakeGuard, fake_prompts
+from .tiny_run import ANSWERED, REFUSED, FakeGuard, fake_prompts, thinking
 
 CHANGES = [
     (lambda s, m: setattr(s.deployment, "quantization", "Q8_0"), "model file"),
@@ -31,6 +32,7 @@ CHANGES = [
     (lambda s, m: setattr(s.scoring, "kl_tokens", 5), "KL tokens"),
     (lambda s, m: setattr(s.measure, "judge_revision", "another"), "judge"),
     (lambda s, m: setattr(s.deployment, "kv_cache", "q8_0"), "KV cache"),
+    (lambda s, m: setattr(s.sampling, "temperature", 0.7), "sampling"),
     (lambda s, m: setattr(s.search, "strength", (0.9, 1.4)), "search settings"),
     (lambda s, m: m.setattr(search, "VERSION", search.VERSION + 1), "code"),
     (lambda s, m: m.setattr(optuna, "__version__", "9.9.9"), "Optuna"),
@@ -419,10 +421,10 @@ def test_each_trial_is_scored_with_its_strengths_on_the_test_prompts(tiny, monke
     answers = []
     real_answers, real_top = LlamaServer.answers, LlamaServer.top_logprobs
 
-    def answering(self, prompts, tokens, scales=None):
+    def answering(self, prompts, tokens, scales=None, *args):
         asked["answers"].append(prompts)
         asked["scales"].append(dict(scales or {}))
-        found = list(real_answers(self, prompts, tokens, scales))
+        found = list(real_answers(self, prompts, tokens, scales, *args))
         answers.append([a.text for a in found])
         yield from found
 
@@ -600,7 +602,7 @@ def test_scoring_stops_at_the_end_of_the_chunk_that_goes_over(tiny, monkeypatch)
 def scorer_inputs(tiny):
     ids = tiny.prompt_ids()
     _, quantized = tiny.gguf()
-    return quantized, [], ids["harmful_test"], ids["harmless_test"]
+    return quantized, [], ids["harmful_test"], ids["harmless_test"], None
 
 
 def test_the_search_shows_time_left_from_every_trial_of_the_session(tiny, monkeypatch):
@@ -1290,3 +1292,50 @@ def test_scoring_a_trial_stopped_early_says_so(tiny, monkeypatch):
     shown = flat(result.output)
     assert "trial-1 was stopped early in the search, after 1 prompts" in shown
     assert "scores differently" not in shown
+
+
+def test_the_search_scores_a_thinking_model_at_its_own_budget_with_the_same_seeds(tiny, monkeypatch):
+    small(thinking(tiny, budget=8))
+    tiny.settings.scoring.thinking_budget = 6
+    asked = []
+    real = LlamaServer.answers
+
+    def recording(self, *args, **kwargs):
+        asked.append(args)
+        yield from real(self, *args, **kwargs)
+
+    monkeypatch.setattr(LlamaServer, "answers", recording)
+    Search(tiny).search(2)
+    assert {args[5].budget for args in asked} == {6} and all(args[4] == asked[0][4] for args in asked)
+    assert all(args[3]["temperature"] == 1.0 for args in asked)
+    inputs = json.loads(tiny.path("search", "inputs.json").read_text())
+    assert inputs["thinking"]["budget"] == 6 and inputs["sampling"]["temperature"] == 1.0
+    scores = [search._score(trial) for trial in finished(tiny)]
+    assert sum(score.thinking for score in scores) > 0 and all(0 <= s.forced <= s.judged for s in scores)
+    config.write(tiny.folder.parent, "cli", tiny.settings, "made by a test")
+    shown = flat(
+        CliRunner(env={"COLUMNS": "200"})
+        .invoke(app, ["search", str(tiny.folder.parent / "cli"), "--trials", "1"])
+        .output
+    )
+    assert (
+        "tokens per answer on average across trials" in shown and "reached the search's budget of 6" in shown
+    )
+    assert (
+        "where the answer starts, which the search aims at" in shown and "where the thinking starts" in shown
+    )
+    assert all(score.kl_thinking is not None for score in scores)
+
+
+def test_a_sampled_search_isnt_carried_on_with_another_seed_and_a_greedy_one_is(tiny):
+    small(tiny)
+    tiny.settings.sampling.seed = 3
+    Search(tiny).search(1)  # greedy: the seed changes nothing, so it isn't recorded
+    tiny.settings.sampling.seed = 4
+    Search(tiny).search(2)
+    shutil.rmtree(tiny.path("search"))
+    tiny.settings.sampling.temperature = 0.7
+    Search(tiny).search(1)
+    tiny.settings.sampling.seed = 5
+    with pytest.raises(RunError, match="made with a different sampling"):
+        Search(tiny).search(2)

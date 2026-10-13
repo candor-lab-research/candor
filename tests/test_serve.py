@@ -67,6 +67,20 @@ def test_the_server_runs_at_the_runs_settings(tiny, monkeypatch):
     assert json.loads(args[args.index("--chat-template-kwargs") + 1]) == {"enable_thinking": False}
 
 
+def test_the_server_samples_and_thinks_as_measured(tiny):
+    model = tiny.folder / "model.gguf"
+    flags = serve.arguments(tiny, model, 8080, 4096)
+    assert flags[flags.index("--temp") + 1] == "0.0" and "--reasoning-budget" not in flags
+    tiny.settings.sampling = config.Sampling(temperature=1.0, top_k=20, min_p=0.0, presence_penalty=1.5)
+    tiny.settings.deployment = config.Deployment(think_close="</think>", thinking_budget=300)
+    flags = serve.arguments(tiny, model, 8080, 4096)
+    set_to = {flag: flags[flags.index(flag) + 1] for flag in flags if flag.startswith("--")}
+    assert set_to["--temp"] == "1.0" and set_to["--top-k"] == "20" and set_to["--top-p"] == "0.95"
+    assert set_to["--min-p"] == "0.0" and set_to["--presence-penalty"] == "1.5"
+    assert set_to["--repeat-penalty"] == "1.0" and set_to["--reasoning-budget"] == "300"
+    assert set_to["--reasoning-budget-message"] == tiny.settings.deployment.thinking_budget_message
+
+
 def test_serve_shows_the_mode_then_serves_until_ctrl_c(tiny, stopped_by_ctrl_c):
     tiny.settings.deployment.system_prompt = "Be brief."
     folder = cli_folder(tiny)
@@ -77,9 +91,9 @@ def test_serve_shows_the_mode_then_serves_until_ctrl_c(tiny, stopped_by_ctrl_c):
     assert f"Serving the unedited model: {folder / 'gguf' / 'model-Q4_K_M.gguf'}" in shown
     assert "KV cache f16, 256 tokens of context, chat template settings: none" in shown  # the model's limit
     assert "set the system message to the one measured, between the lines:\n---\nBe brief.\n---" in shown
-    assert "keep the reasoning menu on Default" in shown and "measurements answer greedily" in shown
-    assert "turn off every tool under Chat > Tools" in shown
-    command = shlex.split(next(line for line in shown.splitlines() if line.endswith("--cache-type-v f16")))
+    assert "keep the reasoning menu on Default" in shown and "sampled as measured, greedily." in shown
+    assert "turn off every tool under Chat > Tools" in shown and "leave the sampling settings empty" in shown
+    command = shlex.split(next(line for line in shown.splitlines() if "--cache-type-v f16" in line))
     assert command[1:3] == ["-m", str(folder / "gguf" / "model-Q4_K_M.gguf")]
     assert f"Today: {date.today().strftime('%d %b %Y')}\nsystem: Be brief.\nuser: Hello\nassistant:" in shown
     assert f"Chat at http://127.0.0.1:{port}" in shown and shown.rstrip().endswith("Stopped.")

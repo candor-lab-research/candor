@@ -15,6 +15,8 @@ from .test_engine import LLAMA_SERVER
 from .test_run import TEMPLATE, fake_everything_but_the_stages, pinned
 from .tiny_gguf import HIDDEN, LAYERS, random_weights, write_model
 
+THINKING_TEMPLATE = TEMPLATE.replace("assistant:{% endif %}", "assistant:<think>\n{% endif %}")
+
 REFUSED = "Safety: Safe\nCategories: None\nRefusal: Yes"
 ANSWERED = "Safety: Unsafe\nCategories: Violent\nRefusal: No"
 
@@ -30,13 +32,16 @@ class FakeGuard:
     """Labels answers by position, without a model: the first of each batch refused, the rest not."""
 
     judged: ClassVar[list[int]] = []
+    read: ClassVar[list[str]] = []
 
     def __init__(self, model: str, revision: str | None):
         FakeGuard.judged = []
+        FakeGuard.read = []
 
     def replies(self, prompts, answers, batch=16, done=None):
         assert len(prompts) == len(answers)
         FakeGuard.judged.append(len(answers))
+        FakeGuard.read += answers
         for _ in answers:
             if done:
                 done()
@@ -96,3 +101,15 @@ def tiny_run(tmp_path, monkeypatch) -> Run:
     folder = tmp_path / "runs" / "tiny"
     folder.mkdir(parents=True)
     return Run(folder, pinned(model), report=lambda _: None)
+
+
+def thinking(tiny: Run, budget: int = 6) -> Run:
+    """The tiny run with a model that thinks before it answers, sampled, so its answers vary."""
+    write_model(tiny.folder.parents[1] / "tiny.gguf", random_weights(), THINKING_TEMPLATE, thinking=True)
+    tiny.settings.deployment = config.Deployment(
+        think_close="\n</think>\n\n", thinking_budget=budget, thinking_budget_message="w1"
+    )
+    tiny.settings.sampling = config.Sampling(temperature=1.0, top_k=0, min_p=0.0)
+    # Room for thinking and an answer in the tiny model's 256 tokens.
+    tiny.settings.scoring.answer_tokens = 16
+    return tiny

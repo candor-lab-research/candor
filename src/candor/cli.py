@@ -168,6 +168,11 @@ def _tokenizer_rows(model: str) -> list[Row]:
         rows.append(("Date in prompt", "warn", detail))
     else:
         rows.append(("Date in prompt", "ok", "none"))
+    if close := checks.think_close(tokenizer):
+        detail = f"thinks before answering, and its thinking ends with {close!r}; it is scored thinking"
+        rows.append(("Thinking", "ok", detail))
+    else:
+        rows.append(("Thinking", "ok", "answers without thinking, or its template has no enable_thinking"))
     result = checks.app_template_parses(tokenizer, template)
     if result.status == "fails":
         detail = f"Bionic and LM Studio can't use it and fall back to another format: {result.detail}"
@@ -253,11 +258,13 @@ def inspect(model: Annotated[str, typer.Argument(help="A Hugging Face model id o
 NOT_BLOCKING = {"Bionic template"}
 
 
-def _pinned_date(model: str, revision: str | None) -> str | None:
+def _from_template(model: str, revision: str | None) -> tuple[str | None, str | None]:
+    """The date to pin, if the chat template writes one it can be given, and what ends the model's
+    thinking, if it thinks."""
     with _quiet_transformers():
         tokenizer = AutoTokenizer.from_pretrained(model, revision=revision, trust_remote_code=False)
     date_format = checks.pinnable_date_format(checks.chat_template(tokenizer) or "")
-    return config.today_in(date_format) if date_format else None
+    return config.today_in(date_format) if date_format else None, checks.think_close(tokenizer)
 
 
 def _revision(model: str) -> str | None:
@@ -310,11 +317,15 @@ def init(
 
     try:
         revision = _revision(model)
+        pinned_date, close = _from_template(model, revision)
         model_settings = config.Model(
             source=model,
             revision=revision,
             trust_remote_code=checks.needs_remote_code(source.read_config(model)),
-            date=_pinned_date(model, revision),
+            date=pinned_date,
+        )
+        deployment = config.Deployment(
+            think_close=close, thinking_budget=config.THINKING_BUDGET if close else None
         )
         header = (
             f"Settings for the candor run {name!r}, created {date.today()} by candor {version('candor')} "
@@ -327,6 +338,7 @@ def init(
             name,
             config.RunConfig(
                 model=model_settings,
+                deployment=deployment,
                 prompts=_pinned(config.Prompts(), PROMPT_SETS),
                 measure=config.Measure(judge_revision=_revision(config.Measure().judge)),
             ),
@@ -344,6 +356,12 @@ def init(
         console.print(
             "[yellow]Bionic can't read this model's chat template.[/] candor still works, but test the "
             "result in Bionic only after pasting in a fixed template."
+        )
+    if close:
+        console.print(
+            f"[yellow]This model thinks before it answers.[/] Its thinking is capped at "
+            f"{config.THINKING_BUDGET} tokens (deployment.thinking_budget). Set [sampling] to the thinking "
+            "settings its model card recommends: the defaults answer greedily."
         )
 
 
@@ -462,10 +480,21 @@ def _edit_name(trial: int, heretic: bool) -> str:
     return f"heretic-{trial}" if heretic else f"trial-{trial}"
 
 
-def _measurement_name(trial: int | None, heretic: bool, slots: int, limit: int | None, exported: bool) -> str:
+def _measurement_name(
+    trial: int | None,
+    heretic: bool,
+    slots: int,
+    limit: int | None,
+    exported: bool,
+    seed: int | None,
+    outside: str | None = None,
+) -> str:
     name = "base" if trial is None else _edit_name(trial, heretic) + ("-exported" if exported else "")
+    name = outside or name
     if slots != measure.DEFAULT_SLOTS:
         name += f"-slots-{slots}"
+    if seed is not None:
+        name += f"-seed-{seed}"
     return name + (f"-first-{limit}" if limit else "")
 
 
@@ -504,11 +533,24 @@ def measure_command(
             "run's model with the trial's adapters."
         ),
     ] = False,
+    outside: Annotated[
+        str | None,
+        typer.Option(help="Measure a model edited elsewhere, by the name candor export --outside gave it."),
+    ] = None,
+    seed: Annotated[
+        int | None,
+        typer.Option(
+            min=0,
+            max=2**32 - 1,
+            help="Sample with this seed instead of the run's (sampling.seed). Measuring the same edit with "
+            "two seeds shows how much sampling alone moves the counts.",
+        ),
+    ] = None,
     name: Annotated[
         str | None,
         typer.Option(
             help="The measurement's name. By default base, trial-N or heretic-N, with -exported, "
-            "-slots-N and -first-N added when those are set."
+            "-slots-N, -seed-N and -first-N added when those are set."
         ),
     ] = None,
 ) -> None:
@@ -521,7 +563,9 @@ def measure_command(
         raise typer.BadParameter("say which of the study's trials with --trial", param_hint="--heretic")
     if exported and trial is None:
         raise typer.BadParameter("say which trial's export with --trial", param_hint="--exported")
-    name = name or _measurement_name(trial, heretic is not None, slots, limit, exported)
+    if outside is not None and (trial is not None or exported):
+        raise typer.BadParameter("measures a model edited elsewhere on its own", param_hint="--outside")
+    name = name or _measurement_name(trial, heretic is not None, slots, limit, exported, seed, outside)
     try:
         config.check_run_name(name)
     except config.ConfigError as error:
@@ -551,7 +595,9 @@ def measure_command(
                 edit = measure.heretic_trial(heretic.expanduser(), trial, run.settings.edit.row_norm)
             elif trial is not None:
                 edit = search.trial_edit(run, trial)
-            measurement = measure.Measurement(run, edit, name, slots, limit, progress, exported)
+            measurement = measure.Measurement(
+                run, edit, name, slots, limit, progress, exported, seed, outside
+            )
             results = measurement.measure()
     except config.ConfigError as error:
         console.print(f"[red]{escape(str(error))}[/]")
@@ -618,7 +664,7 @@ def compare(
     console.print(
         "Harmful and Harmless are the held-out sets. Only A/B counts the prompts where just one of them "
         "says yes, and p is how likely a split that uneven would be if neither were really better. "
-        "Two measurements of the same edit with different --slots show what noise alone does."
+        "Two measurements of the same edit with different --slots or --seed show what noise alone does."
     )
 
 
@@ -626,18 +672,40 @@ def compare(
 def export_command(
     folder: Annotated[Path, typer.Argument(help="A run folder made by candor init.")],
     trial: Annotated[
-        int,
+        int | None,
         typer.Option(help="A trial of candor search, or with --heretic of heretic's, by the number shown."),
-    ],
+    ] = None,
     heretic: Annotated[
         Path | None,
         typer.Option(help="A heretic study's journal (.jsonl), to export one of its trials."),
     ] = None,
+    outside: Annotated[
+        Path | None,
+        typer.Option(
+            help="A copy of the run's model edited elsewhere, such as heretic's own save of a trial, to "
+            "export as candor exports its own edits. Needs --name."
+        ),
+    ] = None,
+    name: Annotated[str | None, typer.Option(help="What to call a model given with --outside.")] = None,
 ) -> None:
     """Merge a trial's edit into the model's weights, then convert and quantise it as the run deploys:
-    the GGUF you run. Measure that exact file before using it, with candor measure --exported."""
+    the GGUF you run. Measure that exact file before using it, with candor measure --exported. With
+    --outside, a model edited elsewhere is exported the same way, to measure it like for like."""
     console = Console()
     folder = folder.expanduser()
+    if (trial is None) == (outside is None):
+        raise typer.BadParameter(
+            "say which trial with --trial, or give a model with --outside", param_hint="--trial"
+        )
+    if (outside is None) != (name is None):
+        raise typer.BadParameter(
+            "--name names a model given with --outside, and only that", param_hint="--name"
+        )
+    if name is not None:
+        try:
+            config.check_run_name(name)
+        except config.ConfigError as error:
+            raise typer.BadParameter(str(error), param_hint="--name") from None
 
     def report(message: str) -> None:
         console.print(f"[dim]{escape(message)}[/]")
@@ -645,11 +713,16 @@ def export_command(
     try:
         with _stopped_by_signals(), _awake():
             run = Run.open(folder, report)
-            if heretic is not None:
+            if outside is not None:
+                assert name is not None
+                shipped = export.export_outside(run, name, outside)
+            elif heretic is not None:
+                assert trial is not None
                 edit = measure.heretic_trial(heretic.expanduser(), trial, run.settings.edit.row_norm)
+                shipped = export.export(run, edit)
             else:
-                edit = search.trial_edit(run, trial)
-            shipped = export.export(run, edit)
+                assert trial is not None
+                shipped = export.export(run, search.trial_edit(run, trial))
     except config.ConfigError as error:
         console.print(f"[red]{escape(str(error))}[/]")
         raise typer.Exit(COULD_NOT_INSPECT) from None
@@ -659,17 +732,26 @@ def export_command(
     except Exception as error:
         console.print(f"[red]The export stopped on an unexpected error:[/] {escape(_where(error))}")
         raise typer.Exit(COULD_NOT_INSPECT) from None
-    console.print(f"{escape(edit.name)}: {escape(str(shipped))}, {shipped.stat().st_size / 1e9:.1f} GB")
-    console.print(
-        "Measure this file, then compare it with the unedited model, and with the trial as measured "
-        "with adapters to see what merging and quantising changed:"
-    )
-    picked = f"--trial {trial}" + (f" --heretic {heretic}" if heretic is not None else "")
-    for command in (
-        f"uv run candor measure {folder} {picked} --exported",
-        f"uv run candor compare {folder} base {edit.name}-exported",
-        f"uv run candor compare {folder} {edit.name} {edit.name}-exported",
-    ):
+    shown = name or _edit_name(trial or 0, heretic is not None)
+    console.print(f"{escape(shown)}: {escape(str(shipped))}, {shipped.stat().st_size / 1e9:.1f} GB")
+    if outside is not None:
+        console.print("Measure this file, then compare it with the unedited model:")
+        commands = [
+            f"uv run candor measure {folder} --outside {name}",
+            f"uv run candor compare {folder} base {name}",
+        ]
+    else:
+        console.print(
+            "Measure this file, then compare it with the unedited model, and with the trial as measured "
+            "with adapters to see what merging and quantising changed:"
+        )
+        picked = f"--trial {trial}" + (f" --heretic {heretic}" if heretic is not None else "")
+        commands = [
+            f"uv run candor measure {folder} {picked} --exported",
+            f"uv run candor compare {folder} base {shown}-exported",
+            f"uv run candor compare {folder} {shown} {shown}-exported",
+        ]
+    for command in commands:
         console.print(escape(f"  {command}"), soft_wrap=True)
 
 
@@ -727,10 +809,13 @@ def serve_command(
             settings = serve.chat_settings(run)
             system = run.settings.deployment.system_prompt
             console.print(f"Serving {escape(name)}: {escape(str(model))}")
+            temperature = run.settings.sampling.temperature
+            sampled = "greedily" if temperature == 0 else f"at temperature {temperature:g}"
+            budget = run.settings.deployment.thinking_budget
             console.print(
                 f"KV cache {run.settings.deployment.kv_cache}, {context} tokens of context, chat template "
-                f"settings: {escape(json.dumps(settings)) if settings else 'none'}. Answers are sampled with "
-                "llama-server's defaults, as apps do; measurements answer greedily."
+                f"settings: {escape(json.dumps(settings)) if settings else 'none'}. Answers are sampled as "
+                f"measured, {sampled}" + (f", thinking for at most {budget} tokens." if budget else ".")
             )
             console.print(shlex.join(args), markup=False, highlight=False, soft_wrap=True, style="dim")
             log = run.path("private", "logs", "serve.log")
@@ -753,9 +838,13 @@ def serve_command(
                     "function call"
                 )
                 console.print(
-                    "  keep the reasoning menu on Default: its other choices replace the template settings, "
-                    "and its Low, Medium and High are token budgets for thinking, not the model's own effort "
-                    "levels"
+                    "  keep the reasoning menu on Default: its other choices replace the template settings "
+                    "and the thinking budget (its Low, Medium and High are budgets of 512, 2048 and 8192 "
+                    "tokens, not the model's own effort levels)"
+                )
+                console.print(
+                    "  leave the sampling settings empty, so the page uses the server's: a value set there "
+                    "before stays in the browser and overrides them"
                 )
                 console.print(f"Chat at http://127.0.0.1:{port}, llama-server's own page. Ctrl-C stops it.")
                 code = process.wait()
@@ -885,6 +974,8 @@ def search_command(
                     "so a better edit may lie outside them."
                 )
             picks.append(candidate.trial)
+    if run.settings.deployment.think_close:
+        _thinking_summary(console, run, found)
     if len(found.trials) < total:
         console.print(
             f"Trials took about {seconds:.0f} s each, so all {total} would take about "
@@ -895,6 +986,29 @@ def search_command(
         console.print("Measure each on the held-out prompts:")
         for number in picks:
             console.print(escape(f"  uv run candor measure {folder} --trial {number}"), soft_wrap=True)
+
+
+def _thinking_summary(console: Console, run: Run, found: search.Found) -> None:
+    """How long the trials' answers thought, to choose the budget a search of a thinking model scores
+    at."""
+    scores = [search.searched_score(found, number) for number in found.trials]
+    if not scores:
+        return
+    judged = sum(score.judged for score in scores)
+    means = sorted(score.thinking for score in scores)
+    budget = run.settings.scoring.thinking_budget or run.settings.deployment.thinking_budget
+    console.print(
+        f"Thinking: {means[0]:.0f} to {means[-1]:.0f} tokens per answer on average across trials (median "
+        f"{means[len(means) // 2]:.0f}); {sum(s.forced for s in scores)} of {judged} answers reached the "
+        f"search's budget of {budget} and were made to stop."
+    )
+    starts = [score.kl_thinking for score in scores if score.kl_thinking is not None]
+    if starts:
+        answers = [score.kl for score in scores if score.kl_thinking is not None]
+        console.print(
+            f"KL across trials: {min(answers):.4f} to {max(answers):.4f} where the answer starts, which the "
+            f"search aims at, and {min(starts):.4f} to {max(starts):.4f} where the thinking starts."
+        )
 
 
 def _direction(layer: float | None) -> str:

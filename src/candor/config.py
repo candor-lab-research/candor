@@ -39,8 +39,11 @@ QUANTIZATIONS = {
     "BF16": 16,
 }
 KV_CACHE_TYPES = {"f32", "f16", "bf16", "q8_0", "q5_1", "q5_0", "q4_1", "q4_0", "iq4_nl"}
+# The thinking budget init gives a model that thinks: the longest llama-server's chat page offers.
+THINKING_BUDGET = 8192
 RUN_NAME = re.compile(r"[A-Za-z0-9][A-Za-z0-9._-]*")
 BARE_KEY = re.compile(r"[A-Za-z0-9_-]+")
+END_TAG = re.compile(r"\s*</[^<>\s]+>\s*")
 
 Finite = Annotated[float, Field(strict=True, allow_inf_nan=False)]
 Range = tuple[Finite, Finite]
@@ -72,14 +75,34 @@ class Model(Section):
 
 
 class Deployment(Section):
-    quantization: str = Field(default="Q4_K_M", description="The GGUF type you will load in Bionic.")
+    quantization: str = Field(default="Q4_K_M", description="The GGUF type you run.")
     kv_cache: str = Field(
         default="f16", description="The KV cache type you run with (llama.cpp's --cache-type-k and -v)."
     )
     system_prompt: Annotated[str, Field(strict=True)] = Field(
         default="",
-        description="The system prompt you use. Bionic sends none by default; heretic used "
-        '"You are a helpful assistant."',
+        description="The system prompt you use. Chat apps such as llama-server's page send none by "
+        'default; heretic used "You are a helpful assistant."',
+    )
+    think_close: Text | None = Field(
+        default=None,
+        description="For a model that thinks before it answers: the text that ends its thinking, as its "
+        'chat template writes it with thinking off, such as Qwen\'s "\\n</think>\\n\\n". init sets it '
+        "for a model that thinks. Answers are judged on what follows it, and KL is read where the "
+        "answer starts. Unset for a model that doesn't think.",
+    )
+    thinking_budget: StrictInt | None = Field(
+        default=None,
+        ge=1,
+        description="How many tokens a thinking model may think before it is made to stop and answer, "
+        "as you run it. Set for every model that thinks.",
+    )
+    thinking_budget_message: Annotated[str, Field(strict=True)] = Field(
+        default="\n\nConsidering the limited time by the user, I have to give the solution based on the "
+        "thinking directly now.",
+        description="What a thinking model is made to write when its budget runs out, before its "
+        "thinking is closed. The default is Qwen's own, as the end of think_close gives the newline "
+        "before the end tag.",
     )
 
     @field_validator("quantization")
@@ -95,6 +118,25 @@ class Deployment(Section):
         if value not in KV_CACHE_TYPES:
             raise ValueError(f"must be one of {', '.join(sorted(KV_CACHE_TYPES))}")
         return value
+
+    @model_validator(mode="after")
+    def _thinking(self) -> "Deployment":
+        if self.think_close is None:
+            if self.thinking_budget is not None:
+                raise ValueError("thinking_budget is set, but think_close isn't, so the model doesn't think")
+        elif self.thinking_budget is None:
+            raise ValueError("a model that thinks needs a thinking_budget")
+        elif not END_TAG.fullmatch(self.think_close):
+            raise ValueError(
+                "think_close must hold one end tag, such as </think>, and nothing else but space"
+            )
+        return self
+
+    def tags(self) -> tuple[str, str]:
+        """The tags a thinking model's thinking starts and ends with."""
+        assert self.think_close is not None
+        end = self.think_close.strip()
+        return "<" + end[2:], end
 
 
 class PromptSet(Section):
@@ -163,9 +205,54 @@ class Edit(Section):
         return value
 
 
+class Sampling(Section):
+    temperature: Finite = Field(
+        default=0.0,
+        ge=0,
+        description="0 answers greedily, always taking the likeliest token. A thinking model should be "
+        "sampled at the settings its model card recommends, as greedy answers can repeat themselves "
+        "without end.",
+    )
+    top_k: StrictInt = Field(
+        default=40, ge=0, description="Only the k likeliest tokens are kept; 0 keeps all."
+    )
+    top_p: Finite = Field(
+        default=0.95, gt=0, le=1, description="Only the likeliest tokens making up this share are kept."
+    )
+    min_p: Finite = Field(
+        default=0.05,
+        ge=0,
+        lt=1,
+        description="Tokens less likely than this share of the likeliest token's chance are dropped.",
+    )
+    presence_penalty: Finite = Field(
+        default=0.0, description="Lowers the chance of every token already in the answer, against repetition."
+    )
+    repeat_penalty: Finite = Field(
+        default=1.0, gt=0, description="Divides the chance of recently used tokens; 1 changes nothing."
+    )
+    seed: StrictInt = Field(
+        default=0,
+        ge=0,
+        lt=2**32,
+        description="Each prompt is answered with a seed of its own made from this one, the same for every "
+        "edit, so two edits meet the same random draws and are compared prompt by prompt.",
+    )
+
+
 class Scoring(Section):
     answer_tokens: StrictInt = Field(
-        default=100, ge=1, le=8192, description="How long an answer to each harmful test prompt may be."
+        default=100,
+        ge=1,
+        le=8192,
+        description="How long an answer to each harmful test prompt may be, after any thinking.",
+    )
+    thinking_budget: StrictInt | None = Field(
+        default=None,
+        ge=1,
+        description="A shorter thinking budget for the search than deployment.thinking_budget, so a "
+        "search of a thinking model finishes in time; the edits it suggests are measured at the "
+        "deployment's. Unset: the deployment's.",
     )
     kl_tokens: StrictInt = Field(
         default=20,
@@ -181,14 +268,15 @@ class Measure(Section):
         default=256,
         ge=1,
         le=8192,
-        description="How long an answer to each held-out prompt may be, for the judge to read.",
+        description="How long an answer to each held-out prompt may be after any thinking, for the "
+        "judge to read.",
     )
     maths_answer_tokens: StrictInt = Field(
         default=512,
         ge=1,
         le=8192,
-        description="How long an answer to each maths question may be. One cut off before it states "
-        "its answer counts as wrong.",
+        description="How long an answer to each maths question may be after any thinking. One cut off "
+        "before it states its answer counts as wrong.",
     )
     maths_instruction: Text = Field(
         default="Solve this step by step. End with the final answer on its own line, as: Answer: <number>",
@@ -297,6 +385,11 @@ class RunConfig(Section):
         default_factory=Deployment,
         description="How you actually run the model, so trials are scored that way.",
     )
+    sampling: Sampling = Field(
+        default_factory=Sampling,
+        description="How the model picks each token as you chat with it. The search, measurements and "
+        "candor serve all answer this way.",
+    )
     prompts: Prompts = Field(default_factory=Prompts, description="Where the prompts come from.")
     edit: Edit = Field(default_factory=Edit, description="The weight edit itself.")
     scoring: Scoring = Field(default_factory=Scoring, description="How each candidate edit is measured.")
@@ -305,6 +398,12 @@ class RunConfig(Section):
         description="How finished edits are measured, on prompts the search never sees.",
     )
     search: Search = Field(default_factory=Search, description="The search over edits.")
+
+    @model_validator(mode="after")
+    def _search_thinks(self) -> "RunConfig":
+        if self.scoring.thinking_budget is not None and self.deployment.think_close is None:
+            raise ValueError("scoring.thinking_budget is set for a model that doesn't think")
+        return self
 
 
 class ConfigError(Exception):

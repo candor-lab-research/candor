@@ -10,6 +10,7 @@ from candor.checks import (
     chat_template,
     pinnable_date_format,
     remote_code,
+    think_close,
     writes_the_date,
 )
 
@@ -130,3 +131,23 @@ def test_a_template_that_refuses_system_messages_is_not_a_parser_failure():
 
 def test_a_template_transformers_cannot_render_is_skipped():
     assert app_template_parses(PLAIN, "{{ raise_exception('never') }}").status == "skipped"
+
+
+THINKING = WITHOUT_BOS + (
+    "{% if add_generation_prompt %}<think>\n{% if enable_thinking is defined and not enable_thinking %}"
+    "\n</think>\n\n{% endif %}{% endif %}"
+)
+# Qwen3's own: the model opens its thinking itself, so turning it off writes a whole empty block.
+OPENS_ITS_OWN = WITHOUT_BOS + (
+    "{% if add_generation_prompt %}A:{% if enable_thinking is defined and not enable_thinking %}"
+    "<think>\n\n</think>\n\n{% endif %}{% endif %}"
+)
+
+
+def test_a_thinking_models_close_is_what_turning_thinking_off_adds():
+    assert think_close(tokenizer(THINKING, False)) == "</think>\n\n"
+
+
+@pytest.mark.parametrize("template", [WITHOUT_BOS, OPENS_ITS_OWN])
+def test_models_that_dont_think_or_dont_open_their_thinking_have_no_close(template):
+    assert think_close(tokenizer(template, False)) is None

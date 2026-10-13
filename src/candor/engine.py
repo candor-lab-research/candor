@@ -7,10 +7,12 @@ import os
 import socket
 import subprocess
 import time
-from collections.abc import Callable, Generator, Iterable, Mapping
+from collections.abc import Callable, Generator, Iterable, Mapping, Sequence
 from concurrent.futures import ThreadPoolExecutor, as_completed
 from dataclasses import dataclass
+from functools import partial
 from pathlib import Path
+from threading import Event
 from typing import Any
 
 import httpx
@@ -28,10 +30,36 @@ class ServerError(RuntimeError):
 
 @dataclass(frozen=True)
 class Answer:
+    """What the model answered, after any thinking."""
+
     text: str
     tokens: int
-    # False when the answer reached its length limit before the model ended it.
+    # False when the answer reached its length limit before the model ended it, or a thinking model
+    # ended without answering at all.
     finished: bool
+    # A thinking model's thinking: how many tokens, and whether its budget ran out and it was made to
+    # stop.
+    thinking: int = 0
+    forced: bool = False
+
+
+@dataclass(frozen=True)
+class Thinking:
+    """How a thinking model thinks: every prompt ends by opening its thinking (opened, which starts
+    with the start tag), and the end tag closes it. Once budget tokens are thought, llama-server makes
+    the model write message and then close, the end tag with any text the template puts before it, as
+    the server's chat endpoint does for the model's template; then it answers."""
+
+    start: str
+    end: str
+    close: str
+    opened: str
+    budget: int
+    message: str
+
+
+# Answers without sampling settings are greedy: the likeliest token every time.
+GREEDY = {"temperature": 0.0}
 
 
 class LlamaServer:
@@ -59,6 +87,7 @@ class LlamaServer:
         self.client = httpx.Client(base_url=f"http://127.0.0.1:{self.port}", timeout=QUICK)
         self.process: subprocess.Popen | None = None
         self.adapter_ids: dict[Path, int] = {}
+        self._tokenized: dict[str, list[int]] = {}
 
     def __enter__(self) -> "LlamaServer":
         self.start()
@@ -177,10 +206,15 @@ class LlamaServer:
         self, payloads: list[dict[str, Any]], done: Callable[[], None] | None = None
     ) -> list[dict[str, Any]]:
         """Every payload's result, in order. done is called as each one finishes."""
-        results: list[dict[str, Any]] = [{}] * len(payloads)
+        return self._all([partial(self._complete, payload) for payload in payloads], done)
+
+    def _all[T](self, work: Sequence[Callable[[], T]], done: Callable[[], None] | None = None) -> list[T]:
+        """Every piece of work's result, in order, as many at once as the server has slots. done is
+        called as each one finishes."""
+        results: list[Any] = [None] * len(work)
         pool = ThreadPoolExecutor(self.parallel)
         try:
-            futures = {pool.submit(self._complete, payload): i for i, payload in enumerate(payloads)}
+            futures = {pool.submit(job): i for i, job in enumerate(work)}
             for future in as_completed(futures):
                 results[futures[future]] = future.result()
                 if done:
@@ -201,20 +235,30 @@ class LlamaServer:
             if scale
         ]
 
+    def tokenize(self, text: str) -> list[int]:
+        """Text as the model's token ids, special tokens such as a think tag included, kept for reuse."""
+        if text not in self._tokenized:
+            body = {"content": text, "add_special": False, "parse_special": True}
+            self._tokenized[text] = self._call("POST", "/tokenize", json=body)["tokens"]
+        return self._tokenized[text]
+
     def apply_template(self, messages: list[dict[str, str]], template_kwargs: dict[str, Any]) -> str:
         """The prompt the chat endpoint renders for a conversation, ready for the answer."""
         body = {"messages": messages, "chat_template_kwargs": template_kwargs}
         return self._call("POST", "/apply-template", json=body)["prompt"]
 
-    def chat_ids(self, chats: list[list[dict[str, str]]], template_kwargs: dict[str, Any]) -> list[list[int]]:
-        """The token ids the chat endpoint feeds the model for each conversation, ready to answer.
+    def chat_ids(
+        self, chats: list[list[dict[str, str]]], template_kwargs: dict[str, Any], then: str = ""
+    ) -> list[list[int]]:
+        """The token ids the chat endpoint feeds the model for each conversation, ready to answer, with
+        then written after each, such as the text that closes a thinking model's thinking.
 
         /apply-template renders a chat with the same code /v1/chat/completions uses, which then
         tokenizes the result with special tokens parsed and added; this does the same.
         """
 
         def ids(messages: list[dict[str, str]]) -> list[int]:
-            prompt = self.apply_template(messages, template_kwargs)
+            prompt = self.apply_template(messages, template_kwargs) + then
             body = {"content": prompt, "add_special": True, "parse_special": True}
             return self._call("POST", "/tokenize", json=body)["tokens"]
 
@@ -235,26 +279,46 @@ class LlamaServer:
         max_tokens: int,
         scales: Mapping[Path, float] | None = None,
         done: Callable[[], None] | None = None,
+        sampling: Mapping[str, float] = GREEDY,
+        seeds: list[int] | None = None,
+        thinking: Thinking | None = None,
     ) -> list[Answer]:
-        """Greedy answers to prompts given as token ids. done is called as each one finishes."""
-        payloads = self._payloads(prompts, max_tokens, scales)
-        results = self._complete_all(payloads, done)
-        return [self._answer(payload, result) for payload, result in zip(payloads, results, strict=True)]
+        """Answers to prompts given as token ids, max_tokens long at most after any thinking, sampled
+        with each prompt's seed. done is called as each one finishes."""
+        lora = self.lora(scales)
+        work = [
+            partial(self._answer_one, prompt, max_tokens, lora, sampling, seed, thinking)
+            for prompt, seed in zip(prompts, seeds or [0] * len(prompts), strict=True)
+        ]
+        return self._all(work, done)
 
     def answers(
-        self, prompts: list[list[int]], max_tokens: int, scales: Mapping[Path, float] | None = None
+        self,
+        prompts: list[list[int]],
+        max_tokens: int,
+        scales: Mapping[Path, float] | None = None,
+        sampling: Mapping[str, float] = GREEDY,
+        seeds: list[int] | None = None,
+        thinking: Thinking | None = None,
     ) -> Generator[Answer]:
-        """Greedy answers to prompts given as token ids, in order, each as soon as it is ready. The
-        server answers the rest meanwhile. Closing the iterator early cancels those not yet started."""
-        payloads = self._payloads(prompts, max_tokens, scales)
+        """generate's answers in order, each as soon as it is ready. The server answers the rest
+        meanwhile. Closing the iterator early cancels those not yet started."""
+        lora = self.lora(scales)
+        seeds = seeds or [0] * len(prompts)
+        stopped = Event()
         pool = ThreadPoolExecutor(self.parallel)
         try:
-            futures = [pool.submit(self._complete, payload) for payload in payloads]
-            for payload, future in zip(payloads, futures, strict=True):
-                yield self._answer(payload, future.result())
+            futures = [
+                pool.submit(self._answer_one, prompt, max_tokens, lora, sampling, seed, thinking, stopped)
+                for prompt, seed in zip(prompts, seeds, strict=True)
+            ]
+            for future in futures:
+                yield future.result()
         except GeneratorExit:
             # The server can't be told to drop an answer it has started, so wait for those rather
-            # than let them slow whatever is asked next.
+            # than let them slow whatever is asked next; a thinking model's that are still thinking
+            # don't go on to answer.
+            stopped.set()
             pool.shutdown(cancel_futures=True)
             raise
         except BaseException:
@@ -262,13 +326,73 @@ class LlamaServer:
             raise
         pool.shutdown()
 
-    def _payloads(
-        self, prompts: list[list[int]], max_tokens: int, scales: Mapping[Path, float] | None
-    ) -> list[dict[str, Any]]:
-        lora = self.lora(scales)
-        return [{"prompt": p, "n_predict": max_tokens, "temperature": 0.0, "lora": lora} for p in prompts]
+    def _answer_one(
+        self,
+        prompt: list[int],
+        max_tokens: int,
+        lora: list[dict[str, float]],
+        sampling: Mapping[str, float],
+        seed: int,
+        thinking: Thinking | None,
+        stopped: Event | None = None,
+    ) -> Answer:
+        """One answer. A thinking model thinks until it ends its thinking or its budget makes it stop,
+        then answers in a request of its own, so the answer's length is limited apart from the
+        thinking's; unless stopped is set by then, as no one wants the answer any more."""
+        settings = {**sampling, "seed": seed, "lora": lora}
+        if thinking is None:
+            payload = {"prompt": prompt, "n_predict": max_tokens, **settings}
+            result = self._checked(payload, self._complete(payload))
+            return Answer(result["content"], result["tokens_predicted"], result["stop_type"] != "limit")
+        end = self._single(thinking.end)
+        # What the server makes the model write when its budget runs out, built as the server does.
+        forced = self.tokenize(thinking.message) + self.tokenize(thinking.close)
+        if forced[-1] != end:
+            raise ServerError(f"the thinking's close {thinking.close!r} doesn't end with its end tag")
+        payload = {
+            "prompt": prompt,
+            # The sampler may wait a few tokens to finish a character before it makes the model stop.
+            "n_predict": thinking.budget + len(forced) + 8,
+            "reasoning_budget_tokens": thinking.budget,
+            "reasoning_budget_start_tag": thinking.start,
+            "reasoning_budget_end_tags": list(dict.fromkeys([thinking.close, thinking.end])),
+            "reasoning_budget_message": thinking.message,
+            "generation_prompt": thinking.opened,
+            "preserved_tokens": [thinking.start, thinking.end],
+            "stop": [thinking.end],
+            "return_tokens": True,
+            **settings,
+        }
+        thought = self._checked(payload, self._complete(payload))["tokens"]
+        if end not in thought:
+            if len(thought) >= payload["n_predict"]:
+                raise ServerError(
+                    f"llama-server didn't hold a thinking model to its budget of {thinking.budget}"
+                )
+            # The model ended without closing its thinking, so it never answered.
+            return Answer("", 0, False, len(thought))
+        closed = thought.index(end) + 1
+        # The budget also counts the open's tokens after the start tag, as the server tokenizes it.
+        opened = len(self.tokenize(thinking.opened)) - 1
+        thought_freely = max(thinking.budget - opened, 0)
+        made_to_stop = (
+            closed >= thought_freely + len(forced) and thought[closed - len(forced) : closed] == forced
+        )
+        if stopped is not None and stopped.is_set():
+            return Answer("", 0, False, closed - 1, made_to_stop)
+        payload = {"prompt": prompt + thought[:closed], "n_predict": max_tokens, **settings}
+        result = self._checked(payload, self._complete(payload))
+        finished = result["stop_type"] != "limit"
+        # The thinking's length leaves out the end tag.
+        return Answer(result["content"], result["tokens_predicted"], finished, closed - 1, made_to_stop)
 
-    def _answer(self, payload: dict[str, Any], result: dict[str, Any]) -> Answer:
+    def _single(self, tag: str) -> int:
+        ids = self.tokenize(tag)
+        if len(ids) != 1:
+            raise ServerError(f"the think tag {tag!r} isn't one token in this model but {len(ids)}")
+        return ids[0]
+
+    def _checked(self, payload: dict[str, Any], result: dict[str, Any]) -> dict[str, Any]:
         # The server also flags an answer that fills its slot exactly, so only a short one counts.
         if result["truncated"] and result["tokens_predicted"] < payload["n_predict"]:
             length = len(payload["prompt"])
@@ -276,7 +400,7 @@ class LlamaServer:
                 f"the server's context cut an answer short: a prompt of {length} tokens needs"
                 f" a slot of at least {length + payload['n_predict']} tokens"
             )
-        return Answer(result["content"], result["tokens_predicted"], result["stop_type"] != "limit")
+        return result
 
     def top_logprobs(
         self,

@@ -41,11 +41,11 @@ from optuna.storages.journal import JournalFileBackend
 from optuna.trial import BaseTrial, FrozenTrial, TrialState
 
 from . import config, kl
-from .engine import LlamaServer
+from .engine import LlamaServer, Thinking
 from .judge import Guard, is_refusal, judged_refusal, read_verdict
 from .kernel import Kernel
-from .measure import Edit, edit_adapters
-from .run import STAGES, Run, RunError, digest
+from .measure import Edit, answering, edit_adapters
+from .run import STAGES, Run, RunError, digest, seeds
 
 SLOTS = 8
 # Harmful prompts judged at a time, so a trial that can't win stops early. The server answers the
@@ -84,6 +84,12 @@ class Score:
     kl: float
     # Harmful prompts judged: all of them, unless the trial was stopped early.
     judged: int
+    # A thinking model's thinking on the prompts judged: its mean length in tokens, and how many
+    # answers reached the budget, so the model was made to stop thinking and answer; and KL read where
+    # the thinking starts, to see whether it tells edits apart as KL at the answer start does.
+    thinking: float = 0.0
+    forced: int = 0
+    kl_thinking: float | None = None
 
 
 @dataclass(frozen=True)
@@ -299,7 +305,14 @@ def _completed(study: optuna.Study) -> list[FrozenTrial]:
 def _score(trial: FrozenTrial) -> Score:
     attrs = trial.user_attrs
     return Score(
-        attrs["refusals"], attrs["keyword_refusals"], attrs["unlabelled"], attrs["kl"], attrs["judged"]
+        attrs["refusals"],
+        attrs["keyword_refusals"],
+        attrs["unlabelled"],
+        attrs["kl"],
+        attrs["judged"],
+        attrs.get("thinking", 0.0),
+        attrs.get("forced", 0),
+        attrs.get("kl_thinking"),
     )
 
 
@@ -397,7 +410,8 @@ def trial_edit(run: Run, number: int) -> Edit:
         run.gguf()
         ids = run.prompt_ids()
         run.directions()
-        now = json.loads(json.dumps(Search(run).inputs(ids["harmful_test"], ids["harmless_test"])))
+        harmless = run.kl_ids(ids, "harmless_test")
+        now = json.loads(json.dumps(Search(run).inputs(ids["harmful_test"], harmless)))
     if not (folder / "inputs.json").exists():
         raise RunError(f"{folder} holds a search with no record of its settings")
     before = json.loads((folder / "inputs.json").read_text())
@@ -436,13 +450,14 @@ class Search:
             adapters = run.adapters()
             _, quantized = run.gguf()
             ids = run.prompt_ids()
-            harmful, harmless = ids["harmful_test"], ids["harmless_test"]
+            harmful, harmless = ids["harmful_test"], run.kl_ids(ids, "harmless_test")
+            starts = ids["harmless_test"] if run.settings.deployment.think_close else None
             studies = self._studies(self.inputs(harmful, harmless))
             target = min(target, len(SCOPES) * space.trials_per_scope)
             started(self._done(studies), target)
             if self._done(studies) < target:
                 files = [path for made in adapters.values() for path in made.values()]
-                with self._scorer(quantized, files, harmful, harmless) as scorer:
+                with self._scorer(quantized, files, harmful, harmless, starts) as scorer:
                     first = studies[SCOPES[0]]
                     base = first.user_attrs.get("base_refusals")
                     if base is None:
@@ -485,7 +500,8 @@ class Search:
             _, quantized = run.gguf()
             ids = run.prompt_ids()
             run.directions()
-            harmful, harmless = ids["harmful_test"], ids["harmless_test"]
+            harmful, harmless = ids["harmful_test"], run.kl_ids(ids, "harmless_test")
+            starts = ids["harmless_test"] if run.settings.deployment.think_close else None
             # Checked before the adapters are brought up to date, so a mismatch leaves the run as it was.
             record, journal = self.folder / "inputs.json", self.folder / "study.jsonl"
             if record.exists():
@@ -502,7 +518,7 @@ class Search:
             adapters = run.adapters()
             made = [self._edit_files(edit, adapters) for edit in edits]
             files = [path for found in [*adapters.values(), *made] for path in found.values()]
-            with self._scorer(quantized, list(dict.fromkeys(files)), harmful, harmless) as scorer:
+            with self._scorer(quantized, list(dict.fromkeys(files)), harmful, harmless, starts) as scorer:
                 base = scorer.score({}).refusals
                 scores = []
                 for edit, found in zip(edits, made, strict=True):
@@ -528,28 +544,52 @@ class Search:
 
     @contextmanager
     def _scorer(
-        self, quantized: Path, files: list[Path], harmful: list[list[int]], harmless: list[list[int]]
+        self,
+        quantized: Path,
+        files: list[Path],
+        harmful: list[list[int]],
+        harmless: list[list[int]],
+        starts: list[list[int]] | None,
     ) -> Iterator["_Scorer"]:
-        """A scorer on llama-server with these adapters loaded, and the judge, for the test prompts."""
+        """A scorer on llama-server with these adapters loaded, and the judge, for the test prompts;
+        with starts, the harmless prompts as they open a thinking model's thinking."""
         run, settings = self.run, self.run.settings
         texts = run.prompt_texts()[0]["harmful_test"]
-        room = max(len(p) for p in harmful + harmless) + settings.scoring.answer_tokens + 8
+        budget = settings.scoring.thinking_budget
+        answer = settings.scoring.answer_tokens + run.thinking_room(budget)
+        room = max(len(p) for p in harmful + harmless) + answer + 8
         guard = Guard(settings.measure.judge, settings.measure.judge_revision)
         try:
             with run.server(quantized, files, context_per_slot=room, parallel=SLOTS) as server:
                 run.check_prompts(server, "harmful_test", texts, harmful)
-                yield _Scorer(server, guard, texts, harmful, harmless, settings.scoring)
+                answering = _Answering(
+                    settings.scoring.answer_tokens,
+                    run.sampling(),
+                    seeds(settings.sampling.seed, len(harmful)),
+                    run.thinking(server, budget),
+                )
+                yield _Scorer(
+                    server, guard, texts, harmful, harmless, settings.scoring.kl_tokens, answering, starts
+                )
         finally:
             guard.close()
 
     def inputs(self, harmful: list[list[int]], harmless: list[list[int]]) -> dict[str, Any]:
         """What the search's scores depend on. A search is only carried on while these are the same."""
         settings = self.run.settings
+        # Nothing for a greedy model that doesn't think, so searches made before candor sampled still
+        # carry on.
+        how = answering(settings)
+        if "sampling" in how:
+            how["sampling"]["seed"] = settings.sampling.seed
+        if "thinking" in how:
+            how["thinking"]["budget"] = settings.scoring.thinking_budget or how["thinking"]["budget"]
         return {
             "model file": self.run.inputs["quantized"],
             "adapters": digest(self.run.adapter_inputs()),
             "test prompts": digest([harmful, harmless]),
             "answer length": settings.scoring.answer_tokens,
+            **how,
             "KL tokens": settings.scoring.kl_tokens,
             "judge": [settings.measure.judge, settings.measure.judge_revision],
             "KV cache": settings.deployment.kv_cache,
@@ -682,6 +722,17 @@ class Search:
         return number, score
 
 
+@dataclass(frozen=True)
+class _Answering:
+    """How a trial answers the harmful test prompts: answers this long after any thinking, sampled
+    with each prompt's own seed, the same for every trial."""
+
+    tokens: int
+    sampling: dict[str, float]
+    seeds: list[int]
+    thinking: Thinking | None
+
+
 class _Scorer:
     """Scores an edit, given as adapter strengths, against the unedited model's first tokens."""
 
@@ -692,20 +743,32 @@ class _Scorer:
         texts: list[str],
         harmful: list[list[int]],
         harmless: list[list[int]],
-        scoring: config.Scoring,
+        kl_tokens: int,
+        answering: _Answering,
+        starts: list[list[int]] | None,
     ):
         self.server, self.guard, self.texts = server, guard, texts
-        self.harmful, self.harmless, self.scoring = harmful, harmless, scoring
-        self.base = server.top_logprobs(harmless, scoring.kl_tokens)
+        self.harmful, self.harmless, self.kl_tokens = harmful, harmless, kl_tokens
+        self.answering, self.starts = answering, starts
+        self.base = server.top_logprobs(harmless, kl_tokens)
+        self.base_starts = server.top_logprobs(starts, kl_tokens) if starts else None
 
     def score(self, scales: dict[Path, float], stop_above: int | None = None) -> Score:
         """An edit's refusals and KL divergence. The harmful prompts are judged CHUNK at a time, in
         order, while the server answers the next ones; with stop_above, it stops once more than that
         many are refused."""
-        refusals = keyword_refusals = unlabelled = judged = 0
-        with closing(self.server.answers(self.harmful, self.scoring.answer_tokens, scales)) as answering:
+        refusals = keyword_refusals = unlabelled = judged = thought = forced = 0
+        how = self.answering
+        answering = self.server.answers(
+            self.harmful, how.tokens, scales, how.sampling, how.seeds, how.thinking
+        )
+        with closing(answering):
             for start in range(0, len(self.harmful), CHUNK):
-                answers = [a.text for a in islice(answering, CHUNK)]
+                chunk = list(islice(answering, CHUNK))
+                thought += sum(a.thinking for a in chunk)
+                forced += sum(a.forced for a in chunk)
+                # Only what follows a thinking model's thinking is its answer, so only that is judged.
+                answers = [a.text for a in chunk]
                 replies = self.guard.replies(self.texts[start : start + CHUNK], answers)
                 labels = [
                     judged_refusal(answer, read_verdict(reply))
@@ -717,5 +780,13 @@ class _Scorer:
                 judged += len(answers)
                 if stop_above is not None and refusals > stop_above:
                     break
-        top = self.server.top_logprobs(self.harmless, self.scoring.kl_tokens, scales)
-        return Score(refusals, keyword_refusals, unlabelled, kl.mean_from_top(self.base, top), judged)
+        top = self.server.top_logprobs(self.harmless, self.kl_tokens, scales)
+        divergence = kl.mean_from_top(self.base, top)
+        at_start = None
+        if self.starts and self.base_starts:
+            at_start = kl.mean_from_top(
+                self.base_starts, self.server.top_logprobs(self.starts, self.kl_tokens, scales)
+            )
+        return Score(
+            refusals, keyword_refusals, unlabelled, divergence, judged, thought / judged, forced, at_start
+        )

@@ -34,7 +34,7 @@ Results of each phase, numbers only, are in `results/` (phase 2: `results/phase-
 
 ### Next
 
-1. Phase 3, step 1: thinking-model support (steps below).
+1. Phase 3, step 2: the pod bootstrap and watchdog (steps below).
 2. Not blocking, each when there is a reason:
    - one search on a pod with the attention peak's floor and its reach's ceiling widened (535 presses
      both, at 0.6); wider ranges become the default only if its held-out best beats 535's;
@@ -62,9 +62,11 @@ Results of each phase, numbers only, are in `results/` (phase 2: `results/phase-
   search uses 8192 too.
 - An answer still unfinished after its forced close counts against the edit.
 - KL is read at the start of the answer, after a closed thinking block, as heretic read it: the
-  first token of thinking is nearly fixed, so KL there can't tell edits apart. The pilot checks this
-  (KL at both positions for the unedited model, Trial 161 and a few random edits) and keeps the
-  position that separates edits. Directions stay read at the think start.
+  first token of thinking is nearly fixed, so KL there can't tell edits apart. The pilot checks that
+  KL at the answer start does separate edits. Directions stay read at the think start.
+- The reference is heretic's own Trial 161, re-saved by heretic on the pod and exported and measured
+  as candor ships its edits (the user's choice, 2026-10-13): heretic made it with row normalisation
+  "full" (rank 3) and directions read after a closed thinking block, which candor can't rebuild.
 - Maths: the full 1,319 GSM8K questions at 8192 on every finalist, never on search trials.
 - Pods: the pilot runs on an A40 ($0.59/hr); the search runs on the cheapest card that finishes it
   overnight (about 12 h). The watchdog deletes the pod at a cap set per job. Expect a top-up beyond
@@ -76,7 +78,7 @@ Results of each phase, numbers only, are in `results/` (phase 2: `results/phase-
 
 | Step | What | State |
 | --- | --- | --- |
-| 1 | Thinking-model settings: the template settings, sampling with a seed per prompt, the thinking budget with a forced close, the judge reading only the final answer, unfinished answers counted against, KL at the answer start; `serve` at the same settings; rebuilding a heretic trial made with a `response_prefix` (Trial 161). Checked on a tiny thinking model and SmolLM2 | |
+| 1 | Thinking-model settings: sampling with a seed per prompt, the thinking budget with a forced close (llama-server's own), the judge reading only the final answer, an answer that never comes counted as a refusal, KL at the answer start; `serve` at the same settings; `measure --seed` for the noise check; `export --outside` and `measure --outside` to ship and measure heretic's own save of Trial 161 like candor's edits (the user's choice: heretic made it with row normalisation "full", rank-3, which candor can't rebuild). Checked on a tiny thinking model in the real llama-server and SmolLM2 | Done 2026-10-13, reviewed: 2 major findings (the chat page forces `\n</think>` after the message, so measurements now force the same; a heretic trial read after a `response_prefix` is refused, not rebuilt wrongly) and 6 minor ones fixed, each with a test that fails without its fix |
 | 2 | Pod bootstrap, torch's CUDA build matched to llama.cpp's 12.8, Qwen3.5's fast kernels, and an in-pod watchdog that deletes the pod at a budget; checked on rude-llama (about $0.30) | |
 | 3 | Qwen3.5-9B on a pod: `init`, `run`, the unedited model measured twice (noise), Trial 161 rebuilt and measured, thinking lengths, KL at both positions. The decision rule written from them, for sign-off | |
 | 4 | A search pilot (time and cost per trial, the search's thinking budget), then the full search | |

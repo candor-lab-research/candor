@@ -14,6 +14,7 @@ import hashlib
 import json
 import math
 import os
+import re
 import shutil
 from collections.abc import Callable, Iterator, Sequence
 from contextlib import contextmanager
@@ -31,7 +32,7 @@ from huggingface_hub import constants, snapshot_download
 from . import checks, config, convert, directions, residuals, source, targets, toolchain
 from .adapters import write_adapter
 from .edit import RowNorm, rank_one
-from .engine import LLAMA_CPP_RELEASE, LlamaServer
+from .engine import LLAMA_CPP_RELEASE, LlamaServer, Thinking
 from .judge import normalise
 from .weights import ModelFiles
 
@@ -39,6 +40,14 @@ MODEL_FILES = ["*.json", "*.safetensors", "*.jinja", "*.txt", "*.model", "*.tikt
 PROMPT_SETS = tuple(config.Prompts.model_fields)
 # Prompt sets the search never sees, kept for comparing finished edits.
 HELD_OUT = ("harmful_held_out", "harmless_held_out")
+# The prompt sets KL is read on. For a thinking model each is also kept with its thinking closed, under
+# its name and ANSWERING, so KL is read where the answer starts.
+KL_SETS = ("harmless_test", "harmless_held_out")
+ANSWERING = "_answering"
+# A sampled answer's seed is never llama.cpp's "pick one at random".
+RANDOM_SEED = 2**32 - 1
+# A prompt that ends by opening a thinking tag, such as Qwen3.5's <think> or K2-Horizon's <ifm|think>.
+OPENS_THINKING = re.compile(r"<[^<>/]*think[^<>]*>\s*$", re.IGNORECASE)
 DATE_PROBE = "31 Dec 1999"
 CHECKED_PER_SET = 3
 # The version of each stage's code, in stage order. Bump a stage's number in any commit that changes
@@ -120,6 +129,13 @@ def load_prompts(spec: config.PromptSet) -> list[str]:
             raise RunError(f"{spec.dataset} has no rows whose {column} is {', '.join(sorted(unmatched))}")
         keep = [kept and label not in excluded for kept, label in zip(keep, labels, strict=True)]
     return [text for text, kept in zip(texts, keep, strict=True) if kept]
+
+
+def seeds(seed: int, count: int) -> list[int]:
+    """A seed of its own for each of count prompts, made from seed: the same prompt always gets the
+    same one, whatever edit answers it."""
+    made = (hashlib.sha256(f"{seed}:{i}".encode()).digest() for i in range(count))
+    return [int.from_bytes(digest[:4]) % RANDOM_SEED for digest in made]
 
 
 def drop_repeats(texts: dict[str, list[str]]) -> dict[str, int]:
@@ -387,6 +403,53 @@ class Run:
         date = date or self.settings.model.date
         return {"date_string": date} if date else {}
 
+    def sampling(self) -> dict[str, float]:
+        """How llama-server picks each token, as the run's settings say the model is used, seeds
+        apart."""
+        return self.settings.sampling.model_dump(exclude={"seed"})
+
+    def thinking(self, server: LlamaServer, budget: int | None = None) -> Thinking | None:
+        """How a thinking model thinks, with its budget, the deployment's unless given; None for a
+        model that doesn't think. Every prompt must end by opening its thinking, or the budget would
+        never start counting; and a prompt that ends by opening some thinking needs a think_close, or
+        its thinking would be judged as its answer."""
+        deployment = self.settings.deployment
+        rendered = server.apply_template(self.chats(["x"])[0], self.template_kwargs())
+        if deployment.think_close is None:
+            if OPENS_THINKING.search(rendered):
+                raise RunError(
+                    "every prompt ends by opening the model's thinking, but deployment.think_close isn't "
+                    "set, so its thinking would be judged as its answer; set it, and a thinking_budget"
+                )
+            return None
+        start, end = deployment.tags()
+        opened = rendered[rendered.rfind(start) :] if start in rendered else ""
+        if opened.strip() != start:
+            raise RunError(
+                f"the chat template doesn't end a prompt by opening the thinking with {start}, as "
+                "deployment.think_close says it does"
+            )
+        budget = budget or deployment.thinking_budget
+        assert budget is not None
+        close = deployment.think_close.rstrip()
+        return Thinking(start, end, close, opened, budget, deployment.thinking_budget_message)
+
+    def thinking_room(self, budget: int | None = None) -> int:
+        """The most tokens a thinking model's thinking can take before its answer, the message it is
+        made to write at the end of its budget (the deployment's unless given) included."""
+        deployment = self.settings.deployment
+        if deployment.think_close is None:
+            return 0
+        budget = budget or deployment.thinking_budget
+        assert budget is not None
+        # A token holds at least one byte, and the engine allows a few more for the end tag.
+        return budget + len(deployment.thinking_budget_message.encode()) + 16
+
+    def kl_ids(self, ids: dict[str, list[list[int]]], name: str) -> list[list[int]]:
+        """The prompts of one of KL_SETS as KL is read on them: for a thinking model, with its thinking
+        closed, so KL is read on the first token of the answer rather than of the thinking."""
+        return ids[name + ANSWERING] if self.settings.deployment.think_close else ids[name]
+
     def chats(self, prompts: list[str]) -> list[list[dict[str, str]]]:
         system = self.settings.deployment.system_prompt
         head = [{"role": "system", "content": system}] if system else []
@@ -404,10 +467,12 @@ class Run:
         }
 
     def _check_lengths(self, ids: dict[str, list[list[int]]]) -> None:
-        """Prompts the model answers must fit with a whole answer; the rest need room for one token."""
-        limit, room = self.context_limit, self.answer_tokens
+        """Prompts the model answers must fit with whole thinking and a whole answer; the rest need room
+        for one token."""
+        limit, thinking = self.context_limit, self.thinking_room()
         if not limit:
             return
+        room = {name: tokens + thinking for name, tokens in self.answer_tokens.items()}
         too_long = {name: sum(len(p) + room.get(name, 1) > limit for p in ids[name]) for name in PROMPT_SETS}
         if any(too_long.values()):
             counts = ", ".join(f"{count} {name}" for name, count in too_long.items() if count)
@@ -448,6 +513,9 @@ class Run:
             "prompts": settings.prompts.model_dump(),
             "maths_instruction": settings.measure.maths_instruction,
         }
+        close = settings.deployment.think_close
+        if close:
+            inputs["think_close"] = close
         if self.fresh(path, inputs):
             ids = json.loads(path.read_text())
             self._check_lengths(ids)
@@ -467,6 +535,9 @@ class Run:
                         "the chat template ignores the pinned date, so prompts would still change daily"
                     )
             ids = {name: server.chat_ids(self.chats(texts[name]), kwargs) for name in PROMPT_SETS}
+            if close:
+                for name in KL_SETS:
+                    ids[name + ANSWERING] = server.chat_ids(self.chats(texts[name]), kwargs, close)
         self._check_lengths(ids)
         sampled = {name: ids[name][:CHECKED_PER_SET] for name in PROMPT_SETS}
         slot = max(len(p) for prompts in sampled.values() for p in prompts) + 16

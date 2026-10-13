@@ -20,7 +20,7 @@ from candor.run import Run, RunError
 from candor.toolchain import ToolchainError
 
 from .custom_code import write_custom_code_model
-from .test_checks import needs_node
+from .test_checks import THINKING, needs_node
 from .test_targets import llama
 from .tiny_tokenizer import DATED, PINNABLE, WITH_BOS, tokenizer
 
@@ -174,6 +174,18 @@ def test_init_pins_the_date_in_the_templates_own_format(tmp_path):
     result = init(tmp_path, model_folder(tmp_path, template=template))
     assert result.exit_code == 0, result.output
     assert config.load(tmp_path / "runs" / "first").model.date == config.today_in("%Y-%m-%d")
+
+
+def test_init_finds_a_thinking_models_close_and_gives_it_a_budget(tmp_path):
+    result = init(tmp_path, model_folder(tmp_path, template=THINKING))
+    assert result.exit_code == 0, result.output
+    shown = " ".join(result.output.split())
+    assert "Thinking" in shown and "This model thinks before it answers" in shown
+    deployment = config.load(tmp_path / "runs" / "first").deployment
+    assert deployment.think_close == "</think>\n\n" and deployment.thinking_budget == config.THINKING_BUDGET
+    (tmp_path / "plain").mkdir()
+    plain = init(tmp_path, model_folder(tmp_path / "plain"), "plain")
+    assert plain.exit_code == 0 and config.load(tmp_path / "runs" / "plain").deployment.think_close is None
 
 
 def test_a_local_model_has_no_revision(tmp_path):

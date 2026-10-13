@@ -31,7 +31,36 @@ def arguments(run: Run, model: Path, port: int, context: int) -> list[str]:
     ]  # fmt: skip
     if settings := chat_settings(run):
         args += ["--chat-template-kwargs", json.dumps(settings)]
-    return args
+    return args + sampling_flags(run) + thinking_flags(run)
+
+
+def sampling_flags(run: Run) -> list[str]:
+    """The server's sampling defaults, which every chat request the page sends without its own takes:
+    the run's, as measurements sample."""
+    sampling = run.settings.sampling
+    flags = {
+        "--temp": sampling.temperature,
+        "--top-k": sampling.top_k,
+        "--top-p": sampling.top_p,
+        "--min-p": sampling.min_p,
+        "--presence-penalty": sampling.presence_penalty,
+        "--repeat-penalty": sampling.repeat_penalty,
+    }
+    return [str(item) for flag, value in flags.items() for item in (flag, value)]
+
+
+def thinking_flags(run: Run) -> list[str]:
+    """A thinking model's budget and the message it is made to write when the budget runs out, which
+    the chat endpoint applies to every request that brings no budget of its own."""
+    deployment = run.settings.deployment
+    if deployment.thinking_budget is None:
+        return []
+    return [
+        "--reasoning-budget",
+        str(deployment.thinking_budget),
+        "--reasoning-budget-message",
+        deployment.thinking_budget_message,
+    ]
 
 
 def start(args: list[str], log: Path, timeout: float = 600) -> subprocess.Popen:

@@ -11,6 +11,8 @@ from typing import Any, cast
 
 from transformers import CONFIG_MAPPING, PreTrainedTokenizerBase
 
+from .config import END_TAG
+
 JS = Path(__file__).parent / "js"
 
 
@@ -149,6 +151,23 @@ def begin_of_text(tokenizer: PreTrainedTokenizerBase) -> BeginOfText:
 STRFTIME = re.compile(r"strftime_now\s*\(")
 DATE_STRING = re.compile(r"set\s+date_string\s*=\s*strftime_now\s*\(\s*[\"']([^\"']+)[\"']\s*\)")
 DATE_GUARD = re.compile(r"date_string\s+is\s+(not\s+)?defined")
+
+
+def think_close(tokenizer: PreTrainedTokenizerBase) -> str | None:
+    """The text that ends a thinking model's thinking, as its chat template writes it with thinking off:
+    what enable_thinking=False adds to a prompt ready for the answer, one end tag such as </think>. None
+    for a template without that switch, or one that writes thinking off some other way, such as one
+    whose prompts don't open the thinking themselves."""
+
+    def ready(**settings: Any) -> str:
+        rendered = tokenizer.apply_chat_template(
+            [USER], tokenize=False, add_generation_prompt=True, **settings
+        )
+        return cast(str, rendered)
+
+    thinking, answering = ready(), ready(enable_thinking=False)
+    close = answering[len(thinking) :] if answering.startswith(thinking) else ""
+    return close if END_TAG.fullmatch(close) else None
 
 
 def pinnable_date_format(template: str) -> str | None:

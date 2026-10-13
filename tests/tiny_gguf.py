@@ -13,6 +13,11 @@ TOKENS = SPECIAL + BYTES + WORDS
 FIRST_WORD = len(SPECIAL) + len(BYTES)
 TYPES = [gguf.TokenType.UNKNOWN, gguf.TokenType.CONTROL, gguf.TokenType.CONTROL]
 TYPES += [gguf.TokenType.BYTE] * len(BYTES) + [gguf.TokenType.NORMAL] * len(WORDS)
+# A thinking model's vocabulary: the last two words become think tags, added tokens as in Qwen3.5, so
+# the vocabulary's size and the random weights stay the same.
+THINK, END_THINK = "<think>", "</think>"
+THINKING_TOKENS = [*TOKENS[:-2], THINK, END_THINK]
+THINKING_TYPES = [*TYPES[:-2], gguf.TokenType.USER_DEFINED, gguf.TokenType.USER_DEFINED]
 
 
 def random_weights(seed: int = 0) -> dict[str, np.ndarray]:
@@ -43,7 +48,10 @@ def random_weights(seed: int = 0) -> dict[str, np.ndarray]:
     return weights
 
 
-def write_model(path: Path, weights: dict[str, np.ndarray], chat_template: str | None = None) -> None:
+def write_model(
+    path: Path, weights: dict[str, np.ndarray], chat_template: str | None = None, thinking: bool = False
+) -> None:
+    tokens, types = (THINKING_TOKENS, THINKING_TYPES) if thinking else (TOKENS, TYPES)
     writer = gguf.GGUFWriter(path, "llama")
     writer.add_context_length(256)
     writer.add_embedding_length(HIDDEN)
@@ -56,9 +64,9 @@ def write_model(path: Path, weights: dict[str, np.ndarray], chat_template: str |
     writer.add_vocab_size(len(TOKENS))
     writer.add_file_type(gguf.LlamaFileType.ALL_F32)
     writer.add_tokenizer_model("llama")
-    writer.add_token_list(TOKENS)
-    writer.add_token_scores([0.0] * len(TOKENS))
-    writer.add_token_types(TYPES)
+    writer.add_token_list(tokens)
+    writer.add_token_scores([0.0] * len(tokens))
+    writer.add_token_types(types)
     writer.add_bos_token_id(1)
     writer.add_eos_token_id(2)
     if chat_template:

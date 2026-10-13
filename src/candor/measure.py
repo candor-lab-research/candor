@@ -16,11 +16,11 @@ from dataclasses import asdict, dataclass
 from pathlib import Path
 from typing import Any
 
-from . import export, heretic, kl
-from .engine import LlamaServer
+from . import config, export, heretic, kl
+from .engine import LlamaServer, Thinking
 from .judge import Guard, is_refusal, judged_refusal, read_verdict
 from .kernel import Kernel
-from .run import HELD_OUT, Run, RunError, digest, load_prompts, sync
+from .run import HELD_OUT, Run, RunError, digest, load_prompts, seeds, sync
 from .targets import Writer
 
 SETS = ("harmful_held_out", "harmless_held_out", "maths")
@@ -91,6 +91,11 @@ def heretic_trial(journal_path: Path, number: int, row_norm: str) -> Edit:
         problems.append("it winsorised the residuals, which candor doesn't")
     if settings.get("orthogonalize_direction") is not True:
         problems.append("it doesn't record orthogonalising its directions, as candor does")
+    if settings.get("response_prefix"):
+        problems.append(
+            "it read its directions after a response prefix, such as a closed thinking block, which "
+            "candor doesn't; export heretic's own save of the trial with candor export --outside instead"
+        )
     if problems:
         raise RunError(f"trial {number} can't be rebuilt like for like: " + "; ".join(problems))
     return Edit(f"heretic-{number}", trial.direction_layer, trial.kernels)
@@ -102,6 +107,29 @@ def edit_adapters(run: Run, edit: Edit, folder: Path) -> tuple[dict[str, Path], 
     directions = run.edit_directions(edit.name, edit.direction_layer)
     inputs = {**run.adapter_inputs(), "direction_layer": edit.direction_layer}
     return run.adapter_set(folder, directions, inputs), inputs
+
+
+def answering(settings: config.RunConfig) -> dict[str, Any]:
+    """How the model answers, for the records of what its answers depend on: its sampling, the seed
+    left out, unless it answers greedily as by default, and a thinking model's thinking. Nothing for a
+    greedy model that doesn't think, so the records of runs made before candor sampled still match."""
+    found: dict[str, Any] = {}
+    if settings.sampling != config.Sampling(seed=settings.sampling.seed):
+        found["sampling"] = settings.sampling.model_dump(exclude={"seed"})
+    if thinking := thinking_settings(settings.deployment):
+        found["thinking"] = thinking
+    return found
+
+
+def thinking_settings(deployment: config.Deployment) -> dict[str, Any] | None:
+    """How a thinking model's answers are capped, for the records of what they depend on."""
+    if deployment.think_close is None:
+        return None
+    return {
+        "close": deployment.think_close,
+        "budget": deployment.thinking_budget,
+        "message": deployment.thinking_budget_message,
+    }
 
 
 def gold_number(answer: str) -> float:
@@ -147,17 +175,24 @@ class Measurement:
         limit: int | None = None,
         progress: Progress = no_progress,
         exported: bool = False,
+        seed: int | None = None,
+        outside: str | None = None,
     ):
         """With exported, the edit's exported GGUF is measured, rather than the run's model with the
-        edit's adapters."""
+        edit's adapters; with outside, the export of that name of a model edited elsewhere. seed
+        replaces the run's sampling seed, to see how much sampling alone moves the counts."""
         if exported and edit is None:
             raise ValueError("only an edit has an export to measure")
+        if outside is not None and (edit is not None or exported):
+            raise ValueError("a model edited elsewhere is measured on its own")
         self.run = run
         self.edit = edit
         self.exported = exported
+        self.outside = outside
         self.name = name
         self.slots = slots
         self.limit = limit
+        self.seed = run.settings.sampling.seed if seed is None else seed
         self.progress = progress
         self.folder = run.path("measurements", name)
         self.guard: Guard | None = None
@@ -176,7 +211,10 @@ class Measurement:
             ids = {name: all_ids[name][: self.limit] for name in SETS}
             self.folder.mkdir(parents=True, exist_ok=True)
             model, scales, edit = quantized, {}, None
-            if self.exported:
+            if self.outside is not None:
+                model, made_from = export.outside_export(run, self.outside)
+                edit = {"exported": digest(made_from)}
+            elif self.exported:
                 assert self.edit is not None
                 model, made_from = export.exported(run, self.edit)
                 edit = {"exported": digest(made_from)}
@@ -191,13 +229,22 @@ class Measurement:
                 else:
                     answered[name] = reused
             if todo:
-                room = max(len(p) + run.answer_tokens[name] for name, _ in todo for p in ids[name])
+                thinking_room = run.thinking_room()
+                room = max(
+                    len(p) + run.answer_tokens[name] + thinking_room for name, _ in todo for p in ids[name]
+                )
                 server = run.server(model, list(scales), context_per_slot=room + 8, parallel=self.slots)
                 with server:
+                    thinking = run.thinking(server)
                     for name, inputs in todo:
                         prompts = self._texts(name)
                         run.check_prompts(server, name, prompts, ids[name])
-                        answered[name] = self._answer(server, name, ids[name], prompts, scales, inputs)
+                        kl_ids = (
+                            run.kl_ids(all_ids, name)[: self.limit] if name == "harmless_held_out" else []
+                        )
+                        answered[name] = self._answer(
+                            server, name, ids[name], kl_ids, prompts, scales, thinking, inputs
+                        )
             try:
                 judged = {name: self._judged(name, answered[name]) for name in HELD_OUT}
             finally:
@@ -218,16 +265,23 @@ class Measurement:
         """What a set's answers depend on. Everything but the edit and the slots must match for two
         measurements to be compared. An export counts as its edit: it is the run's model, quantised
         the same way, with the edit merged in."""
-        settings = self.run.settings
+        run = self.run
+        deployment = run.settings.deployment
         paired: dict[str, Any] = {
-            "model": self.run.inputs["quantized"],
-            "kv_cache": settings.deployment.kv_cache,
+            "model": run.inputs["quantized"],
+            "kv_cache": deployment.kv_cache,
             "ids": digest(ids),
-            "answer_tokens": self.run.answer_tokens[name],
+            "answer_tokens": run.answer_tokens[name],
+            **answering(run.settings),
         }
         if name == "harmless_held_out":
-            paired["kl_tokens"] = settings.scoring.kl_tokens
-        return {"paired": paired, "edit": edit, "slots": self.slots}
+            paired["kl_tokens"] = run.settings.scoring.kl_tokens
+        inputs = {"paired": paired, "edit": edit, "slots": self.slots}
+        # The seed decides which random draws sampled answers meet. Two measurements with different
+        # seeds are still compared, prompt by prompt, to see how much sampling alone moves the counts.
+        if "sampling" in paired:
+            inputs["seed"] = self.seed
+        return inputs
 
     def _private(self, name: str) -> Path:
         return self.run.path("private", "measurements", self.name, name)
@@ -258,24 +312,35 @@ class Measurement:
         server: LlamaServer,
         name: str,
         ids: list[list[int]],
+        kl_ids: list[list[int]],
         prompts: list[str],
         scales: dict[Path, float],
+        thinking: Thinking | None,
         inputs: dict[str, Any],
     ) -> dict[str, Any]:
-        settings = self.run.settings
+        run = self.run
+        settings = run.settings
         started = time.perf_counter()
         answers = server.generate(
             ids,
-            self.run.answer_tokens[name],
+            run.answer_tokens[name],
             scales,
             self.progress(f"{SHORT_LABELS[name]}: answering", len(ids)),
+            run.sampling(),
+            seeds(self.seed, len(ids)),
+            thinking,
         )
+        # Only what follows a thinking model's thinking is its answer, so only that is judged.
         texts = [a.text for a in answers]
         result: dict[str, Any] = {
             "finished": [a.finished for a in answers],
             "tokens": [a.tokens for a in answers],
             "answer_seconds": time.perf_counter() - started,
+            "seed": self.seed,
         }
+        if thinking:
+            result["thinking"] = [a.thinking for a in answers]
+            result["forced"] = [a.forced for a in answers]
         if name in HELD_OUT:
             result["keyword_refused"] = [is_refusal(text) for text in texts]
             result["prompts"] = digest(prompts)
@@ -287,9 +352,13 @@ class Measurement:
                 is_correct(a.text, g, a.finished) for a, g in zip(answers, gold, strict=True)
             ]
         if name == "harmless_held_out":
-            done = self.progress(f"{SHORT_LABELS[name]}: first tokens", len(ids))
-            top = server.top_logprobs(ids, settings.scoring.kl_tokens, scales, done)
+            done = self.progress(f"{SHORT_LABELS[name]}: first tokens", len(kl_ids))
+            top = server.top_logprobs(kl_ids, settings.scoring.kl_tokens, scales, done)
             result["first_token"] = [[[t, p] for t, p in sorted(found.items())] for found in top]
+            if thinking:
+                # Also where the thinking starts, to see which of the two tells edits apart.
+                top = server.top_logprobs(ids, settings.scoring.kl_tokens, scales)
+                result["first_token_thinking"] = [[[t, p] for t, p in sorted(found.items())] for found in top]
         result |= {
             "seconds": time.perf_counter() - started,
             "slots": self.slots,
@@ -363,6 +432,19 @@ COUNTS: list[tuple[str, str, Callable[[dict[str, Any]], list[bool | None]]]] = [
     ("Maths correct", "maths", lambda r: r["correct"]),
     ("Maths cut off", "maths", lambda r: [not f for f in r["finished"]]),
 ]
+# What a thinking model's measurement also counts: answers whose thinking reached its budget, so the
+# model was made to stop thinking and answer.
+THINKING_COUNTS: list[tuple[str, str, Callable[[dict[str, Any]], list[bool | None]]]] = [
+    (f"{SHORT_LABELS[name]}, thinking cut", name, lambda r: r["forced"]) for name in SETS
+]
+
+
+def _counts(
+    *measurements: dict[str, dict[str, Any]],
+) -> list[tuple[str, str, Callable[[dict[str, Any]], Any]]]:
+    """What every one of the measurements counts."""
+    thinking = all("forced" in results[name] for results in measurements for name in SETS)
+    return COUNTS + (THINKING_COUNTS if thinking else [])
 
 
 def _count(values: list[bool | None]) -> str:
@@ -373,7 +455,7 @@ def _count(values: list[bool | None]) -> str:
 
 def summary(results: dict[str, dict[str, Any]]) -> list[tuple[str, str]]:
     """What one measurement found, as rows of a table."""
-    rows = [(label, _count(values(results[name]))) for label, name, values in COUNTS]
+    rows = [(label, _count(values(results[name]))) for label, name, values in _counts(results)]
     for name in HELD_OUT:
         result = results[name]
         pairs = zip(result["judge_refused"], result["keyword_refused"], strict=True)
@@ -381,9 +463,24 @@ def summary(results: dict[str, dict[str, Any]]) -> list[tuple[str, str]]:
         rows.append((f"{SHORT_LABELS[name]}, keywords disagree", _count(disagree)))
     for name in SETS:
         result = results[name]
-        rate = sum(result["tokens"]) / result["answer_seconds"] if result["answer_seconds"] else 0
+        if "thinking" in result:
+            thought = sorted(result["thinking"])
+            middle = thought[len(thought) // 2]
+            rows.append((f"{SHORT_LABELS[name]}, thinking tokens", f"median {middle}, most {thought[-1]}"))
+    for name in SETS:
+        result = results[name]
+        written = sum(result["tokens"]) + sum(result.get("thinking", []))
+        rate = written / result["answer_seconds"] if result["answer_seconds"] else 0
         rows.append((f"{SHORT_LABELS[name]}, time", f"{seconds(result):.0f} s, {rate:.0f} tokens/s"))
     return rows
+
+
+def _kl(a: list[list[list[float]]], b: list[list[list[float]]]) -> float:
+    """The mean KL divergence of b's first tokens from a's, as a measurement saves them."""
+    divergences = [
+        kl.from_top({int(t): p for t, p in x}, {int(t): p for t, p in y}) for x, y in zip(a, b, strict=True)
+    ]
+    return sum(divergences) / len(divergences)
 
 
 def seconds(result: dict[str, Any]) -> float:
@@ -418,7 +515,7 @@ def compare(a: dict[str, dict[str, Any]], b: dict[str, dict[str, Any]]) -> list[
         if name in HELD_OUT and a[name]["judge"] != b[name]["judge"]:
             raise RunError(f"the {LABELS[name]} were judged by different judges")
     rows: list[tuple[str, ...]] = []
-    for label, name, values in COUNTS:
+    for label, name, values in _counts(a, b):
         pairs = [
             (bool(x), bool(y))
             for x, y in zip(values(a[name]), values(b[name]), strict=True)
@@ -437,11 +534,15 @@ def compare(a: dict[str, dict[str, Any]], b: dict[str, dict[str, Any]]) -> list[
                 f"{mcnemar(only_a, only_b):.3g}",
             )
         )
-    first_a, first_b = a["harmless_held_out"]["first_token"], b["harmless_held_out"]["first_token"]
-    divergences = [
-        kl.from_top({int(t): p for t, p in x}, {int(t): p for t, p in y})
-        for x, y in zip(first_a, first_b, strict=True)
-    ]
-    mean = sum(divergences) / len(divergences)
-    rows.append(("Harmless KL from A", "", f"{mean:.4f}", "", "", ""))
+    harmless_a, harmless_b = a["harmless_held_out"], b["harmless_held_out"]
+    rows.append(
+        ("Harmless KL from A", "", f"{_kl(harmless_a['first_token'], harmless_b['first_token']):.4f}")
+    )
+    if "first_token_thinking" in harmless_a and "first_token_thinking" in harmless_b:
+        divergence = _kl(harmless_a["first_token_thinking"], harmless_b["first_token_thinking"])
+        rows.append(("Harmless KL from A, thinking start", "", f"{divergence:.4f}"))
+    rows = [(*row, *[""] * (6 - len(row))) for row in rows]
+    seed_a, seed_b = a["maths"].get("seed"), b["maths"].get("seed")
+    if seed_a != seed_b:
+        rows.append(("Sampling seed", str(seed_a), str(seed_b), "", "", ""))
     return rows
