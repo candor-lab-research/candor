@@ -37,7 +37,7 @@ from transformers.utils import logging as transformers_logging
 from . import checks, config, export, measure, search, serve, source, targets
 from .convert import ConversionError
 from .engine import LLAMA_CPP_RELEASE, ServerError
-from .run import PROMPT_SETS, Run, RunError
+from .run import PROMPT_SETS, Run, RunError, every_tenth
 from .toolchain import ToolchainError
 
 app = typer.Typer(
@@ -415,6 +415,14 @@ def upgrade(folder: Annotated[Path, typer.Argument(help="A run folder made by ca
             console.print(f"  {escape(name)}: {escape(config.RETIRED[name])}", soft_wrap=True)
 
 
+def _lines(console: Console, what: str, total: int, done: int = 0) -> Callable[[], None]:
+    """Progress as a line at every tenth, where output goes to a file such as a pod's log, which shows no
+    progress bar."""
+    if console.is_terminal:
+        return lambda: None
+    return every_tenth(lambda line: console.print(escape(line)), what, total, done)
+
+
 @contextmanager
 def _stopped_by_signals() -> Iterator[None]:
     """kill and a closed terminal end candor with SystemExit, so it stops llama-server and any other
@@ -593,7 +601,13 @@ def measure_command(
 
             def progress(description: str, total: int) -> Callable[[], None]:
                 task = bars.add_task(description, total=total)
-                return lambda: bars.advance(task)
+                line = _lines(console, description, total)
+
+                def done() -> None:
+                    bars.advance(task)
+                    line()
+
+                return done
 
             run = Run.open(folder, report)
             edit = None
@@ -909,13 +923,15 @@ def search_command(
             _awake(),
             Progress(*columns, console=console, speed_estimate_period=DAY) as bars,
         ):
-            tasks = []
+            tasks, lines = [], []
 
             def started(done: int, total: int) -> None:
                 tasks.append(bars.add_task("Trials", total=total, completed=done))
+                lines.append(_lines(console, "Trials", total, done))
 
             def finished(best: str | None) -> None:
                 bars.advance(tasks[0])
+                lines[0]()
                 if best:
                     console.print(escape(best))
 

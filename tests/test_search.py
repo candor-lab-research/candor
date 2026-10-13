@@ -315,8 +315,11 @@ def test_search_and_measure_a_trial_from_the_command_line(tiny):
     assert "Trial 1, one layer: 1 of 3 refused, KL" in shown
     assert "Trial 2, per layer: 1 of 3 refused, KL" in shown
     assert "The least KL of each kind at each count within the cap (2 refused)" in shown
+    # Output going to a file, as a pod's log, shows no bar, so each tenth is a line.
+    assert "Trials: 1 of 2" in shown and "Trials: 2 of 2" in shown
     finished_search = runner.invoke(app, ["search", str(folder)])
     assert finished_search.exit_code == 0, finished_search.output
+    assert "Trials: 3 of 4" in finished_search.output and "Trials: 1 of 4" not in finished_search.output
     commands = [line.split() for line in finished_search.output.splitlines() if "candor measure" in line]
     found = search.load(run.Run.open(folder))
     assert found is not None

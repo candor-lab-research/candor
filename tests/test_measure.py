@@ -1,9 +1,11 @@
+import io
 import json
 
 import pytest
+from rich.console import Console
 from typer.testing import CliRunner
 
-from candor import config, measure, run
+from candor import cli, config, measure, run
 from candor.cli import app
 from candor.engine import LlamaServer
 from candor.kernel import Kernel
@@ -223,6 +225,8 @@ def test_measure_and_compare_from_the_command_line_show_counts_only(tiny):
     assert "Harmful refused, judge" in measured.output
     assert "Measuring every prompt would take at most about" in measured.output
     assert "2 prompts can't keep all 8 slots busy" in measured.output
+    for step in ("Harmful: answering", "Harmless: first tokens", "Harmless: judging"):
+        assert f"{step}: 2 of 2" in measured.output
     compared = runner.invoke(app, ["compare", str(folder), "base-first-2", "base-first-2"])
     assert compared.exit_code == 0, compared.output
     assert "Harmless KL from A" in compared.output
@@ -530,3 +534,15 @@ def test_comparing_thinking_measurements_shows_kl_at_each_place_it_is_read(tiny,
         "Harmless KL from A, thinking start",
     ):
         assert float(rows[label][2]) > 0
+
+
+def test_progress_shows_as_lines_only_where_no_bar_can_be_seen():
+    shown = io.StringIO()
+    done = cli._lines(Console(file=shown, width=200), "Maths: answering", 20)
+    for _ in range(20):
+        done()
+    assert shown.getvalue().splitlines() == [f"Maths: answering: {n} of 20" for n in range(2, 21, 2)]
+    terminal = io.StringIO()
+    done = cli._lines(Console(file=terminal, force_terminal=True), "Maths: answering", 20)
+    done()
+    assert terminal.getvalue() == ""

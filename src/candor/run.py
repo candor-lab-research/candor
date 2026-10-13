@@ -184,6 +184,20 @@ def thinking_settings(deployment: config.Deployment) -> dict[str, Any] | None:
     }
 
 
+def every_tenth(report: Callable[[str], None], what: str, total: int, done: int = 0) -> Callable[[], None]:
+    """A callback for each of total as it is done, after the done already are, that reports how many are
+    at every tenth of them, so a long wait shows it moves where no progress bar can be seen."""
+    count = done
+
+    def one() -> None:
+        nonlocal count
+        count += 1
+        if count * 10 // total > (count - 1) * 10 // total:
+            report(f"{what}: {count} of {total}")
+
+    return one
+
+
 def drop_repeats(texts: dict[str, list[str]]) -> dict[str, int]:
     """Remove from each held-out set every prompt that is also in another set, or earlier in its own,
     so the held-out sets only hold prompts the search never saw. Returns how many each set lost."""
@@ -555,7 +569,9 @@ class Run:
             end = server.token_of(thinking.end)
             for name in KL_SETS:
                 prompts = ids[name]
-                done = self._tenths(f"Thought through {name.replace('_', ' ')} prompts", len(prompts))
+                done = every_tenth(
+                    self.report, f"Thought through {name.replace('_', ' ')} prompts", len(prompts)
+                )
                 thoughts = server.thoughts(
                     prompts, self.sampling(), seeds(settings.sampling.seed, len(prompts)), thinking, done
                 )
@@ -584,18 +600,6 @@ class Run:
         partial.write_text(json.dumps(made))
         self.commit(partial, record, self._thinking_inputs())
         return traces
-
-    def _tenths(self, what: str, total: int) -> Callable[[], None]:
-        """Reports how many of total are done at every tenth of them, so a long wait shows it moves."""
-        count = 0
-
-        def done() -> None:
-            nonlocal count
-            count += 1
-            if count * 10 // total > (count - 1) * 10 // total:
-                self.report(f"{what}: {count} of {total}")
-
-        return done
 
     def chats(self, prompts: list[str]) -> list[list[dict[str, str]]]:
         system = self.settings.deployment.system_prompt
