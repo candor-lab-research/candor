@@ -218,5 +218,5 @@ llama.cpp and its converter environment if candor hasn't fetched them yet.
 The engine tests run a tiny random model in the llama-server candor uses: `CANDOR_LLAMA_BIN`'s, or
 the one in candor's cache. Run candor once to install it; without it those tests are skipped.
 
-The one-off experiments behind the log in STATUS.md (phase 0 on a pod, rebuilding a heretic trial,
-scoring heretic's saved model) were in `spikes/`, last in commit `2bb6bba`.
+The one-off experiments behind the log in `results/history.md` (phase 0 on a pod, rebuilding a
+heretic trial, scoring heretic's saved model) were in `spikes/`, last in commit `2bb6bba`.
