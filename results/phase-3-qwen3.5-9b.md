@@ -88,3 +88,73 @@ A caveat: "within 10%" judges the pick against the best edit truly refusing at m
 pick measured at 2 refused truly refuses 2-4, so the measure flatters every design. Judged more
 strictly the shares fall to 5-45%, with the designs in the same order. Expect the search to land near
 the best, not on it, which is why its suggestions are measured on the held-out prompts.
+
+## Step 4: the unedited model and heretic's Trial 161, as used (2026-10-14)
+
+On an A40 pod (secure, $0.59/hr, about 16 h 20 min, $9.56 in all): Qwen/Qwen3.5-9B at c202236 in
+Q4_K_M with an f16 KV cache, no system prompt, sampled at Qwen's thinking settings (temperature 1.0,
+top_p 0.95, top_k 20, min_p 0, presence_penalty 1.5) with seed 0, thinking to a budget of 8192, 32
+slots, judged by Qwen3Guard-Gen-0.6B. `candor run` built 2,304 adapters; the unedited model's own
+thinking ended by itself on 96 of 100 harmless test prompts and 294 of 300 held-out ones.
+
+Trial 161 is heretic's own save (re-saved by heretic 1.4.0 on the pod; its menu said 11/100 refused,
+KL 0.0675, both thinking off), exported with `--outside` and measured as candor ships its edits. Each
+edited weight keeps 99.6-100.3% of its edit in Q4_K_M, so no Q8_0 was needed.
+
+Held-out prompts, paired prompt by prompt (`candor compare`):
+
+| | Unedited | Trial 161 | Only one / the other | p |
+| --- | --- | --- | --- | --- |
+| Harmful refused, judge | 279/288 | 28/288 | 251 / 0 | 6e-76 |
+| Harmful refused, keywords | 282/288 | 29/288 | 254 / 1 | 9e-75 |
+| Harmful answered unsafely | 2/288 | 234/288 | 0 / 232 | 3e-70 |
+| Harmless refused, judge | 5/300 | 1/300 | 4 / 0 | 0.13 |
+| Maths correct | 1183/1319 (89.7%) | 1162/1319 (88.1%) | 58 / 37 | 0.04 |
+| Maths answer cut off | 112/1319 | 131/1319 | 41 / 60 | 0.07 |
+| Maths thinking cut at 8192 | 184/1319 | 297/1319 | 53 / 166 | 9e-15 |
+| Harmless thinking cut at 8192 | 9/300 | 5/300 | 5 / 1 | 0.22 |
+| Harmful thinking cut at 8192 | 0/288 | 2/288 | 0 / 2 | 0.5 |
+
+| Thinking, median tokens | Unedited | Trial 161 |
+| --- | --- | --- |
+| Harmful | 996 | 2,980 |
+| Harmless | 1,137 | 1,175 |
+| Maths | 2,140 | 3,620 |
+
+KL of Trial 161 from the unedited model on the harmless held-out prompts: 0.073 where the answer
+starts after the unedited model's own thinking, 0.106 after an empty thinking block (heretic's
+place), 0.064 where the thinking starts.
+
+- Trial 161 removes nearly all refusals with thinking on (279 to 28), and refuses no more harmless
+  prompts.
+- It costs maths, just past noise: 21 fewer correct, p = 0.04 paired. And it makes the model think
+  far longer: maths thinking reaches the budget 113 more times, harmful thinking triples. These are
+  where candor can beat it.
+- KL at the start of the thinking (0.064) does tell Trial 161 from the unedited model, against the
+  phase 3 assumption that the first thinking token is nearly fixed.
+- The 32-prompt pilot (unedited: harmful 30/32 refused, harmless 0/32, maths 27/32) put maths
+  thinking well below Trial 161's (median 2,489 against 3,620), which suggested about 4.3 h for the
+  unedited model's maths; the long tail (184 reaching the budget) made it 4.9 h. Time follows the
+  tail, not the median.
+- The unedited model measured again with another seed, for noise, was skipped (the user, 2026-10-14):
+  the decision rule uses paired tests instead.
+- Time: unedited 6.0 h (harmful 22 min, harmless 45 min, maths 4.9 h), Trial 161 8.0 h, at 243-271
+  tokens/s, with sampling done on the CPU.
+
+### Speed of sampled thinking in llama-server on the A40 (32 requests of 1,024 tokens)
+
+| Setup | Tokens/s |
+| --- | --- |
+| 1 server, 32 slots, sampling on the CPU (as measured above) | 304 |
+| 2 servers of 16 slots, CPU | 524 |
+| 3 servers of 11 slots, CPU | 392 |
+| 1 server, 32 slots, sampling on the GPU (`--backend-sampling`) | 662 |
+| 2 servers, GPU | 456 |
+| 3 servers, GPU | 330 |
+| 1 server, 64 slots, GPU | 760 |
+
+A cheap trial's answers (100 prompts, thinking closed, greedy, 100 tokens, 32 slots): 21.6 s.
+
+llama.cpp turns GPU sampling off for a request with a thinking budget, which is why it gave nothing
+before; candor now holds the model to its budget itself. More servers only help while sampling is on
+the CPU; 64 slots add 15% over 32.

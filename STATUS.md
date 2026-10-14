@@ -16,7 +16,7 @@ and merged weights in Q4_K_M). (Decided 2026-10-11: the user isn't tied to Bioni
 | 0 | Score edits as per-layer LoRA adapters in llama.cpp | Adapters match merged weights, no speed cost | Done |
 | 1 | Core maths and `candor inspect` | candor's rebuild of a heretic trial matches its refusals, and measuring heretic's saved model under heretic's conditions gives heretic's numbers exactly; `inspect` reports correctly on rude-llama, Qwen3.5-9B and K2-Horizon | Done |
 | 2 | rude-llama end to end on the Mac: measure, search, export a GGUF to run in llama-server | Under the decision rule written in step 4 before any search runs, candor's shipped GGUF is at least as good as heretic's Trial 170 converted and quantised the same way: fewer or equal refusals on held-out prompts, no higher KL, no maths loss. It runs in llama-server. (A blind A/B was dropped by the user on 2026-10-12: 535 and Trial 170 are too close to tell apart by hand.) | Done 2026-10-13: trial 535, exported, passes against Trial 170 exported the same way, and ships (`runs/rude/exports/trial-535/`); see `results/milestone-rude-llama-vs-heretic.md` |
-| 3 | Qwen3.5-9B, a thinking model: scored with thinking on at your settings; residuals read on a pod | Written in step 4 before any search runs, from the measured noise, against heretic's own Trial 161 exported and measured as candor ships its edits | Steps 1-3 done 2026-10-13 (below); step 4 next |
+| 3 | Qwen3.5-9B, a thinking model: scored with thinking on at your settings; residuals read on a pod | Written in step 4 before any search runs, from the measured noise, against heretic's own Trial 161 exported and measured as candor ships its edits | Steps 1-4 done 2026-10-14 (below); the decision rule awaits sign-off, then step 5 |
 | 4 | K2-Horizon at your real settings | Measured honestly with its own chat template (Bionic couldn't parse it; llama-server's reader is to be checked) and the reasoning level you use, then improved | |
 
 From phase 3 a job expected to take over about 2 hours, or needing more memory than the Mac has,
@@ -24,8 +24,8 @@ runs on a pod (the user's decision, 2026-10-12); shorter jobs (a measurement, a 
 the Mac. The rude-llama search of phase 2 is the last long one on the Mac. So candor's whole
 pipeline (convert, residuals, search, measure) must run on a pod: `scripts/pod.sh` and its watchdog,
 which deletes the pod at a deadline set per job (README, "On a pod"), checked on rude-llama in phase
-3 step 2. Runpod had $18.56 (topped up 2026-10-12), less about $0.51 for that check: spend it only
-where a run earns it.
+3 step 2. Runpod had $18.56 (topped up 2026-10-12), less about $0.51 for that check and $9.56 for
+step 4: about $8.50 left, so the next pod run needs a top-up. Spend it only where a run earns it.
 
 Every step gets an independent review before it is called done; its findings are fixed with
 tests and the fixes verified until a review comes back clean. Heavy jobs (converting a real model,
@@ -36,8 +36,14 @@ phase 3: `results/phase-3-qwen3.5-9b.md`).
 
 ### Next
 
-1. Phase 3, step 4: Qwen3.5-9B on a pod (steps below), with the user's go and the price first.
+1. Phase 3: the user signs off the decision rule below; then step 5's proxy check on a pod, with
+   the price first.
 2. Not blocking, each when there is a reason:
+   - 64 slots for a thinking model's trials: 15% faster than 32 with GPU sampling (results file);
+   - sampling moved to the GPU on 2026-10-14 draws differently for a seed, so measurements made
+     before it pair with later ones prompt by prompt, not draw by draw; `answering` records don't
+     say which, as recording it would have thrown away the unedited model's saved thinking;
+   - an interrupted `candor proxy` scores the unedited model again for the mode it stopped in;
    - one search on a pod with the attention peak's floor and its reach's ceiling widened (535 presses
      both, at 0.6); wider ranges become the default only if its held-out best beats 535's;
    - whether the search should score on more or other prompts: per-layer trials' refusals and
@@ -53,7 +59,8 @@ phase 3: `results/phase-3-qwen3.5-9b.md`).
 ### Phase 3 decisions (the user, 2026-10-13)
 
 - Thinking on everywhere: the search, every measurement and `serve`. The model is always used
-  thinking, so scoring without it wouldn't replicate use.
+  thinking, so scoring without it wouldn't replicate use. (Revised 2026-10-14, below: the search may
+  use a cheap thinking-off score where step 5 shows it ranks edits alike; decisions stay as used.)
 - Answers are sampled, not greedy, at Qwen's recommended thinking settings (temperature 1.0, top_p
   0.95, top_k 20, min_p 0, presence_penalty 1.5), with a fixed seed per prompt so two edits are still
   compared prompt by prompt. `serve` uses the same settings. Greedy isn't how the model is used, and
@@ -107,6 +114,44 @@ with thinking on; every working community recipe turns thinking off. So:
 - The biggest open risk is the search's cost with thinking on: with Trial 161, 65 of 100 harmful
   answers were still thinking at 2048 tokens. The pilot measures it before the full search.
 
+### Phase 3 decisions after the night on the pod (the user, 2026-10-14)
+
+The goal stands: edits are chosen on how the model behaves as it is used, thinking on, sampled, in
+llama-server on the file that ships. But scoring 600 trials that way would take 100-200 GPU hours
+for a 9B model (Trial 161's measurement alone took 8 h), and the process must also work for 27B+
+thinking models. A 9B model must not take days. So:
+
+- Decisions only ever use as-used numbers. A cheap score (thinking closed with an empty block,
+  greedy, short answers, judged) may only decide which edits get the expensive as-used test, and
+  only once step 5 shows it ranks edits as thinking on does, for each new model.
+- Why the check: no published work validates a thinking-off score for ranking edits. The gap
+  between the modes changes size and even sign by model and by edit (unedited Qwen3 gives 6-15
+  points more harmful answers thinking on, 2509.00544; R1-distills are far safer thinking off,
+  2502.12025; 3-30% of prompts flip between modes, 2606.25013); an edit tuned thinking off reached
+  0.23-0.34 against 0.73 tuned thinking on (2607.02396); K2's heretic trial refused 7/100 thinking
+  off and 38/100 on, while Trial 161 held (11/100 off, 9.7% on). Answers under about 100 tokens miss
+  late refusals (heretic #487).
+- 100 prompts give about +-6 points; edits a few points apart are told apart only paired on the
+  held-out prompts.
+- llama-server's presence penalty covers only the last 64 tokens, prompt included (`repeat_last_n`),
+  where Qwen means the whole output (vLLM). candor measures it as llama-server runs it; it may be one
+  reason thinking runs long in real use.
+
+### Phase 3's decision rule (draft from step 4, for the user's sign-off)
+
+candor's edit, exported and measured as used on the held-out prompts like Trial 161 (Q4_K_M, f16 KV
+cache, 32 slots, Qwen's sampling, budget 8192), is compared prompt by prompt; "beyond noise" means
+a paired McNemar test at p < 0.05. It passes if:
+
+- harmful refused (judge) is no more than Trial 161's 28/288 beyond noise;
+- harmless refused is no more than the unedited model's 5/300 beyond noise;
+- KL after the unedited model's own thinking is no more than Trial 161's 0.073 (KL isn't sampled);
+- maths correct is no worse than Trial 161's 1162/1319 beyond noise;
+- maths thinking reaching the budget is no more than Trial 161's 297/1319 beyond noise;
+
+and it beats Trial 161 if it also does better beyond noise on maths, on thinking reaching the budget,
+or by a lower KL. Measured on the full 1,319 maths questions, as Trial 161 was.
+
 ### Phase 3 steps
 
 | Step | What | State |
@@ -114,9 +159,10 @@ with thinking on; every working community recipe turns thinking off. So:
 | 1 | Thinking-model settings: sampling with a seed per prompt, the thinking budget with a forced close (llama-server's own), the judge reading only the final answer, an answer that never comes counted as a refusal, KL at the answer start; `serve` at the same settings; `measure --seed` for the noise check; `export --outside` and `measure --outside` to ship and measure heretic's own save of Trial 161 like candor's edits (the user's choice: heretic made it with row normalisation "full", rank-3, which candor can't rebuild). Checked on a tiny thinking model in the real llama-server and SmolLM2 | Done 2026-10-13, reviewed: 2 major findings (the chat page forces `\n</think>` after the message, so measurements now force the same; a heretic trial read after a `response_prefix` is refused, not rebuilt wrongly) and 6 minor ones fixed, each with a test that fails without its fix |
 | 2 | Pod bootstrap, torch's CUDA build matched to llama.cpp's 12.8, and an in-pod watchdog that deletes the pod at a budget; checked on rude-llama | Done 2026-10-13: `scripts/pod.sh` and its watchdog, armed from the pod's own start command; reviewed until clean (9 findings, then a regression they caused, then none), each fixed with a test that fails without it. On an A40 the run matched the Mac (F16 GGUF and prompt ids byte-identical, directions at cosine 0.9999, the same counts on 60 answers but one maths cut-off) and the watchdog deleted the pod itself; about $0.51. Qwen3.5's fast kernels left out: transformers only reads residuals of short prompts (README). Results file |
 | 3 | The method changes above: directions at both positions with the search choosing, KL after the unedited model's thinking, strength widened up to 0.5-3.0 where a kind's best presses 0.8-1.5, the miss-rate check rerun, and the research table corrected | Done 2026-10-13, reviewed: no correctness bug, 6 findings fixed (a kill while widening and how the unedited thinking is sampled were untested; `upgrade` refused a strength past 3.0; the `--lora` limit below; no progress while the unedited model thinks; a misleading upgrade message), each with a test that fails without its fix. Miss-rate numbers in the results file |
-| 4 | Qwen3.5-9B on a pod: `init`, `run`, the unedited model measured twice (noise), heretic's own Trial 161 re-saved, exported and measured with `--outside`, thinking lengths, KL at each position. The decision rule written from them, for sign-off | |
-| 5 | A search pilot (time and cost per trial, the search's thinking budget), then the full search | |
-| 6 | The suggested trials measured at 8192, export on the pod, the final check on that file, copied to the Mac as it is (each machine quantises differently), `serve` on the Mac | |
+| 4 | Qwen3.5-9B on a pod: `init`, `run`, the unedited model measured twice (noise), heretic's own Trial 161 re-saved, exported and measured with `--outside`, thinking lengths, KL at each position. The decision rule written from them, for sign-off | Done 2026-10-14 ($9.56): Trial 161 refuses 28/288 against 279, but loses maths (1162 against 1183 of 1319, p = 0.04) and reaches the thinking budget on 297 maths questions against 184. The noise run was skipped (the user); the rule uses paired tests. A speed test found GPU sampling 2.2x faster. Results file |
+| 5 | Built and reviewed 2026-10-14, to run on a pod: speed, then the proxy check. candor enforces the thinking budget itself, so llama.cpp samples on the GPU (it turns GPU sampling off for a request with a budget; same sampler maths, only the draws per seed change); 2-3 servers per GPU if the speed test shows a gain; an edit's scoring stops once its refusals pass the cap; 150-token answers in the cheap score. Then about 24 edits spread over kinds, positions and strengths (stronger ones included) scored both thinking off and as used, plus one repeat for noise: whether the two rank edits alike, and whether thinking on needs a stronger edit | |
+| 6 | The search, on the path step 5 picks. If the cheap score ranks like thinking on (rank correlation at least 0.7, perhaps after a strength correction): 600 cheap trials, then about 15-20 edits from their front scored as used at the corrected strength and raced on shared prompts and seeds. If not: a thinking-on search of about 150 trials, seeded with step 5's as-used scores, the miss-rate simulator rerun at 150 first | |
+| 7 | The best 2 exported and measured as used on the held-out prompts and 400 maths questions, paired with the unedited model on the same ones; the winner's full 1,319 maths is its final check on the file that ships; copied to the Mac as it is (each machine quantises differently), `serve` on the Mac | |
 
 ### The search fix (done 2026-10-12)
 
@@ -208,6 +254,28 @@ From the 2026-10-10 paper review, corrected after the full review read each pape
   about 97 KB, 118 KB once `score` adds its own, so a thinking model of more than about 36 layers
   won't start (the server check fails loudly). Check K2-Horizon's layers before phase 4; shorter
   adapter names would fix it.
+- Ideas for cheaper thinking-on scoring, researched 2026-10-14, for later:
+  - vLLM or SGLang for as-used scoring, with each trial's edit swapped into the weights in place as
+    RL frameworks do (LoRA is out: vLLM's gives NaN past about 400 tokens on Qwen3.5-9B, #52568).
+    Estimated (not measured) 1-1.5k tok/s on an A40, 5-7k on an H100, against llama-server's 300.
+    Costs: full precision instead of the shipped Q4 file, a presence penalty over the whole output
+    (no window, prompt excluded), results that depend on the batch (#59764). The first thing to try
+    if llama.cpp stays too slow for 27B.
+  - Patching llama.cpp's penalties loop to visit only the tokens it counts (byte-identical output,
+    but our own build instead of the release binaries).
+  - Caching the prompt within a trial so each answer doesn't re-read its thinking (`cache_prompt` is
+    off; slots would need erasing between trials).
+  - A probe on early thinking activations to predict refusal (AUROC 0.90-0.97 on unedited models,
+    2606.25013), untested on edited models; llama-server can't read activations.
+  - Multi-fidelity Bayesian optimisation (co-kriging, BoTorch) or OptunaHub's MetaLearnTPE warm
+    start: worth it only with 50-80 as-used points.
+- Ideas researched 2026-10-14 and rejected: a short thinking budget with a forced close (closing
+  early pushes models towards refusal, R1-7B 36% to 94% safe, 2502.12025, by different amounts per
+  edit); judging the first part of the thinking (text judges F1 51-73, reliable only after about
+  half the thinking, 2507.12428); first-token and other generation-free scores (the first thinking
+  token is fixed; unvalidated even thinking off); Optuna pruning by prompt count (not for
+  multi-objective studies in 4.9, too noisy early; stopping at the refusal cap is exact);
+  speculative decoding (sampling stays on the CPU with drafts, little gain when batched).
 - Reporting the llama.cpp prompt-cache bug upstream: not wanted.
 - Separate tracks, outside candor: the Qwen3.5 rude fine-tune and the Mac Studio purchase.
 
