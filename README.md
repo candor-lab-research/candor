@@ -31,6 +31,7 @@ uv run candor upgrade runs/rude                                # after updating 
 uv run candor measure runs/rude                                # the unedited model, on held-out prompts
 uv run candor measure runs/rude --heretic STUDY.jsonl --trial 170   # a heretic trial, rebuilt
 uv run candor compare runs/rude base heretic-170               # prompt by prompt
+uv run candor proxy runs/qwen                                  # a thinking model: may the search think off?
 uv run candor search runs/rude                                 # search for a better edit, overnight
 uv run candor measure runs/rude --trial 37                     # one of its trials, on held-out prompts
 uv run candor score runs/rude --heretic STUDY.jsonl --trial 170     # where it would sit in the search
@@ -51,6 +52,21 @@ uv run candor serve runs/rude --trial 37                       # chat with it in
   thinking and answer. Only the answer is judged, and each answer's thinking length is kept as a
   number. The search can score at a shorter budget (`scoring.thinking_budget`) and the edits it
   suggests are measured at the deployment's.
+- Scoring every trial thinking costs many times more than answering after an empty thinking block,
+  greedily (`scoring.thinking = "off"`, answers `scoring.closed_answer_tokens` long). That cheap
+  score is only worth having if it ranks edits as thinking does, which no published work shows and
+  which changes by model. `candor proxy` checks it on the run's own model: 24 edits spread over both
+  kinds, both places directions are read and three strengths, scored both ways on the test prompts,
+  and their orders compared, with the edit refusing fewest scored again with another seed to show
+  the noise. It says the cheap score holds, holds but thinking needs stronger edits (the search's
+  suggestions must then also be scored thinking at more strength), or can't be trusted. Set
+  `scoring.thinking = "off"` only when it holds; edits are chosen on numbers measured thinking
+  either way. Its scores are kept in `proxy/`, so a stopped check carries on.
+- A sampled run samples on the GPU (`--backend-sampling`), many times faster for a large
+  vocabulary. llama-server can't do that for a request with a thinking budget, so candor holds the
+  model to its budget itself, token for token as the server's own budget does (checked against it).
+  Draws for a seed differ from sampling on the CPU, so a measurement made before 2026-10-14 pairs
+  with a later one prompt by prompt, not draw by draw.
 - For a thinking model, refusal directions are read both where the thinking starts and where the
   answer starts after an empty thinking block, and the search chooses between them for each trial.
   KL is read where the answer starts after the unedited model's own thinking, leaving out prompts

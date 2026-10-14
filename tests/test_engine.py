@@ -444,12 +444,80 @@ def test_a_thinking_model_is_made_to_stop_at_its_budget_then_answers(files, clos
     assert all(a.tokens <= 5 for a in answers) and any(a.text for a in answers)
 
 
-def thinking_server(monkeypatch, thought: dict, answer: dict | None = None) -> tuple[LlamaServer, list]:
-    """A server whose model thinks the given tokens, then answers, recording each request."""
-    replies = [thought, answer or {}]
+def servers_own_budget(
+    s: LlamaServer, prompt: list[int], settings: dict, thinking: Thinking
+) -> list[int] | None:
+    """The thinking llama-server's own reasoning budget gives, up to and with the end tag, as candor
+    asked for it before it held the model to its budget itself; None where the server was still waiting
+    for a character to finish when the room candor gave it ran out, which candor then refused."""
+    end = s.token_of(thinking.end)
+    forced = s.tokenize(thinking.message) + s.tokenize(thinking.close)
+    payload = {
+        "prompt": prompt,
+        "n_predict": thinking.budget + len(forced) + 8,
+        "reasoning_budget_tokens": thinking.budget,
+        "reasoning_budget_start_tag": thinking.start,
+        "reasoning_budget_end_tags": list(dict.fromkeys([thinking.close, thinking.end])),
+        "reasoning_budget_message": thinking.message,
+        "generation_prompt": thinking.opened,
+        "preserved_tokens": [thinking.start, thinking.end],
+        "stop": [thinking.end],
+        "return_tokens": True,
+        **settings,
+    }
+    result = s._complete(payload)
+    tokens = result["tokens"]
+    if end in tokens:
+        return tokens[: tokens.index(end) + 1]
+    return None if result["stop_type"] == "limit" else tokens
+
+
+@pytest.mark.parametrize("budget", [2, 5, 9, 30])
+def test_candor_holds_a_model_to_its_budget_exactly_as_llama_server_does(files, budget):
+    folder, _, _ = files
+    write_model(folder / "thinking.gguf", random_weights(), thinking=True)
+    thinking = Thinking(THINK, END_THINK, f"\n{END_THINK}", f"{THINK}\n", budget, "w1w2")
+    made_to_stop = closed = finished_a_character = 0
+    with one_slot(folder, "thinking.gguf") as s:
+        freely = max(budget - (len(s.tokenize(thinking.opened)) - 1), 0)
+        forced_tokens = len(s.tokenize(thinking.message) + s.tokenize(thinking.close))
+        for seed, prompt in enumerate(THINKING_PROMPTS):
+            for sampling in (engine.GREEDY, SAMPLED):
+                settings = {**sampling, "seed": seed, "lora": []}
+                ours, ended, forced = s._think(prompt, settings, thinking)
+                theirs = servers_own_budget(s, prompt, settings, thinking)
+                finishing = forced and len(ours) > freely + forced_tokens
+                if theirs is None:
+                    # The tiny random model can write broken characters without end; candor makes it
+                    # stop after a few tokens.
+                    assert forced and len(ours) == freely + engine.UNFINISHED_CHARACTER + forced_tokens
+                elif sampling == engine.GREEDY or not finishing:
+                    assert ours == theirs
+                    finished_a_character += finishing
+                else:
+                    # Tokens drawn to finish a character come from a request of their own, so with
+                    # sampling only the thinking before them is drawn the same.
+                    assert ours[:freely] == theirs[:freely]
+                made_to_stop += forced
+                closed += ended and not forced
+    if budget <= 9:
+        assert made_to_stop
+    if budget in (5, 9):
+        assert finished_a_character
+    if budget == 30:
+        assert closed
+
+
+def thinking_server(
+    monkeypatch, thought: dict, answer: dict | None = None, *more: dict, broken: frozenset = frozenset()
+) -> tuple[LlamaServer, list]:
+    """A server whose model thinks the given tokens, then answers, recording each request; any more
+    replies come between, and the tokens in broken end part way through a character."""
+    replies = [thought, *more, answer or {}]
     s = LlamaServer(LLAMA_SERVER, Path("model.gguf"), Path("server.log"))
     words = {END_THINK: [99], "": [], "stop": [8, 9], THINK: [98], f"{THINK}\n": [98, 10]}
     monkeypatch.setattr(s, "tokenize", lambda text: words[text])
+    monkeypatch.setattr(s, "_whole", lambda token: token not in broken)
     asked = []
 
     def complete(payload):
@@ -468,23 +536,37 @@ def test_the_answer_goes_on_from_where_the_thinking_ended(monkeypatch):
     [answer] = s.generate([[1, 2]], 9, sampling=SAMPLED, seeds=[3], thinking=thinking)
     assert answer == Answer("the answer", 2, True, 2, False)
     first, then = asked
-    assert first["reasoning_budget_tokens"] == 50 and first["reasoning_budget_message"] == ""
-    assert first["reasoning_budget_start_tag"] == THINK and first["reasoning_budget_end_tags"] == [END_THINK]
-    assert first["generation_prompt"] == f"{THINK}\n" and first["stop"] == [END_THINK]
+    # candor holds the model to its budget, so the server samples on the GPU: the open's newline counts.
+    assert first["n_predict"] == 49 and first["stop"] == [END_THINK]
+    assert not any(key.startswith("reasoning_budget") for key in first)
     assert then["prompt"] == [1, 2, 5, 6, 99] and then["n_predict"] == 9
     assert first["seed"] == then["seed"] == 3 and first["temperature"] == then["temperature"] == 1.0
 
 
 def test_thinking_made_to_stop_by_its_budget_is_reported(monkeypatch):
-    thought = {"tokens": [5, 6, 7, 8, 9, 99], "content": "", "stop_type": "word"}
-    s, _ = thinking_server(monkeypatch, thought, {"content": "late", "stop_type": "limit"})
+    thought = {"tokens": [5, 6, 7], "content": "", "stop_type": "limit"}
+    s, asked = thinking_server(monkeypatch, thought, {"content": "late", "stop_type": "limit"})
     [answer] = s.generate([[1]], 9, thinking=Thinking(THINK, END_THINK, END_THINK, THINK, 3, "stop"))
     assert answer == Answer("late", 2, False, 5, True)
+    # Made to write the message and the close, then answers after them.
+    assert asked[0]["n_predict"] == 3 and asked[1]["prompt"] == [1, 5, 6, 7, 8, 9, 99]
     # The same tokens closed one token sooner were the model's own close, before its budget ran out.
     early = {"tokens": [5, 8, 9, 99], "content": "", "stop_type": "word"}
     s, _ = thinking_server(monkeypatch, early, {"content": "late", "stop_type": "limit"})
     [answer] = s.generate([[1]], 9, thinking=Thinking(THINK, END_THINK, END_THINK, THINK, 3, "stop"))
     assert answer == Answer("late", 2, False, 3, False)
+
+
+def test_a_model_that_ends_its_turn_just_as_its_budget_runs_out_isnt_made_to_answer(monkeypatch):
+    thinking = Thinking(THINK, END_THINK, END_THINK, THINK, 3, "stop")
+    s, asked = thinking_server(monkeypatch, {"tokens": [5, 6, 7], "content": "", "stop_type": "eos"})
+    assert s.generate([[1]], 9, thinking=thinking) == [Answer("", 0, False, 3)] and len(asked) == 1
+    # Nor when it ends its turn while it finishes a character: the server keeps that token, last, which
+    # ends no character.
+    thought = {"tokens": [5, 6, 7], "content": "", "stop_type": "limit"}
+    ending = {"tokens": [11, 13], "content": "", "stop_type": "eos"}
+    s, asked = thinking_server(monkeypatch, thought, None, ending, broken=frozenset({7, 11}))
+    assert s.generate([[1]], 9, thinking=thinking) == [Answer("", 0, False, 5)] and len(asked) == 2
 
 
 def test_a_model_that_never_closes_its_thinking_gives_no_answer(monkeypatch):
@@ -499,7 +581,7 @@ def test_only_thinking_the_model_ended_by_itself_is_kept_whole(monkeypatch):
         # Closed by the model before its budget: kept up to and with the end tag, and not answered.
         ({"tokens": [5, 8, 9, 99, 4], "content": "", "stop_type": "word"}, [5, 8, 9, 99]),
         # Made to stop by its budget, or never closed: nothing to read KL after.
-        ({"tokens": [5, 6, 7, 8, 9, 99], "content": "", "stop_type": "word"}, None),
+        ({"tokens": [5, 6, 7], "content": "", "stop_type": "limit"}, None),
         ({"tokens": [5, 6], "content": "", "stop_type": "eos"}, None),
     ]:
         s, asked = thinking_server(monkeypatch, reply)
@@ -508,10 +590,25 @@ def test_only_thinking_the_model_ended_by_itself_is_kept_whole(monkeypatch):
         assert payload["seed"] == 3 and payload["temperature"] == 1.0 and payload["stop"] == [END_THINK]
 
 
-def test_a_server_that_ignores_the_budget_is_refused(monkeypatch):
-    s, _ = thinking_server(monkeypatch, {"tokens": [5] * 59, "content": "", "stop_type": "limit"})
-    with pytest.raises(ServerError, match="didn't hold a thinking model to its budget of 50"):
-        s.generate([[1]], 9, thinking=Thinking(THINK, END_THINK, END_THINK, THINK, 50, ""))
+def test_a_model_part_way_through_a_character_at_its_budget_finishes_it_first(monkeypatch):
+    thinking = Thinking(THINK, END_THINK, END_THINK, THINK, 3, "stop")
+    thought = {"tokens": [5, 6, 7], "content": "", "stop_type": "limit"}
+    answer = {"content": "late", "stop_type": "limit"}
+    # Finished in one request, cut after the first token that ends a whole character.
+    more = {"tokens": [11, 12, 4, 4], "content": "", "stop_type": "limit"}
+    s, asked = thinking_server(monkeypatch, thought, answer, more, broken=frozenset({7, 11}))
+    assert s.generate([[1]], 9, thinking=thinking) == [Answer("late", 2, False, 7, True)]
+    assert [a["n_predict"] for a in asked] == [3, engine.UNFINISHED_CHARACTER, 9]
+    assert asked[1]["prompt"] == [1, 5, 6, 7] and asked[2]["prompt"] == [1, 5, 6, 7, 11, 12, 8, 9, 99]
+    # A model that closes its thinking while it finishes the character closed it itself.
+    closing = {"tokens": [11, 99], "content": "", "stop_type": "word"}
+    s, asked = thinking_server(monkeypatch, thought, answer, closing, broken=frozenset({7, 11}))
+    assert s.generate([[1]], 9, thinking=thinking) == [Answer("late", 2, False, 4, False)]
+    # One that never finishes it is made to stop anyway.
+    endless = {"tokens": [11] * engine.UNFINISHED_CHARACTER, "content": "", "stop_type": "limit"}
+    s, asked = thinking_server(monkeypatch, thought, answer, endless, broken=frozenset({7, 11}))
+    [made] = s.generate([[1]], 9, thinking=thinking)
+    assert made.forced and made.thinking == 3 + engine.UNFINISHED_CHARACTER + 2
 
 
 def test_each_prompt_has_a_seed_of_its_own_that_never_changes():
@@ -526,7 +623,7 @@ def test_a_thinking_model_whose_answer_no_one_wants_any_more_doesnt_answer(monke
     asked = {"thinking": 0, "answering": 0}
 
     def complete(payload):
-        if "reasoning_budget_tokens" in payload:
+        if "stop" in payload:
             asked["thinking"] += 1
             time.sleep(0.05)
             return {

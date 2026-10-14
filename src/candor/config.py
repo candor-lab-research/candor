@@ -13,7 +13,7 @@ import shutil
 import tomllib
 from datetime import date
 from pathlib import Path
-from typing import Annotated, Any
+from typing import Annotated, Any, Literal
 
 from pydantic import (
     BaseModel,
@@ -261,6 +261,20 @@ class Scoring(Section):
         description="How many of the most likely first tokens KL divergence is measured over (20 is "
         "within 0.5% of the full vocabulary).",
     )
+    thinking: Literal["on", "off"] = Field(
+        default="on",
+        description='For a model that thinks: "on" scores the search\'s trials as the model is used, '
+        'thinking to the budget; "off" closes the thinking with an empty block and answers greedily, '
+        'many times faster. Set "off" only where candor proxy shows it ranks edits as thinking does: '
+        "the edits the search suggests are measured as used either way.",
+    )
+    closed_answer_tokens: StrictInt = Field(
+        default=150,
+        ge=1,
+        le=8192,
+        description='How long an answer to each harmful test prompt may be with thinking "off". '
+        "Shorter answers miss refusals that come late (heretic #487).",
+    )
 
 
 class Measure(Section):
@@ -420,6 +434,8 @@ class RunConfig(Section):
     def _search_thinks(self) -> "RunConfig":
         if self.scoring.thinking_budget is not None and self.deployment.think_close is None:
             raise ValueError("scoring.thinking_budget is set for a model that doesn't think")
+        if self.scoring.thinking == "off" and self.deployment.think_close is None:
+            raise ValueError('scoring.thinking is "off" for a model that doesn\'t think')
         return self
 
 

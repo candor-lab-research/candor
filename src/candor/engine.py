@@ -60,6 +60,9 @@ class Thinking:
 
 # Answers without sampling settings are greedy: the likeliest token every time.
 GREEDY = {"temperature": 0.0}
+# The most tokens a model whose thinking budget ran out may take to finish a character it is part way
+# through; llama-server waits as long as it takes, but a character takes at most 4 bytes.
+UNFINISHED_CHARACTER = 8
 
 
 class LlamaServer:
@@ -88,6 +91,7 @@ class LlamaServer:
         self.process: subprocess.Popen | None = None
         self.adapter_ids: dict[Path, int] = {}
         self._tokenized: dict[str, list[int]] = {}
+        self._whole_tokens: dict[int, bool] = {}
 
     def __enter__(self) -> "LlamaServer":
         self.start()
@@ -383,41 +387,65 @@ class LlamaServer:
         self, prompt: list[int], settings: dict[str, Any], thinking: Thinking
     ) -> tuple[list[int], bool, bool]:
         """A thinking model's thinking: the tokens it thought, up to and with its end tag when it closed
-        its thinking; whether it closed it; and whether its budget ran out so it was made to stop."""
+        its thinking; whether it closed it; and whether its budget ran out so it was made to stop.
+
+        candor holds the model to its budget as llama-server's own budget does, rather than asking the
+        server to, which would sample every token on the CPU: the server can't sample on the GPU with a
+        budget. The model thinks freely to its budget; if it hasn't closed its thinking by then, it
+        finishes a character it is part way through and is made to write the message and the close."""
         end = self.token_of(thinking.end)
         # What the server makes the model write when its budget runs out, built as the server does.
         forced = self.tokenize(thinking.message) + self.tokenize(thinking.close)
         if forced[-1] != end:
             raise ServerError(f"the thinking's close {thinking.close!r} doesn't end with its end tag")
+        # The budget also counts the open's tokens after the start tag, as the server tokenizes it.
+        freely = max(thinking.budget - (len(self.tokenize(thinking.opened)) - 1), 0)
+        thought, stop = self._thought(prompt, freely, settings, thinking) if freely else ([], "limit")
+        if end in thought:
+            return thought[: thought.index(end) + 1], True, False
+        if stop != "limit":
+            # The model ended without closing its thinking.
+            return thought, False, False
+        if thought and not self._whole(thought[-1]):
+            # Finished in one request, so its tokens are drawn one after another as the server's
+            # would be, and cut after the first whole one.
+            more, stop = self._thought(prompt + thought, UNFINISHED_CHARACTER, settings, thinking)
+            # The server keeps the token that ended the model's turn, last.
+            drawn = more[:-1] if stop == "eos" else more
+            for i, token in enumerate(drawn):
+                if token == end:
+                    return thought + more[: i + 1], True, False
+                if self._whole(token):
+                    thought = thought + more[: i + 1]
+                    break
+            else:
+                if stop != "limit":
+                    return thought + more, False, False
+                thought = thought + more
+        return thought + forced, True, True
+
+    def _thought(
+        self, prompt: list[int], tokens: int, settings: dict[str, Any], thinking: Thinking
+    ) -> tuple[list[int], str]:
+        """Up to tokens more of the model's thinking, stopping at its end tag, and why it stopped:
+        "limit" when it thought all of them."""
         payload = {
             "prompt": prompt,
-            # The sampler may wait a few tokens to finish a character before it makes the model stop.
-            "n_predict": thinking.budget + len(forced) + 8,
-            "reasoning_budget_tokens": thinking.budget,
-            "reasoning_budget_start_tag": thinking.start,
-            "reasoning_budget_end_tags": list(dict.fromkeys([thinking.close, thinking.end])),
-            "reasoning_budget_message": thinking.message,
-            "generation_prompt": thinking.opened,
-            "preserved_tokens": [thinking.start, thinking.end],
+            "n_predict": tokens,
             "stop": [thinking.end],
             "return_tokens": True,
             **settings,
         }
-        thought = self._checked(payload, self._complete(payload))["tokens"]
-        if end not in thought:
-            if len(thought) >= payload["n_predict"]:
-                raise ServerError(
-                    f"llama-server didn't hold a thinking model to its budget of {thinking.budget}"
-                )
-            return thought, False, False
-        closed = thought.index(end) + 1
-        # The budget also counts the open's tokens after the start tag, as the server tokenizes it.
-        opened = len(self.tokenize(thinking.opened)) - 1
-        thought_freely = max(thinking.budget - opened, 0)
-        made_to_stop = (
-            closed >= thought_freely + len(forced) and thought[closed - len(forced) : closed] == forced
-        )
-        return thought[:closed], True, made_to_stop
+        result = self._checked(payload, self._complete(payload))
+        return result["tokens"], result["stop_type"]
+
+    def _whole(self, token: int) -> bool:
+        """Whether a token's text ends with a whole character, as llama-server's budget asks before it
+        makes a model stop: the server shows a broken one as the replacement character."""
+        if token not in self._whole_tokens:
+            text = self._call("POST", "/detokenize", json={"tokens": [token]})["content"]
+            self._whole_tokens[token] = not text.endswith("\ufffd")
+        return self._whole_tokens[token]
 
     def token_of(self, tag: str) -> int:
         """The one token a think tag is in this model."""

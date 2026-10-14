@@ -251,3 +251,11 @@ def test_thinking_and_sampling_settings_read_back(tmp_path):
     written.scoring.thinking_budget = 1024
     folder = config.write(tmp_path, "run", written, "made by a test").parent
     assert config.load(folder) == written
+
+
+def test_scoring_with_thinking_off_needs_a_model_that_thinks():
+    with pytest.raises(ValidationError, match=r'scoring\.thinking is "off" for a model that doesn'):
+        config.RunConfig(model=config.Model(source="x"), scoring=config.Scoring(thinking="off"))
+    thinks = config.Deployment(think_close="</think>", thinking_budget=8)
+    off = config.Scoring(thinking="off")
+    assert config.RunConfig(model=config.Model(source="x"), deployment=thinks, scoring=off).scoring == off

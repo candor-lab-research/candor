@@ -34,7 +34,7 @@ from rich.table import Table
 from transformers import AutoTokenizer
 from transformers.utils import logging as transformers_logging
 
-from . import checks, config, export, measure, search, serve, source, targets
+from . import checks, config, export, measure, proxy, search, serve, source, targets
 from .convert import ConversionError
 from .engine import LLAMA_CPP_RELEASE, ServerError
 from .run import PROMPT_SETS, Run, RunError, every_tenth
@@ -1164,3 +1164,93 @@ def score_command(
             console.print(f"  The search couldn't have drawn it: {escape('; '.join(outside))}.")
         else:
             console.print("  The search could have drawn it.")
+
+
+@app.command("proxy")
+def proxy_command(folder: Annotated[Path, typer.Argument(help="A run folder made by candor init.")]) -> None:
+    """Check whether a thinking model's search may score its trials with thinking off, many times
+    faster. A spread of edits is scored on the test prompts with thinking off and thinking as the model
+    is used, and the two orders compared; the edit refusing fewest thinking is scored again with
+    another seed, to show how far sampling alone moves a score. A stopped check carries on. Shows
+    counts only."""
+    console = Console()
+    folder = folder.expanduser()
+
+    def report(message: str) -> None:
+        console.print(f"[dim]{escape(message)}[/]")
+
+    try:
+        with _stopped_by_signals(), _awake():
+            run = Run.open(folder, report)
+            checked = proxy.check(run)
+    except config.ConfigError as error:
+        console.print(f"[red]{escape(str(error))}[/]")
+        raise typer.Exit(COULD_NOT_INSPECT) from None
+    except (RunError, ToolchainError, ConversionError, ServerError) as error:
+        console.print(f"[red]The check stopped:[/] {escape(str(error))}")
+        raise typer.Exit(FAILED_CHECK) from None
+    except Exception as error:
+        console.print(f"[red]The check stopped on an unexpected error:[/] {escape(_where(error))}")
+        raise typer.Exit(COULD_NOT_INSPECT) from None
+    prompts = checked.off[0].judged
+    table = Table(box=box.SIMPLE_HEAD)
+    headings = ["Edit", "Direction", "Strength", "Refused off", "Refused on", "Thinking", "Forced", "KL"]
+    for heading in headings:
+        table.add_column(heading, justify="left" if heading in {"Edit", "Direction"} else "right")
+    for edit, factor, off, on in zip(checked.edits, checked.factors, checked.off, checked.on, strict=True):
+        table.add_row(
+            edit.name,
+            search.direction(edit.direction_layer, edit.answering),
+            f"x{factor:g}",
+            str(off.refusals),
+            str(on.refusals),
+            f"{on.thinking:.0f}",
+            str(on.forced),
+            f"{on.kl:.4f}",
+        )
+    console.print(f"Refusals of the {prompts} test prompts, thinking off and on; thinking in mean tokens:")
+    console.print(table)
+    base = checked.base
+    console.print(f"The unedited model refuses {base['off']} with thinking off and {base['on']} with it on.")
+    more = sum(on.refusals > off.refusals for off, on in zip(checked.off, checked.on, strict=True))
+    console.print(f"Thinking refuses more on {more} of {len(checked.edits)} edits.")
+    first, again = checked.on[checked.repeated], checked.repeat
+    console.print(
+        f"{checked.edits[checked.repeated].name} refused {first.refusals} thinking, and {again.refusals} "
+        "with another seed."
+    )
+    cap = run.settings.search.max_refusals
+    within = {
+        mode: [e.name for e, s in zip(checked.edits, scores, strict=True) if s.refusals <= cap]
+        for mode, scores in (("off", checked.off), ("on", checked.on))
+    }
+    for mode, names in within.items():
+        console.print(f"Within the cap of {cap} with thinking {mode}: {', '.join(names) or 'none'}.")
+    agreement = checked.agreement
+    shown = f"{agreement:.2f}" if agreement == agreement else "none: one way scores every edit alike"
+    console.print(f"Rank agreement (Spearman) between the two: {shown}.")
+    near = f"{proxy.NEARLY_WORKS:.0%} of the prompts"
+    if checked.offset is None:
+        console.print(f"No edit refused at most {near} with thinking off, so none came near working.")
+    else:
+        console.print(
+            f"Where thinking off refuses at most {near}, thinking refuses a median of "
+            f"{checked.offset:g} more."
+        )
+    verdict = checked.verdict()
+    if verdict == "holds":
+        console.print(
+            "[green]The cheap score ranks edits as thinking does[/]: "
+            'scoring.thinking = "off" may be set for the search.'
+        )
+    elif verdict == "offset":
+        console.print(
+            "[yellow]The cheap score ranks edits as thinking does, but thinking needs stronger ones[/]: "
+            'with scoring.thinking = "off", the edits the search suggests must also be scored thinking '
+            "at more strength."
+        )
+    else:
+        console.print(
+            "[yellow]The cheap score can't be trusted to rank edits as thinking does[/]: "
+            'keep scoring.thinking = "on".'
+        )

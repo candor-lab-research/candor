@@ -48,16 +48,19 @@ from optuna.storages.journal import JournalFileBackend
 from optuna.trial import BaseTrial, FrozenTrial, TrialState
 
 from . import config, kl
-from .engine import LlamaServer, Thinking
+from .engine import GREEDY, LlamaServer, Thinking
 from .judge import Guard, is_refusal, judged_refusal, read_verdict
 from .kernel import Kernel
 from .measure import Edit, edit_adapters
 from .run import ANSWER_SETS, ANSWERING, STAGES, Run, RunError, answering, digest, seeds
 
 SLOTS = 8
+# A thinking model's trials are answered this many at once: its answers are long, and the server makes
+# more tokens a second the more it answers together.
+THINKING_MODEL_SLOTS = 32
 # Harmful prompts judged at a time, so a trial that can't win stops early. The server answers the
 # next ones meanwhile.
-CHUNK = SLOTS
+CHUNK = 8
 # The sampler weighs this many candidates for each trial, as heretic does, rather than Optuna's 24.
 CANDIDATES = 128
 # The version of what a trial's score means. Bump it in any commit that changes how trials are scored,
@@ -112,7 +115,8 @@ class Score:
 @dataclass(frozen=True)
 class Scores:
     prompts: int
-    base_refusals: int
+    # None when the unedited model wasn't scored again.
+    base_refusals: int | None
     edits: list[Score]
 
 
@@ -574,6 +578,8 @@ class Search:
         self.folder = run.path("search")
         # Where trials may read their directions: a choice only for a thinking model.
         self.positions = POSITIONS if run.settings.deployment.think_close else ()
+        # Whether trials think, as the model is used: a thinking model's do unless scoring.thinking is off.
+        self.thinks = bool(run.settings.deployment.think_close) and run.settings.scoring.thinking == "on"
 
     def search(
         self,
@@ -602,7 +608,7 @@ class Search:
             started(self._done(studies), target)
             if self._done(studies) < target:
                 files = [path for made in adapters.values() for path in made.values()]
-                with self._scorer(quantized, files, harmful, harmless, _beside(run, ids)) as scorer:
+                with self._scorer(quantized, files, ids, harmless, _beside(run, ids)) as scorer:
                     first = studies[SCOPES[0]]
                     base = first.user_attrs.get("base_refusals")
                     if base is None:
@@ -633,37 +639,63 @@ class Search:
             seconds = [t.user_attrs["seconds"] for t in found.trials.values()]
             return found, sum(seconds) / len(seconds) if seconds else 0.0
 
-    def score(self, edits: list[Edit]) -> Scores:
+    def score(
+        self,
+        edits: list[Edit],
+        thinks: bool | None = None,
+        seed: int | None = None,
+        scored: Callable[[int, Score], None] = lambda index, score: None,
+        base: bool = True,
+    ) -> Scores:
         """Score edits exactly as the search scores its trials, without adding them to it: the same
         server with the same adapters loaded, the same test prompts and judge, each edit in full. An
         edit that reads its direction where the search has no adapters gets its own, in the run's
-        scores folder. The unedited model is scored again too."""
+        scores folder. The unedited model is scored again too, if base. A thinking model's edits think
+        when thinks is True and answer after an empty thinking block when it is False, by default as the
+        search's trials do; seed replaces the sampling seed. scored gets each edit's index and score as
+        it is done."""
+        with self.run.locked():
+            return self.score_locked(edits, thinks, seed, scored, base)
+
+    def score_locked(
+        self,
+        edits: list[Edit],
+        thinks: bool | None = None,
+        seed: int | None = None,
+        scored: Callable[[int, Score], None] = lambda index, score: None,
+        base: bool = True,
+        beside_search: bool = True,
+    ) -> Scores:
+        """score, for a caller that holds the run's lock. Unless beside_search is False, the scores are
+        to be set beside the search's trials, so a search here made from other inputs is refused."""
         run = self.run
-        with run.locked():
-            run.check_remote_code()
-            if not run.path("directions.pt").exists():
-                run.check_memory()
-            _, quantized = run.gguf()
-            ids = run.prompt_ids()
-            run.directions()
-            # Checked before the adapters are brought up to date and before a thinking model's unedited
-            # thinking is sampled, so a mismatch leaves the run as it was.
-            # The Optuna version decides which trials the search draws, not how one is scored.
+        run.check_remote_code()
+        if not run.path("directions.pt").exists():
+            run.check_memory()
+        _, quantized = run.gguf()
+        ids = run.prompt_ids()
+        run.directions()
+        # Checked before the adapters are brought up to date and before a thinking model's unedited
+        # thinking is sampled, so a mismatch leaves the run as it was.
+        # The Optuna version decides which trials the search draws, not how one is scored.
+        if beside_search:
             self._check(self.inputs(ids), known=True, scoring=True)
-            harmful, harmless = ids["harmful_test"], run.kl_ids(ids, "harmless_test")
+        harmful, harmless = ids["harmful_test"], run.kl_ids(ids, "harmless_test")
+        if beside_search:
             self._check(self.inputs(ids, harmless), scoring=True)
-            adapters = run.adapters()
-            made = [self._edit_files(edit, adapters) for edit in edits]
-            files = [path for found in [*adapters.values(), *made] for path in found.values()]
-            with self._scorer(
-                quantized, list(dict.fromkeys(files)), harmful, harmless, _beside(run, ids)
-            ) as scorer:
-                base = scorer.score({}).refusals
-                scores = []
-                for edit, found in zip(edits, made, strict=True):
-                    run.report(f"Scoring {edit.name}")
-                    scores.append(scorer.score(self._scales(edit, found)))
-            return Scores(len(harmful), base, scores)
+        adapters = run.adapters()
+        made = [self._edit_files(edit, adapters) for edit in edits]
+        files = [path for found in [*adapters.values(), *made] for path in found.values()]
+        with self._scorer(
+            quantized, list(dict.fromkeys(files)), ids, harmless, _beside(run, ids), thinks, seed
+        ) as scorer:
+            base_refusals = scorer.score({}).refusals if base else None
+            scores = []
+            for index, (edit, found) in enumerate(zip(edits, made, strict=True)):
+                run.report(f"Scoring {edit.name}")
+                scores.append(scorer.score(self._scales(edit, found)))
+                scored(index, scores[-1])
+        return Scores(len(harmful), base_refusals, scores)
 
     def _edit_files(self, edit: Edit, adapters: dict[str, dict[str, Path]]) -> dict[str, Path]:
         """The adapters an edit is scored with: the search's own for a direction it reads, or else
@@ -687,27 +719,41 @@ class Search:
         self,
         quantized: Path,
         files: list[Path],
-        harmful: list[list[int]],
+        ids: dict[str, list[list[int]]],
         harmless: list[list[int]],
         beside: dict[str, list[list[int]]],
+        thinks: bool | None = None,
+        seed: int | None = None,
     ) -> Iterator["_Scorer"]:
         """A scorer on llama-server with these adapters loaded, and the judge, for the test prompts; it
-        also reads KL on the harmless prompts beside, by the name of the score that keeps it."""
+        also reads KL on the harmless prompts beside, by the name of the score that keeps it. A thinking
+        model thinks when thinks is True, by default as the search's trials do, and otherwise answers
+        greedily after an empty thinking block. seed replaces the sampling seed."""
         run, settings = self.run, self.run.settings
+        thinks = self.thinks if thinks is None else thinks
+        closed = bool(settings.deployment.think_close) and not thinks
         texts = run.prompt_texts()[0]["harmful_test"]
+        harmful = ids["harmful_test" + ANSWERING] if closed else ids["harmful_test"]
         budget = settings.scoring.thinking_budget
-        answer = settings.scoring.answer_tokens + run.thinking_room(budget)
+        tokens = settings.scoring.closed_answer_tokens if closed else settings.scoring.answer_tokens
+        answer = tokens if closed else tokens + run.thinking_room(budget)
         read = [p for prompts in [harmful, harmless, *beside.values()] for p in prompts]
         room = max(len(p) for p in read) + answer + 8
+        slots = THINKING_MODEL_SLOTS if settings.deployment.think_close else SLOTS
         guard = Guard(settings.measure.judge, settings.measure.judge_revision)
         try:
-            with run.server(quantized, files, context_per_slot=room, parallel=SLOTS) as server:
-                run.check_prompts(server, "harmful_test", texts, harmful)
-                answering = _Answering(
-                    settings.scoring.answer_tokens,
-                    run.sampling(),
-                    seeds(settings.sampling.seed, len(harmful)),
-                    run.thinking(server, budget),
+            with run.server(quantized, files, context_per_slot=room, parallel=slots) as server:
+                run.check_prompts(server, "harmful_test", texts, ids["harmful_test"])
+                count = len(harmful)
+                answering = (
+                    _Answering(tokens, GREEDY, [0] * count, None)
+                    if closed
+                    else _Answering(
+                        tokens,
+                        run.sampling(),
+                        seeds(settings.sampling.seed if seed is None else seed, count),
+                        run.thinking(server, budget),
+                    )
                 )
                 yield _Scorer(
                     server, guard, texts, harmful, harmless, settings.scoring.kl_tokens, answering, beside
@@ -746,8 +792,15 @@ class Search:
             "Optuna": optuna.__version__,
         } | (self._thinking(harmless) if settings.deployment.think_close else {})
 
-    def _thinking(self, harmless: list[list[int]] | None) -> dict[str, str]:
-        found = {"unedited thinking": self.run.thinking_key()}
+    def _thinking(self, harmless: list[list[int]] | None) -> dict[str, Any]:
+        scoring = self.run.settings.scoring
+        found: dict[str, Any] = {
+            "unedited thinking": self.run.thinking_key(),
+            "trials think": scoring.thinking,
+            "slots": THINKING_MODEL_SLOTS,
+        }
+        if scoring.thinking == "off":
+            found["answer length with thinking off"] = scoring.closed_answer_tokens
         return found | ({"KL prompts": digest(harmless)} if harmless is not None else {})
 
     def _check(self, inputs: dict[str, Any], known: bool = False, scoring: bool = False) -> None:

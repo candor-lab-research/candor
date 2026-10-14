@@ -14,7 +14,7 @@ from typer.testing import CliRunner
 
 from candor import cli, config, run, search
 from candor.cli import app
-from candor.engine import Answer, LlamaServer
+from candor.engine import GREEDY, Answer, LlamaServer
 from candor.judge import is_refusal
 from candor.kernel import Kernel
 from candor.measure import Edit, Measurement, edit_adapters
@@ -606,7 +606,7 @@ def test_scoring_stops_at_the_end_of_the_chunk_that_goes_over(tiny, monkeypatch)
 def scorer_inputs(tiny):
     ids = tiny.prompt_ids()
     _, quantized = tiny.gguf()
-    return quantized, [], ids["harmful_test"], ids["harmless_test"], {}
+    return quantized, [], ids, ids["harmless_test"], {}
 
 
 def test_the_search_shows_time_left_from_every_trial_of_the_session(tiny, monkeypatch):
@@ -1811,3 +1811,54 @@ def test_a_search_killed_while_widening_loses_and_repeats_no_trial(tiny, monkeyp
         assert len(done) == len(set(done)) == 6
         waiting = study.get_trials(states=(TrialState.WAITING,))
         assert not {search._key(t.system_attrs["fixed_params"]) for t in waiting} & set(done)
+
+
+def test_a_thinking_search_with_thinking_off_answers_greedily_after_an_empty_block(tiny, monkeypatch):
+    thinks_through(monkeypatch)
+    small(thinking(tiny, budget=8))
+    tiny.settings.scoring.thinking = "off"
+    tiny.settings.scoring.closed_answer_tokens = 12
+    asked, first_tokens = [], []
+    real, real_top = LlamaServer.answers, LlamaServer.top_logprobs
+
+    def recording(self, *args, **kwargs):
+        asked.append(args)
+        yield from real(self, *args, **kwargs)
+
+    def reading(self, prompts, *args, **kwargs):
+        first_tokens.append(prompts)
+        return real_top(self, prompts, *args, **kwargs)
+
+    monkeypatch.setattr(LlamaServer, "answers", recording)
+    monkeypatch.setattr(LlamaServer, "top_logprobs", reading)
+    Search(tiny).search(2)
+    ids = tiny.prompt_ids()
+    assert all(args[0] == ids["harmful_test" + run.ANSWERING] for args in asked)
+    assert all(args[1] == 12 and args[3] == GREEDY and args[5] is None for args in asked)
+    # KL is still read where the answer starts after the unedited model's own thinking.
+    assert first_tokens[0] == tiny.kl_ids(ids, "harmless_test")
+    scores = [search._score(trial) for trial in finished(tiny)]
+    assert all(s.thinking == 0 and s.forced == 0 and s.kl_thinking is not None for s in scores)
+    inputs = json.loads(tiny.path("search", "inputs.json").read_text())
+    assert inputs["trials think"] == "off" and inputs["answer length with thinking off"] == 12
+    # A search scored with thinking off isn't carried on as one that thinks.
+    tiny.settings.scoring.thinking = "on"
+    with pytest.raises(RunError, match="trials think"):
+        Search(tiny).search(4)
+
+
+@pytest.mark.parametrize("thinks", [False, True])
+def test_scoring_answers_a_thinking_models_trials_many_at_once(tiny, monkeypatch, thinks):
+    thinks_through(monkeypatch)
+    started = []
+    real = run.Run.server
+
+    def server(self, *args, **kwargs):
+        started.append(kwargs.get("parallel"))
+        return real(self, *args, **kwargs)
+
+    monkeypatch.setattr(run.Run, "server", server)
+    small(thinking(tiny) if thinks else tiny)
+    Search(tiny).search(1)
+    # The scorer's server is the last one the search starts.
+    assert started[-1] == (search.THINKING_MODEL_SLOTS if thinks else search.SLOTS)

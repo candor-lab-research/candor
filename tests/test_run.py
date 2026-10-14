@@ -533,6 +533,14 @@ def test_the_kv_cache_type_reaches_llama_server(current, monkeypatch):
     assert this.server(Path("m.gguf")).extra == ["--cache-type-k", "f16", "--cache-type-v", "f16"]
 
 
+def test_a_sampled_run_samples_on_the_gpu(current, monkeypatch):
+    this, _ = current
+    monkeypatch.setattr(run.toolchain, "binaries", lambda: Path("/bin"))
+    assert "--backend-sampling" not in this.server(Path("m.gguf")).extra
+    this.settings.sampling = config.Sampling(temperature=1.0)
+    assert this.server(Path("m.gguf")).extra[-1] == "--backend-sampling"
+
+
 def test_overflowing_activations_stop_the_run(tmp_path, model, monkeypatch):
     this = Run(tmp_path, config.RunConfig(model=config.Model(source=str(model))), report=lambda _: None)
     monkeypatch.setattr(Run, "prompt_ids", lambda self: {"harmful": [[1]], "harmless": [[1]]})
