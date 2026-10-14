@@ -36,8 +36,8 @@ phase 3: `results/phase-3-qwen3.5-9b.md`).
 
 ### Next
 
-1. Phase 3: the user signs off the decision rule below; then step 5's proxy check on a pod, with
-   the price first.
+1. Phase 3, step 5: `candor proxy` on a pod (started 2026-10-14, about $2-3); its verdict picks
+   step 6's path, whose price the user sees first (a top-up of about $10 needed).
 2. Not blocking, each when there is a reason:
    - 64 slots for a thinking model's trials: 15% faster than 32 with GPU sampling (results file);
    - sampling moved to the GPU on 2026-10-14 draws differently for a seed, so measurements made
@@ -137,7 +137,7 @@ thinking models. A 9B model must not take days. So:
   where Qwen means the whole output (vLLM). candor measures it as llama-server runs it; it may be one
   reason thinking runs long in real use.
 
-### Phase 3's decision rule (draft from step 4, for the user's sign-off)
+### Phase 3's decision rule (from step 4, signed off by the user 2026-10-14)
 
 candor's edit, exported and measured as used on the held-out prompts like Trial 161 (Q4_K_M, f16 KV
 cache, 32 slots, Qwen's sampling, budget 8192), is compared prompt by prompt; "beyond noise" means
