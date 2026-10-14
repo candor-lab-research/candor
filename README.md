@@ -55,10 +55,12 @@ uv run candor serve runs/rude --trial 37                       # chat with it in
 - Scoring every trial thinking costs many times more than answering after an empty thinking block,
   greedily (`scoring.thinking = "off"`, answers `scoring.closed_answer_tokens` long). That cheap
   score is only worth having if it ranks edits as thinking does, which no published work shows and
-  which changes by model. `candor proxy` checks it on the run's own model: 24 edits spread over both
-  kinds, both places directions are read and three strengths, scored both ways on the test prompts,
-  and their orders compared, with the edit refusing fewest scored again with another seed to show
-  the noise. It says the cheap score holds, holds but thinking needs stronger edits (the search's
+  which changes by model. `candor proxy` checks it on the run's own model, after a short search
+  scored with thinking off (`--trials 150`; random edits mostly change nothing, so they can't show an
+  order): its 3 best trials of each kind and each place directions are read, each also at 1.4 times
+  its strength, scored both ways on the test prompts and their orders compared, with the edit
+  refusing fewest scored again with another seed to show the noise. If the cheap score holds, the
+  search carries on from those trials. It says the cheap score holds, holds but thinking needs stronger edits (the search's
   suggestions must then also be scored thinking at more strength), or can't be trusted. Set
   `scoring.thinking = "off"` only when it holds; edits are chosen on numbers measured thinking
   either way. Its scores are kept in `proxy/`, so a stopped check carries on.

@@ -6,10 +6,11 @@ from typer.testing import CliRunner
 
 from candor import config, proxy, search
 from candor.cli import app
+from candor.measure import Edit
 from candor.run import RunError
 from candor.search import Score, Scores, Search
 
-from .test_search import flat
+from .test_search import flat, small
 from .tiny_run import thinking, thinks_through
 
 
@@ -20,23 +21,60 @@ def test_spearman_shares_tied_ranks_and_is_none_for_a_constant():
     assert math.isnan(proxy.spearman([1, 2, 3], [4, 4, 4]))
 
 
-def test_the_edits_cover_each_kind_and_position_at_every_strength_within_the_widest(tiny):
+def searched_thinking_off(tiny, monkeypatch, trials: int = 12):
+    """The tiny run with a model that thinks, and a short search of it scored with thinking off."""
+    thinks_through(monkeypatch)
+    small(thinking(tiny), trials=trials // 2)
+    tiny.settings.scoring.thinking = "off"
+    tiny.settings.scoring.closed_answer_tokens = 12
+    Search(tiny).search(trials)
+    return tiny
+
+
+def test_the_edits_are_each_kind_and_places_best_of_a_thinking_off_search(tiny, monkeypatch):
+    searched_thinking_off(tiny, monkeypatch)
+    tiny.settings.search.widest_strength = (0.5, 1.6)
+    edits, trials, factors = proxy.edits(tiny)
+    found = search.load(tiny)
+    assert found is not None
+    full = search.scored_in_full(found)
+    expected = []
+    for scope in search.SCOPES:
+        for position in search.POSITIONS:
+            group = [
+                c for c in full if search.scope_of(c.params) == scope and c.params["position"] == position
+            ]
+            expected += [c.trial for c in sorted(group, key=lambda c: (c.refusals, c.kl))[: proxy.BEST]]
+    assert trials == [trial for trial in expected for _ in proxy.FACTORS] and len(set(expected)) > 2
+    assert factors == list(proxy.FACTORS) * len(expected)
+    assert [edit.name for edit in edits] == [f"edit-{n}" for n in range(1, len(edits) + 1)]
+    _, layers, _, _ = tiny.shape
+    for edit, trial, factor in zip(edits, trials, factors, strict=True):
+        found_edit = search.edit_from(found.trials[trial].params, trial, layers)
+        assert edit.direction_layer == found_edit.direction_layer and edit.answering == found_edit.answering
+        for component, kernel in edit.kernels.items():
+            assert kernel.max_weight == pytest.approx(
+                min(found_edit.kernels[component].max_weight * factor, 1.6)
+            )
+
+
+def test_the_check_needs_a_search_scored_with_thinking_off(tiny):
     thinking(tiny)
-    tiny.settings.search.widest_strength = (0.6, 2.0)
-    edits, factors = proxy.edits(tiny)
-    shapes = len(search.SCOPES) * len(search.POSITIONS) * proxy.SHAPES
-    assert len(edits) == len(factors) == shapes * len(proxy.FACTORS)
-    assert factors == list(proxy.FACTORS) * shapes
-    assert len({edit.name for edit in edits}) == len(edits)
-    assert {edit.answering for edit in edits} == {False, True}
-    assert {edit.direction_layer is None for edit in edits} == {False, True}
-    strengths = [kernel.max_weight for edit in edits for kernel in edit.kernels.values()]
-    assert min(strengths) >= 0.6 and max(strengths) <= 2.0
-    # Each shape's strength rises with its factor until held at the widest range.
-    for i in range(0, len(edits), len(proxy.FACTORS)):
-        shape = edits[i : i + len(proxy.FACTORS)]
-        peaks = [max(k.max_weight for k in edit.kernels.values()) for edit in shape]
-        assert peaks == sorted(peaks)
+    with pytest.raises(RunError, match="run candor search with --trials 150 first"):
+        proxy.edits(tiny)
+    tiny.path("search").mkdir()
+    tiny.path("search", "inputs.json").write_text(json.dumps({"trials think": "on"}))
+    with pytest.raises(RunError, match=r'scoring\.thinking = "off"'):
+        proxy.edits(tiny)
+
+
+def fixed(monkeypatch, count: int = 24) -> int:
+    """proxy.edits giving count edits named by their place, as if from search trials 101 on."""
+    edits = [Edit(f"edit-{n}", None, {}) for n in range(1, count + 1)]
+    trials = [101 + n // len(proxy.FACTORS) for n in range(count)]
+    factors = list(proxy.FACTORS) * (count // len(proxy.FACTORS))
+    monkeypatch.setattr(proxy, "edits", lambda run: (edits, trials, factors))
+    return count
 
 
 def faked(monkeypatch, refusals: dict[bool, list[int]], die_after: int | None = None) -> list[tuple]:
@@ -69,7 +107,7 @@ def faked(monkeypatch, refusals: dict[bool, list[int]], die_after: int | None = 
 def test_the_check_scores_both_ways_carries_on_after_a_stop_and_repeats_the_best_thinking(tiny, monkeypatch):
     thinks_through(monkeypatch)
     thinking(tiny)
-    count = len(proxy.edits(tiny)[0])
+    count = fixed(monkeypatch)
     off = list(range(count))
     on = [n + 1 for n in range(count)]
     on[4] = 0
@@ -92,7 +130,7 @@ def test_the_check_scores_both_ways_carries_on_after_a_stop_and_repeats_the_best
 def test_the_check_starts_afresh_when_what_it_depends_on_changes(tiny, monkeypatch):
     thinks_through(monkeypatch)
     thinking(tiny)
-    count = len(proxy.edits(tiny)[0])
+    count = fixed(monkeypatch)
     calls = faked(monkeypatch, {False: [1] * count, True: [1] * count})
     proxy.check(tiny)
     tiny.settings.scoring.closed_answer_tokens = 20
@@ -112,16 +150,12 @@ def test_the_check_is_only_for_a_model_that_thinks(tiny):
 
 
 def test_the_check_scores_a_real_thinking_model_both_ways(tiny, monkeypatch):
-    thinks_through(monkeypatch)
-    thinking(tiny)
+    searched_thinking_off(tiny, monkeypatch, trials=8)
+    monkeypatch.setattr(proxy, "BEST", 1)
+    # Settings changed since the search don't stop the check, which never sets its scores beside it.
     tiny.settings.scoring.closed_answer_tokens = 16
-    monkeypatch.setattr(proxy, "SHAPES", 1)
-    # A search made from other settings doesn't stop the check, which never sets its scores beside it.
-    tiny.path("search").mkdir()
-    tiny.path("search", "inputs.json").write_text(json.dumps({"slots": 1}))
-    tiny.path("search", "study.jsonl").write_text("")
     checked = proxy.check(tiny)
-    assert len(checked.off) == len(checked.on) == len(search.SCOPES) * len(search.POSITIONS) * 3
+    assert len(checked.off) == len(checked.on) == len(checked.trials) >= 2 * len(proxy.FACTORS)
     assert all(score.thinking == 0 for score in checked.off)
     assert sum(score.thinking for score in checked.on) > 0
     assert checked.repeat.judged == checked.on[checked.repeated].judged
@@ -132,7 +166,7 @@ def test_the_check_scores_a_real_thinking_model_both_ways(tiny, monkeypatch):
 def test_proxy_shows_both_counts_and_whether_the_cheap_score_may_be_used(tiny, monkeypatch):
     thinks_through(monkeypatch)
     thinking(tiny)
-    count = len(proxy.edits(tiny)[0])
+    count = fixed(monkeypatch)
     faked(monkeypatch, {False: list(range(count)), True: [n + 2 for n in range(count)]})
     folder = config.write(tiny.folder.parent, "cli", tiny.settings, "made by a test").parent
     result = CliRunner(env={"COLUMNS": "200"}).invoke(app, ["proxy", str(folder)])
@@ -171,6 +205,7 @@ def scored(refusals: list[int], judged: int = 100) -> list[Score]:
     ],
 )
 def test_the_verdict_needs_alike_ranks_and_no_leniency_where_edits_nearly_work(off, on, verdict):
-    edits = [proxy.Edit(f"edit-{i}", None, {}) for i in range(len(off))]
-    checked = proxy.Check(edits, [1.0] * len(off), scored(off), scored(on), {}, 0, scored([0])[0])
+    edits = [Edit(f"edit-{i}", None, {}) for i in range(len(off))]
+    ones = [1.0] * len(off)
+    checked = proxy.Check(edits, [1] * len(off), ones, scored(off), scored(on), {}, 0, scored([0])[0])
     assert checked.verdict() == verdict

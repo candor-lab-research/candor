@@ -3,8 +3,10 @@
 A trial scored as the model is used thinks to its budget on every test prompt, many times the cost of
 answering after an empty thinking block. The cheap score only helps if it ranks edits as thinking does,
 and no published work shows that it does: the gap between the two changes size and even sign by model
-and by edit. So candor proxy scores a spread of edits both ways on the search's own test prompts and
-compares the order. Its scores are kept in the run's proxy folder, so a stopped check carries on.
+and by edit. So candor proxy scores edits both ways on the search's own test prompts and compares the
+order. The edits are the best a short search scored with thinking off found, as random edits mostly
+change nothing (on Qwen3.5-9B 11 of 12 refused 97-99 of 100) and so can't show an order. Its scores
+are kept in the run's proxy folder, so a stopped check carries on.
 """
 
 import json
@@ -16,12 +18,12 @@ from typing import Any
 
 from .measure import Edit
 from .run import Run, RunError
-from .search import POSITIONS, SCOPES, Score, Search, edit_from, spread
+from .search import POSITIONS, SCOPES, Score, Search, edit_from, load, scope_of, scored_in_full
 
-# Shapes of edit tried for each kind and position, and the strengths each is tried at as multiples of
-# its own: thinking may need a stronger edit than the cheap score shows, or a weaker one.
-SHAPES = 2
-FACTORS = (0.7, 1.0, 1.6)
+# The search's best trials taken for each kind and position, and the strengths each is tried at as
+# multiples of its own: thinking may need a stronger edit than the cheap score shows.
+BEST = 3
+FACTORS = (1.0, 1.4)
 # The cheap score is trusted when it ranks the edits' refusals as thinking does at least this well
 # (Spearman's rank correlation).
 AGREEMENT = 0.7
@@ -29,15 +31,14 @@ AGREEMENT = 0.7
 # nearly work (refusing at most this share of the prompts), thinking refuses more than this by the
 # median: a search scored with thinking off would settle on edits too weak when thinking.
 NEARLY_WORKS, OFFSET = 0.25, 1
-# The shapes are spread from the search's seed plus this, beyond any seed it draws its starts from.
-SEED_OFFSET = 10_000
 MODES = {"off": False, "on": True}
 
 
 @dataclass(frozen=True)
 class Check:
     edits: list[Edit]
-    # Each edit's strength as a multiple of its shape's.
+    # The search trial each edit comes from, and its strength as a multiple of that trial's.
+    trials: list[int]
     factors: list[float]
     off: list[Score]
     on: list[Score]
@@ -70,27 +71,37 @@ class Check:
         return "offset" if self.offset > OFFSET else "holds"
 
 
-def edits(run: Run) -> tuple[list[Edit], list[float]]:
-    """The edits checked: for each kind and position, SHAPES shapes spread evenly over the search's
-    ranges, each at every strength in FACTORS, held within search.widest_strength."""
-    space = run.settings.search
-    _, layers, _, writers = run.shape
-    components = sorted({writer.component for writer in writers})
-    low, high = space.widest_strength
-    made, factors = [], []
+def edits(run: Run) -> tuple[list[Edit], list[int], list[float]]:
+    """The edits checked: from the run's search, scored with thinking off, the BEST trials scored in
+    full of each kind and position, fewest refusals first and then least KL, each as found and at the
+    other FACTORS of its strength, held within search.widest_strength. Each position's own best are
+    taken, as the cheap score may favour directions read where the answer starts."""
+    record = run.path("search", "inputs.json")
+    if not record.exists() or json.loads(record.read_text()).get("trials think") != "off":
+        raise RunError(
+            "candor proxy checks the edits a search scored with thinking off finds: set "
+            'scoring.thinking = "off" and run candor search with --trials 150 first'
+        )
+    found = load(run)
+    full = scored_in_full(found) if found else []
+    _, layers, _, _ = run.shape
+    low, high = run.settings.search.widest_strength
+    made, trials, factors = [], [], []
     for scope in SCOPES:
-        # Drawn with a seed of their own, so they aren't the search's first trials.
-        count = SHAPES * len(POSITIONS)
-        shapes = spread(scope, space, layers, components, count, space.seed + SEED_OFFSET, POSITIONS)
-        for params in shapes:
-            for factor in FACTORS:
-                scaled = {
-                    name: min(max(value * factor, low), high) if name.endswith(".strength") else value
-                    for name, value in params.items()
-                }
-                made.append(replace(edit_from(scaled, 0, layers), name=f"edit-{len(made) + 1}"))
-                factors.append(factor)
-    return made, factors
+        for position in POSITIONS:
+            group = [c for c in full if scope_of(c.params) == scope and c.params.get("position") == position]
+            for best in sorted(group, key=lambda c: (c.refusals, c.kl))[:BEST]:
+                for factor in FACTORS:
+                    params = {
+                        name: min(max(value * factor, low), high) if name.endswith(".strength") else value
+                        for name, value in best.params.items()
+                    }
+                    made.append(replace(edit_from(params, best.trial, layers), name=f"edit-{len(made) + 1}"))
+                    trials.append(best.trial)
+                    factors.append(factor)
+    if not made:
+        raise RunError("the search has no trials scored in full yet")
+    return made, trials, factors
 
 
 def spearman(a: Sequence[float], b: Sequence[float]) -> float:
@@ -121,11 +132,11 @@ def check(run: Run) -> Check:
     if not run.settings.deployment.think_close:
         raise RunError("candor proxy is for a model that thinks; this one doesn't")
     search = Search(run)
-    made, factors = edits(run)
+    made, trials, factors = edits(run)
     with run.locked():
         ids = run.prompt_ids()
         run.directions()
-        inputs = _inputs(search, ids, run.kl_ids(ids, "harmless_test"))
+        inputs = _inputs(search, ids, run.kl_ids(ids, "harmless_test"), trials)
         saved = _load(run, inputs)
         for mode, thinks in MODES.items():
             todo = [i for i in range(len(made)) if str(i) not in saved[mode]]
@@ -158,19 +169,21 @@ def check(run: Run) -> Check:
             _save(run, saved)
     off = [Score(**saved["off"][str(i)]) for i in range(len(made))]
     index, repeat = next(iter(saved["repeat"].items()))
-    return Check(made, factors, off, on, saved["base"], int(index), Score(**repeat))
+    return Check(made, trials, factors, off, on, saved["base"], int(index), Score(**repeat))
 
 
-def _inputs(search: Search, ids: dict[str, list[list[int]]], harmless: list[list[int]]) -> dict[str, Any]:
+def _inputs(
+    search: Search, ids: dict[str, list[list[int]]], harmless: list[list[int]], trials: list[int]
+) -> dict[str, Any]:
     """What the check's scores depend on: the search's inputs, but scored both ways whichever way the
-    search scores, with the edits drawn as they are now."""
+    search scores, and the trials the edits come from."""
     settings = search.run.settings
     found = search.inputs(ids, harmless)
     for key in ("trials think", "answer length with thinking off", "Optuna"):
         found.pop(key, None)
     return found | {
         "answer length with thinking off": settings.scoring.closed_answer_tokens,
-        "edits": [SHAPES, list(FACTORS), SEED_OFFSET],
+        "edits": [trials, list(FACTORS)],
     }
 
 

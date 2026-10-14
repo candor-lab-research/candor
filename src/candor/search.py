@@ -421,7 +421,8 @@ def _candidate(number: int, trial: FrozenTrial) -> Candidate:
     )
 
 
-def _scored_in_full(found: Found) -> list[Candidate]:
+def scored_in_full(found: Found) -> list[Candidate]:
+    """The trials scored in full: a stopped trial's count is only a lower bound."""
     return [_candidate(number, t) for number, t in found.trials.items() if not t.user_attrs["stopped"]]
 
 
@@ -437,12 +438,12 @@ def front(found: list[Candidate]) -> list[Candidate]:
 
 def candidates(found: Found) -> list[Candidate]:
     """The front of the trials scored in full: a stopped trial's count is only a lower bound."""
-    return front(_scored_in_full(found))
+    return front(scored_in_full(found))
 
 
 def within_cap(found: Found, scope: str, cap: int) -> list[Candidate]:
     """The scope's trials scored in full that refuse no more than cap, least KL first."""
-    kept = [c for c in _scored_in_full(found) if scope_of(c.params) == scope and c.refusals <= cap]
+    kept = [c for c in scored_in_full(found) if scope_of(c.params) == scope and c.refusals <= cap]
     return sorted(kept, key=lambda c: (c.kl, c.refusals))
 
 
@@ -455,7 +456,7 @@ def to_measure(found: Found, scope: str, cap: int) -> list[Candidate]:
 
 def fewest_refused(found: Found, scope: str) -> Candidate | None:
     """The scope's trial scored in full that refused fewest, then with least KL."""
-    kept = [c for c in _scored_in_full(found) if scope_of(c.params) == scope]
+    kept = [c for c in scored_in_full(found) if scope_of(c.params) == scope]
     return min(kept, key=lambda c: (c.refusals, c.kl), default=None)
 
 

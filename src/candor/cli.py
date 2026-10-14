@@ -1169,8 +1169,9 @@ def score_command(
 @app.command("proxy")
 def proxy_command(folder: Annotated[Path, typer.Argument(help="A run folder made by candor init.")]) -> None:
     """Check whether a thinking model's search may score its trials with thinking off, many times
-    faster. A spread of edits is scored on the test prompts with thinking off and thinking as the model
-    is used, and the two orders compared; the edit refusing fewest thinking is scored again with
+    faster. The best edits a short search scored with thinking off found, of each kind and place, are
+    scored on the test prompts with thinking off and thinking as the model is used, also at more
+    strength, and the two orders compared; the edit refusing fewest thinking is scored again with
     another seed, to show how far sampling alone moves a score. A stopped check carries on. Shows
     counts only."""
     console = Console()
@@ -1194,12 +1195,24 @@ def proxy_command(folder: Annotated[Path, typer.Argument(help="A run folder made
         raise typer.Exit(COULD_NOT_INSPECT) from None
     prompts = checked.off[0].judged
     table = Table(box=box.SIMPLE_HEAD)
-    headings = ["Edit", "Direction", "Strength", "Refused off", "Refused on", "Thinking", "Forced", "KL"]
+    headings = [
+        "Edit",
+        "Trial",
+        "Direction",
+        "Strength",
+        "Refused off",
+        "Refused on",
+        "Thinking",
+        "Forced",
+        "KL",
+    ]
     for heading in headings:
         table.add_column(heading, justify="left" if heading in {"Edit", "Direction"} else "right")
-    for edit, factor, off, on in zip(checked.edits, checked.factors, checked.off, checked.on, strict=True):
+    rows = zip(checked.edits, checked.trials, checked.factors, checked.off, checked.on, strict=True)
+    for edit, trial, factor, off, on in rows:
         table.add_row(
             edit.name,
+            str(trial),
             search.direction(edit.direction_layer, edit.answering),
             f"x{factor:g}",
             str(off.refusals),
