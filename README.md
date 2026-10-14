@@ -64,6 +64,15 @@ uv run candor serve runs/rude --trial 37                       # chat with it in
   suggestions must then also be scored thinking at more strength), or can't be trusted. Set
   `scoring.thinking = "off"` only when it holds; edits are chosen on numbers measured thinking
   either way. Its scores are kept in `proxy/`, so a stopped check carries on.
+- `edit.row_norm = "full"` makes heretic's "full" edit: each edited weight row keeps its own length, at
+  heretic's rank of 3, built as heretic builds it (checked against its code; its randomised SVD's seed
+  moves the result by about 1e-5). On Qwen3.5-9B
+  heretic's Trial 161 used it and candor's "pre" edits stalled near 70 of 100 refusals. A "full"
+  edit isn't linear in strength, so it can't be one adapter per weight dialled per request: each
+  trial gets an adapter built at its strengths and llama-server is restarted with it, which adds
+  seconds to every trial. `measure --heretic` and `score --heretic` rebuild a heretic trial that read
+  its directions after the run's own `think_close` with the directions read where the answer starts,
+  this run's own: read with the run's system prompt, not heretic's.
 - A sampled run samples on the GPU (`--backend-sampling`), many times faster for a large
   vocabulary. llama-server can't do that for a request with a thinking budget, so candor holds the
   model to its budget itself, token for token as the server's own budget does (checked against it).

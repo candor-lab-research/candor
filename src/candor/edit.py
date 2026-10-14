@@ -1,7 +1,8 @@
-"""The weight edit, as rank-1 LoRA factors."""
+"""The weight edit, as LoRA factors."""
 
 from enum import StrEnum
 
+import torch
 import torch.nn.functional as F
 from torch import Tensor
 
@@ -9,6 +10,11 @@ from torch import Tensor
 class RowNorm(StrEnum):
     NONE = "none"
     PRE = "pre"
+    FULL = "full"
+
+
+# The rank heretic approximates a "full" edit at (its default full_normalization_lora_rank).
+FULL_RANK = 3
 
 
 def rank_one(weight: Tensor, direction: Tensor, row_norm: RowNorm = RowNorm.PRE) -> tuple[Tensor, Tensor]:
@@ -22,4 +28,36 @@ def rank_one(weight: Tensor, direction: Tensor, row_norm: RowNorm = RowNorm.PRE)
     r = direction.float().to(w.device)
     if row_norm is RowNorm.NONE:
         return -r[:, None], (r @ w)[None, :]
+    if row_norm is RowNorm.FULL:
+        raise ValueError('a "full" edit isn\'t linear in strength: build it at its strength with full()')
     return -(w.norm(dim=1) * r)[:, None], (r @ F.normalize(w, dim=1))[None, :]
+
+
+def full(
+    weight: Tensor, direction: Tensor, strength: float, rank: int = FULL_RANK, seed: int = 0
+) -> tuple[Tensor, Tensor]:
+    """Factors b (out, rank) and a (rank, in) of a FULL edit at this strength, so that weight + b @ a is
+    the edited weight, as heretic builds it: the direction removed from the row-normalised weights, each
+    row normalised again and scaled back to its original length, so every row keeps its length, and the
+    change approximated at rank by a randomised SVD seeded with seed. The renormalising makes it not
+    linear in strength, so each strength needs factors of its own."""
+    w = weight.float()
+    r = direction.float().to(w.device)
+    lengths = w.norm(dim=1, keepdim=True)
+    unit = F.normalize(w, dim=1)
+    edited = F.normalize(unit - strength * r[:, None] * (r @ unit)[None, :], dim=1) * lengths
+    torch.manual_seed(seed)
+    u, s, v = torch.svd_lowrank(edited - w, q=2 * rank + 4, niter=6)
+    root = s[:rank].sqrt()
+    return u[:, :rank] * root, (v[:, :rank] * root).T
+
+
+def edit_factors(
+    weight: Tensor, direction: Tensor, strength: float, row_norm: RowNorm
+) -> tuple[Tensor, Tensor]:
+    """Factors (b, a) of the change an edit at this strength makes, so that weight + b @ a is the
+    edited weight."""
+    if row_norm is RowNorm.FULL:
+        return full(weight, direction, strength)
+    b, a = rank_one(weight, direction, row_norm)
+    return strength * b, a

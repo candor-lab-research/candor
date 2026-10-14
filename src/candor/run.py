@@ -22,7 +22,7 @@ from dataclasses import dataclass, field
 from fnmatch import fnmatch
 from functools import cached_property
 from pathlib import Path
-from typing import Any
+from typing import TYPE_CHECKING, Any
 
 import torch
 from datasets import load_dataset
@@ -31,10 +31,13 @@ from huggingface_hub import constants, snapshot_download
 
 from . import checks, config, convert, directions, residuals, source, targets, toolchain
 from .adapters import write_adapter
-from .edit import RowNorm, rank_one
+from .edit import RowNorm, edit_factors, rank_one
 from .engine import LLAMA_CPP_RELEASE, LlamaServer, Thinking
 from .judge import normalise
 from .weights import ModelFiles
+
+if TYPE_CHECKING:
+    from .measure import Edit
 
 MODEL_FILES = ["*.json", "*.safetensors", "*.jinja", "*.txt", "*.model", "*.tiktoken"]
 PROMPT_SETS = tuple(config.Prompts.model_fields)
@@ -842,15 +845,24 @@ class Run:
             self.commit(partial, folder, inputs)
         return {names[w.name]: folder / f"{names[w.name]}.gguf" for w in writers}
 
+    @property
+    def linear(self) -> bool:
+        """Whether an edit is linear in strength, so one adapter per edit target covers every strength;
+        a "full" edit isn't, and has adapters built for each edit."""
+        return RowNorm(self.settings.edit.row_norm) is not RowNorm.FULL
+
     def adapters(self) -> dict[str, dict[str, Path]]:
         """For each direction set, one rank-1 adapter per edit target, named by its GGUF tensor. The names
-        of a thinking model's sets read where the answer starts begin with ANSWER_SETS."""
+        of a thinking model's sets read where the answer starts begin with ANSWER_SETS. None for an edit
+        that isn't linear in strength."""
         _, layers, _, _ = self.shape
         root = self.path("adapters")
         root.mkdir(exist_ok=True)
         sets = {}
         for answering in self.positions:
             found, inputs = self.directions(answering), self.adapter_inputs(answering)
+            if not self.linear:
+                continue
             prefix = ANSWER_SETS if answering else ""
             sets |= {
                 prefix + name: (made, inputs) for name, made in self.direction_sets(found, layers).items()
@@ -859,6 +871,34 @@ class Run:
             if leftover.name.removesuffix(".inputs.json") not in sets:
                 _remove(leftover)
         return {name: self.adapter_set(root / name, made, inputs) for name, (made, inputs) in sets.items()}
+
+    def edit_adapter(self, folder: Path, edit: "Edit") -> tuple[Path, dict[str, Any]]:
+        """One adapter holding every change the edit makes, at its strengths, applied at scale 1, as an
+        edit that isn't linear in strength needs; and what it is built from. Written to folder unless
+        already there. Built on the GPU when there is one, as each "full" change takes an SVD."""
+        _, _, arch, writers = self.shape
+        names = self.target_names
+        found = self.edit_directions(edit.name, edit.direction_layer, edit.answering)
+        inputs = {**self.adapter_inputs(edit.answering), "edit": edit.record()}
+        path = folder / "edit.gguf"
+        if not self.fresh(path, inputs):
+            files = ModelFiles(self.model_folder)
+            model_config = source.read_config(str(self.model_folder))
+            row_norm = RowNorm(self.settings.edit.row_norm)
+            device = "cuda" if torch.cuda.is_available() else "cpu"
+            factors = {}
+            for writer in writers:
+                if strength := edit.strength(writer):
+                    weight = convert.as_converted(files.tensor(writer.name), writer.name, arch, model_config)
+                    b, a = edit_factors(weight.to(device), found[writer.layer], strength, row_norm)
+                    factors[names[writer.name]] = (b.cpu(), a.cpu())
+            if not factors:
+                raise RunError(f"{edit.name} changes no weight")
+            folder.mkdir(parents=True, exist_ok=True)
+            partial = path.with_name("edit.gguf.building")
+            write_adapter(partial, arch, factors)
+            self.commit(partial, path, inputs)
+        return path, inputs
 
     def prepare(self) -> dict[str, int]:
         """Every stage up to the search. The last stage pulls in the ones before it, and results still

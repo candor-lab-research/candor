@@ -9,7 +9,7 @@ from safetensors.torch import save_file
 
 from candor import convert
 from candor.convert import as_converted, check_targets, float_type
-from candor.edit import RowNorm, rank_one
+from candor.edit import RowNorm, edit_factors
 from candor.targets import find_targets, gguf_name
 
 from .test_targets import llama
@@ -200,10 +200,12 @@ def test_every_other_target_is_converted_unchanged(arch, name, model_config):
 def test_an_adapter_on_the_reordered_weight_gives_the_reordered_edit(row_norm):
     torch.manual_seed(3)
     weight, direction = torch.randn(HIDDEN, 32), F.normalize(torch.randn(HIDDEN), dim=0)
-    b, a = rank_one(weight, direction, row_norm)
-    merged_then_converted = (weight + 0.8 * b @ a)[:, CONVERTER_ORDER]
-    b_gguf, a_gguf = rank_one(as_converted(weight, OUT_PROJ, "qwen35", QWEN35), direction, row_norm)
-    torch.testing.assert_close(weight[:, CONVERTER_ORDER] + 0.8 * b_gguf @ a_gguf, merged_then_converted)
+    b, a = edit_factors(weight, direction, 0.8, row_norm)
+    merged_then_converted = (weight + b @ a)[:, CONVERTER_ORDER]
+    converted = as_converted(weight, OUT_PROJ, "qwen35", QWEN35)
+    b_gguf, a_gguf = edit_factors(converted, direction, 0.8, row_norm)
+    # A "full" edit's randomised SVD of reordered columns agrees to within a few parts in a million.
+    torch.testing.assert_close(weight[:, CONVERTER_ORDER] + b_gguf @ a_gguf, merged_then_converted)
 
 
 @pytest.mark.parametrize(

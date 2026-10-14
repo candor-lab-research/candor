@@ -15,8 +15,10 @@ from datasets.exceptions import DatasetNotFoundError
 from safetensors.torch import save_file
 
 from candor import config, directions, run, targets
-from candor.edit import RowNorm, rank_one
+from candor.edit import RowNorm, edit_factors, rank_one
 from candor.engine import LlamaServer
+from candor.kernel import Kernel
+from candor.measure import Edit
 from candor.run import Run, RunError
 from candor.weights import ModelFiles
 
@@ -142,6 +144,29 @@ def test_adapters_hold_the_edit_for_their_layers_direction(current, model, direc
         stored_b, stored_a = adapter_factors(made[set_name]["blk.1.ffn_down.weight"])
         torch.testing.assert_close(stored_a, a)
         torch.testing.assert_close(stored_b, b)
+
+
+def test_a_full_edit_has_one_adapter_built_at_its_strengths_and_no_shared_ones(
+    current, model, directions_by_seed
+):
+    this, messages = current
+    this.settings.edit.row_norm = "full"
+    assert this.adapters() == {}
+    edit = Edit("e", None, {"mlp": Kernel(1.3, 1.0, 0.0, 0.5)})
+    path, inputs = this.edit_adapter(this.path("scores", "edits", "e"), edit)
+    assert inputs["row_norm"] == "full" and inputs["edit"] == edit.record()
+    tensors = {t.name for t in gguf.GGUFReader(path).tensors}
+    # Only the weights the edit changes: the MLP's at layer 1, where its strength peaks.
+    assert tensors == {"blk.1.ffn_down.weight.lora_a", "blk.1.ffn_down.weight.lora_b"}
+    weight = ModelFiles(model).tensor("model.layers.1.mlp.down_proj.weight")
+    b, a = edit_factors(weight, directions_by_seed[1]()[2], 1.3, RowNorm.FULL)
+    stored_b, stored_a = adapter_factors(path)
+    torch.testing.assert_close(stored_b @ stored_a, b @ a)
+    assert stored_a.shape[0] == 3
+    stamp = path.stat().st_mtime_ns
+    messages.clear()
+    assert this.edit_adapter(this.path("scores", "edits", "e"), edit)[0] == path
+    assert path.stat().st_mtime_ns == stamp and messages == []
 
 
 def test_unchanged_adapters_are_reused_untouched(current):

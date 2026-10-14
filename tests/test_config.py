@@ -101,7 +101,7 @@ def test_a_missing_setting_is_an_error_not_a_default(tmp_path, line, name):
         ("startup_per_scope = 20", "startup_per_scope = 600", "startup_per_scope"),
         ("answer_tokens = 100", "answer_tokens = true", "valid integer"),
         ("kl_tokens = 20", 'kl_tokens = "20"', "valid integer"),
-        ('row_norm = "pre"', 'row_norm = "full"', '"none" or "pre"'),
+        ('row_norm = "pre"', 'row_norm = "post"', '"none", "pre" or "full"'),
         ("trust_remote_code = false", 'trust_remote_code = "no"', "valid boolean"),
         ('split = "train[:400]"', "split = 400", "valid string"),
     ],
@@ -111,6 +111,11 @@ def test_bad_values_are_explained(tmp_path, old, new, message):
     assert old in text
     with pytest.raises(ConfigError, match=message):
         config.load(write_text(tmp_path, text.replace(old, new)))
+
+
+def test_a_full_edit_can_be_chosen(tmp_path):
+    text = config.render(settings(), "h").replace('row_norm = "pre"', 'row_norm = "full"')
+    assert config.load(write_text(tmp_path, text)).edit.row_norm == "full"
 
 
 def test_whole_numbers_in_ranges_are_fine(tmp_path):

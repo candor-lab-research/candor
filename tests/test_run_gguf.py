@@ -11,7 +11,9 @@ import torch.nn.functional as F
 from safetensors.torch import save_file
 
 from candor import config, run
-from candor.edit import RowNorm, rank_one
+from candor.edit import RowNorm, edit_factors, rank_one
+from candor.kernel import Kernel
+from candor.measure import Edit
 from candor.run import Run, RunError
 from candor.weights import ModelFiles
 
@@ -88,14 +90,15 @@ def test_the_disk_check_counts_only_the_files_it_will_write(
             this.gguf()
 
 
-def adapter_factors(path):
+def adapter_factors(path, name=""):
+    """An adapter's (b, a), for the weight named when it holds several."""
     tensors = {t.name: torch.from_numpy(t.data.copy()) for t in gguf.GGUFReader(path).tensors}
-    a = next(v for k, v in tensors.items() if k.endswith("lora_a"))
-    b = next(v for k, v in tensors.items() if k.endswith("lora_b"))
+    a = next(v for k, v in tensors.items() if k.startswith(name) and k.endswith("lora_a"))
+    b = next(v for k, v in tensors.items() if k.startswith(name) and k.endswith("lora_b"))
     return b, a
 
 
-@pytest.mark.parametrize("row_norm", list(RowNorm))
+@pytest.mark.parametrize("row_norm", [RowNorm.NONE, RowNorm.PRE])
 def test_qwen35_adapters_are_built_in_the_gguf_layout(tmp_path, monkeypatch, row_norm):
     this = make_run(tmp_path, qwen35(), QWEN35, torch.bfloat16)
     this.settings.edit.row_norm = row_norm.value
@@ -118,3 +121,21 @@ def test_qwen35_adapters_are_built_in_the_gguf_layout(tmp_path, monkeypatch, row
     unchanged = files.tensor("model.language_model.layers.1.self_attn.o_proj.weight")
     b, a = adapter_factors(made["blk.1.attn_output.weight"])
     torch.testing.assert_close((b, a), rank_one(unchanged, found[2], row_norm))
+
+
+def test_a_full_qwen35_edits_adapter_is_built_in_the_gguf_layout(tmp_path, monkeypatch):
+    this = make_run(tmp_path, qwen35(), QWEN35, torch.bfloat16)
+    this.settings.edit.row_norm = "full"
+    found = F.normalize(torch.randn(LAYERS + 1, HIDDEN), dim=-1)
+
+    def fake_directions(self, answering=False):
+        self.inputs["directions"] = "fixed"
+        return found
+
+    monkeypatch.setattr(Run, "directions", fake_directions)
+    edit = Edit("e", None, {"attn": Kernel(1.2, 0.0, 1.2, 1.0)})
+    path, _ = this.edit_adapter(this.path("scores", "edits", "e"), edit)
+    b, a = adapter_factors(path, "blk.0.ssm_out.weight")
+    weight = ModelFiles(this.model_folder).tensor(OUT_PROJ).float()
+    hf_b, hf_a = edit_factors(weight, found[1], 1.2, RowNorm.FULL)
+    torch.testing.assert_close(weight[:, CONVERTER_ORDER] + b @ a, (weight + hf_b @ hf_a)[:, CONVERTER_ORDER])

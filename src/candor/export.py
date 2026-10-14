@@ -29,7 +29,7 @@ import torch
 from torch import Tensor
 
 from . import convert, merge, source
-from .edit import RowNorm, rank_one
+from .edit import RowNorm, edit_factors
 from .merge import Change, edited
 from .run import Run, RunError, digest, record_of
 from .source import INDEX
@@ -47,8 +47,9 @@ RESERVED = re.compile(r"(base|(trial|heretic)-\d+)(-.*)?")
 
 
 def deltas(run: Run, edit: "Edit") -> dict[str, tuple[Tensor, Tensor]]:
-    """Each edited weight's change as rank-1 factors (b, a), by its name in the model, with the
-    strength folded into b."""
+    """Each edited weight's change as factors (b, a), by its name in the model, with the strength
+    folded in: rank 1, or for a "full" edit the rank its adapters have, so the file shipped is the edit
+    scored."""
     _, _, _, writers = run.shape
     directions = run.edit_directions(edit.name, edit.direction_layer, edit.answering)
     files = ModelFiles(run.model_folder)
@@ -56,8 +57,8 @@ def deltas(run: Run, edit: "Edit") -> dict[str, tuple[Tensor, Tensor]]:
     made = {}
     for writer in writers:
         if strength := edit.strength(writer):
-            b, a = rank_one(files.tensor(writer.name), directions[writer.layer], row_norm)
-            made[writer.name] = (strength * b, a)
+            weight = files.tensor(writer.name)
+            made[writer.name] = edit_factors(weight, directions[writer.layer], strength, row_norm)
     return made
 
 

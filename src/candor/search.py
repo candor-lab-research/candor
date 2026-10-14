@@ -685,16 +685,17 @@ class Search:
         if beside_search:
             self._check(self.inputs(ids, harmless), scoring=True)
         adapters = run.adapters()
-        made = [self._edit_files(edit, adapters) for edit in edits]
+        made = [self._edit_files(edit, adapters) for edit in edits] if run.linear else []
         files = [path for found in [*adapters.values(), *made] for path in found.values()]
         with self._scorer(
             quantized, list(dict.fromkeys(files)), ids, harmless, _beside(run, ids), thinks, seed
         ) as scorer:
             base_refusals = scorer.score({}).refusals if base else None
             scores = []
-            for index, (edit, found) in enumerate(zip(edits, made, strict=True)):
+            for index, edit in enumerate(edits):
                 run.report(f"Scoring {edit.name}")
-                scores.append(scorer.score(self._scales(edit, found)))
+                applied = self._applied(edit, adapters, scorer, run.path("scores", "edits", edit.name))
+                scores.append(scorer.score(applied))
                 scored(index, scores[-1])
         return Scores(len(harmful), base_refusals, scores)
 
@@ -709,6 +710,17 @@ class Search:
         if float(layer).is_integer() and f"{prefix}layer-{int(layer)}" in adapters:
             return adapters[f"{prefix}layer-{int(layer)}"]
         return edit_adapters(self.run, edit, self.run.path("scores", f"{prefix}layer-{layer!r}"))[0]
+
+    def _applied(
+        self, edit: Edit, adapters: dict[str, dict[str, Path]], scorer: "_Scorer", folder: Path
+    ) -> dict[Path, float]:
+        """The adapters scoring an edit applies, and at what strength. An edit that isn't linear in
+        strength has one adapter built for it, in folder, and the server is restarted with it."""
+        if self.run.linear:
+            return self._scales(edit, self._edit_files(edit, adapters))
+        path, _ = self.run.edit_adapter(folder, edit)
+        scorer.load([path])
+        return {path: 1.0}
 
     def _scales(self, edit: Edit, files: dict[str, Path]) -> dict[Path, float]:
         """Each of the edit's adapters at its strength. Those at 0 are left out, which llama.cpp skips."""
@@ -741,25 +753,41 @@ class Search:
         read = [p for prompts in [harmful, harmless, *beside.values()] for p in prompts]
         room = max(len(p) for p in read) + answer + 8
         slots = THINKING_MODEL_SLOTS if settings.deployment.think_close else SLOTS
+
+        def server_with(adapters: list[Path]) -> LlamaServer:
+            return run.server(quantized, adapters, context_per_slot=room, parallel=slots)
+
         guard = Guard(settings.measure.judge, settings.measure.judge_revision)
+        scorer = None
+        server = server_with(files)
         try:
-            with run.server(quantized, files, context_per_slot=room, parallel=slots) as server:
-                run.check_prompts(server, "harmful_test", texts, ids["harmful_test"])
-                count = len(harmful)
-                answering = (
-                    _Answering(tokens, GREEDY, [0] * count, None)
-                    if closed
-                    else _Answering(
-                        tokens,
-                        run.sampling(),
-                        seeds(settings.sampling.seed if seed is None else seed, count),
-                        run.thinking(server, budget),
-                    )
+            server.start()
+            run.check_prompts(server, "harmful_test", texts, ids["harmful_test"])
+            count = len(harmful)
+            answering = (
+                _Answering(tokens, GREEDY, [0] * count, None)
+                if closed
+                else _Answering(
+                    tokens,
+                    run.sampling(),
+                    seeds(settings.sampling.seed if seed is None else seed, count),
+                    run.thinking(server, budget),
                 )
-                yield _Scorer(
-                    server, guard, texts, harmful, harmless, settings.scoring.kl_tokens, answering, beside
-                )
+            )
+            scorer = _Scorer(
+                server,
+                guard,
+                texts,
+                harmful,
+                harmless,
+                settings.scoring.kl_tokens,
+                answering,
+                beside,
+                server_with,
+            )
+            yield scorer
         finally:
+            (scorer.server if scorer else server).stop()
             guard.close()
 
     def inputs(
@@ -1000,7 +1028,8 @@ class Search:
                     self.positions,
                 )
             edit = edit_from(trial.params, number, layers)
-            scales = self._scales(edit, self._edit_files(edit, adapters))
+            started = time.perf_counter()
+            scales = self._applied(edit, adapters, scorer, run.path("scores", "trial"))
             full = sorted(t.user_attrs["refusals"] for t in _completed(study) if not t.user_attrs["stopped"])
             # A trial can't win once it refuses more than the cap, and the sampler can't see it stop once
             # it also refuses more than STOP_AFTER trials of its kind scored in full.
@@ -1009,7 +1038,6 @@ class Search:
                 if space.stop_early and len(full) >= STOP_AFTER
                 else None
             )
-            started = time.perf_counter()
             score = scorer.score(scales, stop_above)
             prompts = len(scorer.harmful)
             for key, value in asdict(score).items():
@@ -1048,12 +1076,22 @@ class _Scorer:
         kl_tokens: int,
         answering: _Answering,
         beside: dict[str, list[list[int]]],
+        server_with: Callable[[list[Path]], LlamaServer],
     ):
         self.server, self.guard, self.texts = server, guard, texts
+        self.server_with = server_with
         self.harmful, self.harmless, self.kl_tokens = harmful, harmless, kl_tokens
         self.answering, self.beside = answering, beside
         self.base = server.top_logprobs(harmless, kl_tokens)
         self.base_beside = {name: server.top_logprobs(prompts, kl_tokens) for name, prompts in beside.items()}
+
+    def load(self, adapters: list[Path]) -> None:
+        """Restart the server with these adapters: an edit that isn't linear in strength has one built for
+        it, and llama-server can't load an adapter while it runs. The unedited model's first tokens, read
+        already, stay as they are."""
+        self.server.stop()
+        self.server = self.server_with(adapters)
+        self.server.start()
 
     def score(self, scales: dict[Path, float], stop_above: int | None = None) -> Score:
         """An edit's refusals and KL divergence. The harmful prompts are judged CHUNK at a time, in

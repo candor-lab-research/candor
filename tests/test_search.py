@@ -1862,3 +1862,44 @@ def test_scoring_answers_a_thinking_models_trials_many_at_once(tiny, monkeypatch
     Search(tiny).search(1)
     # The scorer's server is the last one the search starts.
     assert started[-1] == (search.THINKING_MODEL_SLOTS if thinks else search.SLOTS)
+
+
+def test_a_full_edits_trials_each_restart_the_server_with_an_adapter_built_for_them(tiny, monkeypatch):
+    small(tiny, trials=2)
+    tiny.settings.edit.row_norm = "full"
+    started = []
+    real = LlamaServer.start
+
+    def start(self, *args, **kwargs):
+        started.append([path.name for path in self.adapters])
+        return real(self, *args, **kwargs)
+
+    monkeypatch.setattr(LlamaServer, "start", start)
+    Search(tiny).search(4)
+    assert tiny.adapters() == {}
+    # The unedited model first, with no adapters, then each trial with its own.
+    scoring = started[-5:]
+    assert scoring == [[], ["edit.gguf"], ["edit.gguf"], ["edit.gguf"], ["edit.gguf"]]
+    scores = [search._score(trial) for trial in finished(tiny)]
+    assert len(scores) == 4 and len({s.kl for s in scores}) == 4
+    # A search of "full" edits isn't carried on as one of "pre" edits.
+    tiny.settings.edit.row_norm = "pre"
+    with pytest.raises(RunError, match="holds a search made with a different adapters"):
+        Search(tiny).search(6)
+
+
+def test_scoring_full_edits_beside_the_search_builds_each_ones_adapter(tiny, monkeypatch):
+    tiny.settings.edit.row_norm = "full"
+    started = []
+    real = LlamaServer.start
+
+    def start(self, *args, **kwargs):
+        started.append([path.parent.name for path in self.adapters])
+        return real(self, *args, **kwargs)
+
+    monkeypatch.setattr(LlamaServer, "start", start)
+    kernels = {"attn": Kernel(1.2, 1.0, 0.8, 1.0), "mlp": Kernel(1.0, 0.0, 0.5, 1.0)}
+    edits = [Edit("one", 0.4, kernels), Edit("two", None, kernels)]
+    scored = Search(tiny).score(edits)
+    assert started[-3:] == [[], ["one"], ["two"]]
+    assert len(scored.edits) == 2 and scored.edits[0].kl != scored.edits[1].kl

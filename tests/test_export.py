@@ -12,7 +12,7 @@ from candor import config, convert, export, measure, merge, run
 from candor.cli import app
 from candor.convert import check_targets
 from candor.convert import quantize as real_quantize
-from candor.edit import RowNorm, rank_one
+from candor.edit import RowNorm, edit_factors, rank_one
 from candor.kernel import Kernel
 from candor.measure import Edit, Measurement
 from candor.run import Run, RunError
@@ -55,7 +55,7 @@ def kl_between(a, b):
     return float(next(row for row in measure.compare(a, b) if row[0] == "Harmless KL from A")[2])
 
 
-@pytest.mark.parametrize("row_norm", ["pre", "none"])
+@pytest.mark.parametrize("row_norm", ["pre", "none", "full"])
 @pytest.mark.parametrize("edit", [EDIT, Edit("trial", None, EDIT.kernels)], ids=["one layer", "per layer"])
 def test_the_export_answers_as_the_model_with_the_edits_adapters(tiny, converting, edit, row_norm):
     tiny.settings.edit.row_norm = row_norm
@@ -86,6 +86,24 @@ def test_each_edited_weight_gains_its_strength_times_its_factors(tiny, convertin
             torch.testing.assert_close(
                 deltas[writer.name][0] @ deltas[writer.name][1], EDIT.strength(writer) * b @ a
             )
+
+
+@pytest.mark.parametrize("answering", [False, True])
+def test_a_full_edit_ships_the_adapter_it_was_scored_with(tiny, converting, answering):
+    thinking(tiny)
+    tiny.settings.edit.row_norm = "full"
+    edit = replace(EDIT, name="trial-full", answering=answering)
+    deltas = export.deltas(tiny, edit)
+    path, _ = tiny.edit_adapter(tiny.path("scores", "edits", edit.name), edit)
+    stored = {t.name: torch.from_numpy(t.data.copy()) for t in gguf.GGUFReader(path).tensors}
+    for writer in tiny.shape[3]:
+        name = tiny.target_names[writer.name]
+        if EDIT.strength(writer):
+            b, a = deltas[writer.name]
+            assert a.shape[0] == 3
+            torch.testing.assert_close(stored[f"{name}.lora_b"] @ stored[f"{name}.lora_a"], b @ a)
+        else:
+            assert f"{name}.lora_a" not in stored
 
 
 def test_an_edit_read_where_the_answer_starts_ships_that_direction(tiny, converting):
@@ -145,13 +163,15 @@ def test_merging_before_the_qwen35_reorder_gives_the_adapter_built_after_it(row_
     config = {"linear_num_key_heads": 2, "linear_num_value_heads": 4, "linear_value_head_dim": 3}
     name = "model.language_model.layers.0.linear_attn.out_proj.weight"
     torch.manual_seed(0)
-    weight, direction = torch.randn(5, 12), torch.nn.functional.normalize(torch.randn(5), dim=0)
-    b, a = rank_one(weight, direction, row_norm)
+    # Enough rows for a "full" edit's rank-3 SVD; its randomised SVD of reordered columns agrees to
+    # within a few parts in a million.
+    weight, direction = torch.randn(16, 12), torch.nn.functional.normalize(torch.randn(16), dim=0)
+    b, a = edit_factors(weight, direction, 1.3, row_norm)
     reordered = convert.as_converted(weight, name, "qwen35", config)
     assert not torch.equal(reordered, weight)
-    b_converted, a_converted = rank_one(reordered, direction, row_norm)
-    merged = convert.as_converted(weight + 1.3 * b @ a, name, "qwen35", config)
-    torch.testing.assert_close(merged, reordered + 1.3 * b_converted @ a_converted)
+    b_converted, a_converted = edit_factors(reordered, direction, 1.3, row_norm)
+    merged = convert.as_converted(weight + b @ a, name, "qwen35", config)
+    torch.testing.assert_close(merged, reordered + b_converted @ a_converted)
 
 
 def test_the_deployed_float_type_is_exported_without_quantising(tiny, converting, monkeypatch):

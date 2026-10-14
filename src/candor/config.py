@@ -194,14 +194,17 @@ class Edit(Section):
         default="pre",
         description='How the edit treats each weight row\'s length: "none" edits the weights as they are; '
         '"pre" computes the edit on rows scaled to length 1, then scales them back, as heretic does on '
-        "the Mac.",
+        'the Mac; "full" also scales every edited row back to its own length, as heretic\'s "full" '
+        "does, at its rank of 3. A \"full\" edit isn't linear in strength, so each trial's adapter is "
+        'built for it and llama-server restarted with it: slower, but it can work where "pre" can\'t, '
+        "as on Qwen3.5-9B.",
     )
 
     @field_validator("row_norm")
     @classmethod
     def _known_row_norm(cls, value: str) -> str:
-        if value not in {"none", "pre"}:
-            raise ValueError('must be "none" or "pre"')
+        if value not in {"none", "pre", "full"}:
+            raise ValueError('must be "none", "pre" or "full"')
         return value
 
 

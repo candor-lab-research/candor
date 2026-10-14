@@ -182,6 +182,17 @@ def test_an_edit_gets_its_own_adapters_and_strengths_and_moves_the_first_tokens(
     assert float(measure.compare(base, base)[-1][2]) == 0
 
 
+def test_a_full_edit_is_measured_with_one_adapter_built_at_its_strengths(tiny):
+    tiny.settings.edit.row_norm = "full"
+    base = Measurement(tiny, None, "base").measure()
+    edited = Measurement(tiny, EDIT, "trial").measure()
+    assert sorted(p.name for p in tiny.path("measurements", "trial", "adapters").iterdir()) == [
+        "edit.gguf",
+        "edit.gguf.inputs.json",
+    ]
+    assert float(measure.compare(base, edited)[-1][2]) > 0
+
+
 def test_saved_answers_are_not_judged_against_prompts_that_changed(tiny, monkeypatch):
     Measurement(tiny, None, "base").measure()
 
@@ -325,6 +336,26 @@ def test_a_heretic_trial_built_differently_is_refused(tmp_path, settings, proble
     journal = write_journal(tmp_path / "study.jsonl", settings)
     with pytest.raises(RunError, match=f"can't be rebuilt like for like: .*{problem}"):
         measure.heretic_trial(journal, 1, "pre")
+
+
+def test_a_full_heretic_trial_read_after_the_runs_think_close_is_rebuilt_where_the_answer_starts(tmp_path):
+    settings = {
+        "row_normalization": "full",
+        "orthogonalize_direction": True,
+        "response_prefix": "\n</think>\n\n",
+    }
+    journal = write_journal(tmp_path / "study.jsonl", settings)
+    edit = measure.heretic_trial(journal, 1, "full", "\n</think>\n\n")
+    assert edit.answering and edit.direction_layer == 12.5
+    with pytest.raises(RunError, match=r"a response prefix, .* that isn't the run's deployment\.think_close"):
+        measure.heretic_trial(journal, 1, "full", "</think>")
+    with pytest.raises(RunError, match='normalised rows as "full"'):
+        measure.heretic_trial(journal, 1, "pre", "\n</think>\n\n")
+    plain = write_journal(tmp_path / "plain.jsonl", settings | {"response_prefix": ""})
+    assert not measure.heretic_trial(plain, 1, "full").answering
+    ranked = write_journal(tmp_path / "rank.jsonl", settings | {"full_normalization_lora_rank": 4})
+    with pytest.raises(RunError, match='built "full" edits at rank 4, and candor at 3'):
+        measure.heretic_trial(ranked, 1, "full", "\n</think>\n\n")
 
 
 def test_an_unreadable_journal_is_named(tmp_path):

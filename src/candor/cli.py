@@ -612,7 +612,12 @@ def measure_command(
             run = Run.open(folder, report)
             edit = None
             if heretic is not None and trial is not None:
-                edit = measure.heretic_trial(heretic.expanduser(), trial, run.settings.edit.row_norm)
+                edit = measure.heretic_trial(
+                    heretic.expanduser(),
+                    trial,
+                    run.settings.edit.row_norm,
+                    run.settings.deployment.think_close,
+                )
             elif trial is not None:
                 edit = search.trial_edit(run, trial)
             measurement = measure.Measurement(
@@ -738,7 +743,12 @@ def export_command(
                 shipped = export.export_outside(run, name, outside)
             elif heretic is not None:
                 assert trial is not None
-                edit = measure.heretic_trial(heretic.expanduser(), trial, run.settings.edit.row_norm)
+                edit = measure.heretic_trial(
+                    heretic.expanduser(),
+                    trial,
+                    run.settings.edit.row_norm,
+                    run.settings.deployment.think_close,
+                )
                 shipped = export.export(run, edit)
             else:
                 assert trial is not None
@@ -817,7 +827,12 @@ def serve_command(
                     _, model = run.gguf()
             else:
                 if heretic is not None:
-                    edit = measure.heretic_trial(heretic.expanduser(), trial, run.settings.edit.row_norm)
+                    edit = measure.heretic_trial(
+                        heretic.expanduser(),
+                        trial,
+                        run.settings.edit.row_norm,
+                        run.settings.deployment.think_close,
+                    )
                 else:
                     edit = search.trial_edit(run, trial)
                 name = edit.name
@@ -1079,7 +1094,12 @@ def score_command(
             if heretic is None:
                 edits.append((search.trial_edit(run, trial), trial))
             else:
-                edit = measure.heretic_trial(heretic.expanduser(), trial, run.settings.edit.row_norm)
+                edit = measure.heretic_trial(
+                    heretic.expanduser(),
+                    trial,
+                    run.settings.edit.row_norm,
+                    run.settings.deployment.think_close,
+                )
                 nearest = search.nearest_layer(edit, run.settings.search, layers)
                 edits += [(edit, None)] + ([(nearest, None)] if nearest else [])
                 if front:

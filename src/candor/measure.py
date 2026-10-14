@@ -17,6 +17,7 @@ from pathlib import Path
 from typing import Any
 
 from . import export, heretic, kl
+from .edit import FULL_RANK
 from .engine import LlamaServer, Thinking
 from .judge import Guard, is_refusal, judged_refusal, read_verdict
 from .kernel import Kernel
@@ -73,8 +74,10 @@ class Edit:
         return {"direction_layer": self.direction_layer, "kernels": kernels, **position}
 
 
-def heretic_trial(journal_path: Path, number: int, row_norm: str) -> Edit:
-    """A trial from a heretic study, to be rebuilt with this run's own directions."""
+def heretic_trial(journal_path: Path, number: int, row_norm: str, think_close: str | None = None) -> Edit:
+    """A trial from a heretic study, to be rebuilt with this run's own directions. A trial that read its
+    directions after a response prefix that closes the thinking as this run's think_close does is rebuilt
+    with the directions read where the answer starts."""
     try:
         journal = heretic.read_journal(journal_path)
     except (OSError, ValueError, KeyError) as error:
@@ -91,18 +94,27 @@ def heretic_trial(journal_path: Path, number: int, row_norm: str) -> Edit:
             f'it normalised rows as "{settings.get("row_normalization")}" and this run uses '
             f'edit.row_norm = "{row_norm}"'
         )
+    if (
+        settings.get("row_normalization") == "full"
+        and settings.get("full_normalization_lora_rank", 3) != FULL_RANK
+    ):
+        problems.append(
+            f'it built "full" edits at rank {settings["full_normalization_lora_rank"]}, and candor at {FULL_RANK}'
+        )
     if settings.get("winsorization_quantile", 1.0) < 1:
         problems.append("it winsorised the residuals, which candor doesn't")
     if settings.get("orthogonalize_direction") is not True:
         problems.append("it doesn't record orthogonalising its directions, as candor does")
-    if settings.get("response_prefix"):
+    prefix = settings.get("response_prefix")
+    if prefix and prefix != think_close:
         problems.append(
-            "it read its directions after a response prefix, such as a closed thinking block, which "
-            "candor doesn't; export heretic's own save of the trial with candor export --outside instead"
+            f"it read its directions after a response prefix, {prefix!r}, that isn't the run's "
+            "deployment.think_close; export heretic's own save of the trial with candor export --outside "
+            "instead"
         )
     if problems:
         raise RunError(f"trial {number} can't be rebuilt like for like: " + "; ".join(problems))
-    return Edit(f"heretic-{number}", trial.direction_layer, trial.kernels)
+    return Edit(f"heretic-{number}", trial.direction_layer, trial.kernels, answering=bool(prefix))
 
 
 def edit_adapters(run: Run, edit: Edit, folder: Path) -> tuple[dict[str, Path], dict[str, Any]]:
@@ -247,11 +259,15 @@ class Measurement:
         return {name: answered[name] | judged.get(name, {}) for name in SETS}
 
     def _adapters(self) -> tuple[dict[Path, float], dict[str, Any]]:
-        """The edit's own adapters, one per edit target, and the strength each is applied at."""
+        """The edit's own adapters, one per edit target, and the strength each is applied at; or, for an
+        edit that isn't linear in strength, one adapter built at its strengths, applied at 1."""
         assert self.edit is not None
         run = self.run
-        files, inputs = edit_adapters(run, self.edit, self.folder / "adapters")
         strengths = self.edit.strengths(run.shape[3], run.target_names)
+        if not run.linear:
+            path, inputs = run.edit_adapter(self.folder / "adapters", self.edit)
+            return {path: 1.0}, {"adapters": digest(inputs), **self.edit.record(), "strengths": strengths}
+        files, inputs = edit_adapters(run, self.edit, self.folder / "adapters")
         scales = {files[name]: strength for name, strength in strengths.items() if strength}
         return scales, {"adapters": digest(inputs), **self.edit.record(), "strengths": strengths}
 
