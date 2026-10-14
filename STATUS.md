@@ -38,7 +38,13 @@ phase 3: `results/phase-3-qwen3.5-9b.md`).
 
 1. Phase 3, step 5: `candor proxy` on a pod (started 2026-10-14, about $2-3); its verdict picks
    step 6's path, whose price the user sees first (a top-up of about $10 needed).
-2. Not blocking, each when there is a reason:
+2. After this run, candor's own search design (the user, 2026-10-14): find where refusals collapse
+   first, with a coarse sweep of strength and spread, then refine there. On Qwen3.5-9B heretic's
+   search sat at 46-56/100 refused (keywords) from trial 20 to 160, then Trial 161 dropped to 11;
+   candor's "full" search was level with it at 41 trials (58). Trial 161 sits in a narrow corner:
+   strength 1.42-1.46 of the 1.5 ceiling, edge strength 0.97-0.99 (nearly flat), reach 0.35-0.54.
+   Finding that by luck after 160 trials won't scale to 27B, at about 3x the cost per trial.
+3. Not blocking, each when there is a reason:
    - 64 slots for a thinking model's trials: 15% faster than 32 with GPU sampling (results file);
    - sampling moved to the GPU on 2026-10-14 draws differently for a seed, so measurements made
      before it pair with later ones prompt by prompt, not draw by draw; `answering` records don't
