@@ -38,18 +38,22 @@ phase 3: `results/phase-3-qwen3.5-9b.md`).
 
 1. Phase 3, step 5: `candor proxy` on a pod (started 2026-10-14, about $2-3); its verdict picks
    step 6's path, whose price the user sees first (a top-up of about $10 needed).
-2. A hypothesis, not yet a plan: find where refusals collapse first, with a coarse sweep of strength
-   and spread, then refine there. On Qwen3.5-9B heretic's search sat at 46-56/100 refused
-   (keywords) from trial 20 to 160, then Trial 161 dropped to 11; candor's "full" search was level
-   with it at 41 trials (58). Trial 161 sits in a narrow corner: strength 1.42-1.46 of the 1.5
-   ceiling, edge strength 0.97-0.99 (nearly flat), reach 0.35-0.54. Finding that by luck after 160
-   trials won't scale to 27B, at about 3x the cost per trial. Built only with proof that holds for
-   this kind of model, not just Qwen3.5-9B (the user, 2026-10-14):
-   - a literature check on how refusal falls with edit strength and spread;
-   - the cliff shown in more than one model's trials (this run's, rude-llama's, heretic's studies
-     in `~/Desktop/tune/checkpoints`), not one run;
-   - the new search finding the best in fewer trials than TPE when replayed offline on those trials
-     or in the miss-rate simulator, before any pod time.
+2. Search evidence (2026-10-14, reports in `results/evidence-2026-10-14/`). The hypothesis that
+   refusal falls off a cliff, so a coarse sweep should find where it collapses, is dropped: across 8
+   searches on 3 models and in the literature refusals fall gradually with strength. Qwen3.5-9B's good
+   edits sit only at the 1.5 strength ceiling, as K2-Horizon's did until heretic's cap went to 5.0
+   (best 54 refused, then 7). heretic itself stalls at 70/100 on Qwen3.5-9B (#404, 4 runs), so
+   Trial 161's 11 was an outlier. Candidates, each built only with proof across model families (the
+   user, 2026-10-14):
+   - a wider strength range from the start (K2; abliterix's Qwen3.5/3.6-27B ranges of 1-5 and 1-6;
+     heretic PR #52); this run's widening to 3.0 near trial 120 is the first Qwen test;
+   - heretic's newer default edit, ARA (4/100 on Qwen3.5-4B where abliteration stays above 50, PR
+     #211): find out what it is first;
+   - coordinates such as total edit mass and spread, and a GP sampler instead of TPE (general
+     optimisation literature, untested here): only after an offline replay over several model
+     families, 20+ seeds per arm, as `lit-search.md` sets out;
+   - edits at the thinking start never refused under 97 in candor, but worked on Qwen3-8B
+     (2507.03167): probably candor's setup; look later.
 3. Not blocking, each when there is a reason:
    - 64 slots for a thinking model's trials: 15% faster than 32 with GPU sampling (results file);
    - sampling moved to the GPU on 2026-10-14 draws differently for a seed, so measurements made
