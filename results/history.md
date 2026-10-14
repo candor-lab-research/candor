@@ -561,3 +561,12 @@ all but one confirmed.
   each paper in full (above).
 
 320 tests, plus 5 end to end, pass.
+
+### Phase 3, step 5: the proxy's verdict (2026-10-14)
+
+`candor proxy` said "offset" (Spearman 0.98; thinking refuses a median of 5 more where thinking off
+refuses at most 25). By the plan's step 6 that means cheap trials, with the edits they suggest scored
+as used at more strength; no method change. The user chose to run it overnight and to carry the
+search to its full 600 trials rather than 400: the morning start isn't delayed either way, and the
+trial where the best edit turned up shows whether a shorter search would do on larger models.
+Numbers in `results/phase-3-qwen3.5-9b.md`.

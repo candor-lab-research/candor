@@ -15,7 +15,7 @@ anything else. Every model is scored and shipped as a GGUF in llama-server, and 
 | 0 | Score edits as per-layer LoRA adapters in llama.cpp | Done |
 | 1 | Core maths and `candor inspect` | Done |
 | 2 | rude-llama end to end: search, export, measure against heretic's Trial 170 | Done 2026-10-13: trial 535 passes and ships (`results/milestone-rude-llama-vs-heretic.md`) |
-| 3 | Qwen3.5-9B, a thinking model, scored as used against heretic's Trial 161 | Step 5 running (below); `results/phase-3-qwen3.5-9b.md` |
+| 3 | Qwen3.5-9B, a thinking model, scored as used against heretic's Trial 161 | Step 6 running (below); `results/phase-3-qwen3.5-9b.md` |
 | 4 | K2-Horizon at your real settings, with its own chat template and reasoning level | |
 
 Qwen3.5-9B is a testbed: the process must work, affordably, for larger thinking models used with
@@ -33,18 +33,19 @@ thinking on (next, e.g. Qwen3.8-27B). A 9B model must not take days.
   `results/evidence-2026-10-14/ara-missed.md`). Tools checked 2026-10-14: heretic master 66a952b
   (2.0.0.dev0, default edit ARA); last release 1.4.0.
 
-## Now: phase 3, step 5
+## Now: phase 3, step 6
 
-- The "full" edit (heretic's row normalisation, rank 3) is built. A 150-trial search scored with
-  thinking off took 3 h 38 min; once it widened strength from 1.5 to 3.0 (trial 120), its best
-  dropped from 22 refused of 100 to 1 (trial 146, KL 0.102; Trial 161 rebuilt: 24, KL 0.092).
-- `candor proxy` is running on pod `m37qrjorh2geg9`: 24 of the search's edits scored with thinking
-  off, then with thinking on (from 18:02, about 3-5 h). Its verdict says whether a search may score
-  thinking off.
+- Step 5 done: the "full" edit's 150-trial search, thinking off, then `candor proxy`. Verdict
+  "offset": thinking off ranks edits as thinking on does (Spearman 0.98) but thinking needs stronger
+  edits (a median 5 more refused where thinking off refuses at most 25). 4 edits stay within the cap
+  as used, all KL about 0.10 (Trial 161 rebuilt: 0.092, refusing 24).
+- The search carries on to its full 600 trials, thinking off, on pod `m37qrjorh2geg9` (from 22:05,
+  about 11-14 h; the watchdog deletes the pod at 14:06 on 2026-10-15).
 
 ## Next
 
-1. The proxy's verdict picks step 6's path, quoted first (a top-up of about $10 needed).
+1. When the search ends: which edits from its front are scored as used, and at how much more
+   strength (the proxy tried 1.4 times), quoted first.
 2. Not blocking, each when there is a reason:
    - speed: 64 slots (15% faster than 32), weights cached on the GPU for "full" trials, the proxy's
      adapters loaded into one server;
@@ -95,8 +96,8 @@ or by a lower KL. Measured on the full 1,319 maths questions, as Trial 161 was.
 | Step | What | State |
 | --- | --- | --- |
 | 1-4 | Thinking-model settings; pods; the method changes; Qwen3.5-9B and Trial 161 measured as used, the decision rule | Done 2026-10-14 (history) |
-| 5 | GPU sampling (2.2x faster), the "full" edit, a 150-trial thinking-off search, then `candor proxy` | Running |
-| 6 | The search on step 5's path. If thinking off ranks like thinking on (Spearman at least 0.7, perhaps with a strength correction): cheap trials, then about 15-20 edits from their front scored as used. If not: a thinking-on search of about 150 trials | |
+| 5 | GPU sampling (2.2x faster), the "full" edit, a 150-trial thinking-off search, then `candor proxy` | Done 2026-10-14: "offset" |
+| 6 | The search on step 5's path. If thinking off ranks like thinking on (Spearman at least 0.7, perhaps with a strength correction): cheap trials, then about 15-20 edits from their front scored as used. If not: a thinking-on search of about 150 trials | Running: search to 600 |
 | 7 | The best 2 exported and measured as used (held-out prompts, 400 maths, then the winner's 1,319); copied to the Mac; `serve` | |
 
 ## Parked, to review later
