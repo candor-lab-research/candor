@@ -94,7 +94,8 @@ and beat Trial 161.
 ## Parked, to review later
 
 Every idea not acted on, with what supports it (measured, published or a hypothesis), is in
-`results/findings.md`, beside what candor has found so far.
+`results/findings.md`, beside what candor has found so far. Outside work kept for later (papers,
+tools) is in `results/new-features.md`.
 
 ## Not in this plan
 

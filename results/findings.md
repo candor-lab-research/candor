@@ -127,8 +127,8 @@ entry is corrected rather than deleted when later evidence changes it.
   [Hypothesis, with literature] Only after an offline replay over several model families.
   (`evidence-2026-10-14/lit-search.md`)
 - **Cheaper as-used scoring:** vLLM or SGLang with each edit swapped into the weights, prompt
-  caching, a refusal probe, multi-fidelity optimisation. [Hypothesis] (`history.md`, "Not in this
-  plan")
+  caching, a refusal probe, multi-fidelity optimisation, Uno's parallel decoding. [Hypothesis]
+  (`history.md`, "Not in this plan"; `new-features.md`)
 - **A faster GPU for 27B.** [Hypothesis] On the A40, llama-server reached about 660 tokens/s,
   well below what the GPU's memory allows, so a faster card may help less than its price. Test: a
   short timed pilot on an A100 and an H100 before quoting 27B.
