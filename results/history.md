@@ -596,3 +596,20 @@ before and after a start is now part of how jobs start. The user left Trial 161 
 review (re-saving it would need heretic run again), and asked that the phase end with a discussion
 of where to go, with no changes to code, defaults or the method until agreed. Numbers in
 `results/phase-3-qwen3.5-9b.md`; `results/milestone-qwen3.5-9b-vs-heretic.md`.
+
+### Phase 4, step 1: candor runs K2-Horizon (2026-10-15, overnight)
+
+The user chose K2-Horizon-7B next (the strongest model their 18 GB Mac runs well, and a second
+model family), at reasoning effort high in llama-server, and asked that it come as options and
+tools that leave other models working as before. K2's template has no thinking switch and opens a
+think tag per effort, so candor now takes that tag's end tag as the close; a new
+`deployment.chat_template_kwargs` carries the effort to every render and to `serve`; a thinking-off
+search is refused where the template can't turn thinking off (K2), checked once before a search
+records anything; a `--lora` list too long for one argument goes through numbered links; and
+`--outside` takes an unquantised GGUF, since one public K2 edit is published only that way. IFM's
+Python files hold no network, file or process access. A developer agent built it, an independent
+review found nine points (one broke "unchanged": existing thinking-off commands started an extra
+server), all fixed and re-reviewed to a pass. rude-llama's trial 535 on 10 prompts per set gave
+byte-identical answers before and after, and Qwen's prompt ids rebuilt identically. The same
+night, four agents searched arXiv for new features (`results/new-features.md`), and the chat-app
+template check was removed at the user's request: models run only in llama-server.
