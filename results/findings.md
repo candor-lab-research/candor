@@ -17,10 +17,17 @@ entry is corrected rather than deleted when later evidence changes it.
   prompts] Spearman 0.98. Thinking off costs about 90 s a trial against 10-20 min for an edit that
   complies scored as used (24 edits: 39 min against 3 h 47 min). So the search may score thinking
   off and score only its best as used. (`phase-3-qwen3.5-9b.md`, step 5)
-- **Thinking adds refusals to edits that half-work, not to ones that fully work.** [Measured: same
-  24 edits] Edits refusing 8-22 with thinking off refused 3-28 more thinking (4 of the 5 at least
+- **Thinking adds refusals to edits that half-work, not to ones that fully work.** [Measured: 24
+  edits, step 5; a median of 2 more on step 6's 12] Edits refusing 8-22 with thinking off refused 3-28 more thinking (4 of the 5 at least
   10 more); a median of 5 more where thinking off refuses at most 25. Of 5 edits within the cap of 2 thinking off, 4 stayed
   within it thinking (the one that slipped, a one-layer edit, went from 1 to 6). (step 5)
+- **Extra strength pushes one-layer edits that already work past their best.** [Measured:
+  Qwen3.5-9B, 3 pairs of each kind, 100 test prompts] At 1.4 times the strength, every one-layer
+  edit in step 6 refused far more as used (1 to 20, 6 to 49, 0 to 49), though not with thinking
+  off, and thought less. Per-layer edits held or improved (5 to 1, 1 to 1, 6 to 3). In step 5,
+  one-layer edits that half-worked improved with it (41 to 18, 50 to 30), and trial 145 (layer 18,
+  KL 0.39) held (6 to 5). So strength beyond an edit's own best is not a safe correction for
+  thinking. (steps 5 and 6)
 - **The harder an edit pushes, the longer the model thinks.** [Measured: same 24 edits, and Trial
   161 on held-out prompts] Edits that still refuse think 700-1,300 tokens on average; per-layer
   edits that comply 1,600-2,000, none reaching the budget; one-layer edits that comply
@@ -51,9 +58,10 @@ entry is corrected rather than deleted when later evidence changes it.
   been cut before any reply; candor reads the final answer after up to 8,192 and counts an
   unfinished one against the edit. Not comparable until measured the same way.
   (`evidence-2026-10-14/ara-evidence.md`)
-- **Directions read at the thinking start mostly fail.** [Measured: Qwen3.5-9B] 71-100 refused of
-  100 either way on 12 edits; but trial 175 (layer 15) refused 0 at KL 0.057, thinking off, not yet
-  scored as used. [Published] They worked on Qwen3-8B (arXiv 2507.03167).
+- **Directions read at the thinking start mostly fail, but one works as used.** [Measured:
+  Qwen3.5-9B] 71-100 refused of 100 either way on 12 edits; trial 175 (one layer, layer 15) refused 0
+  as used with two seeds, at KL 0.057. [Published] They worked on Qwen3-8B (arXiv 2507.03167).
+  (step 6)
 
 ## The search
 
@@ -65,10 +73,10 @@ entry is corrected rather than deleted when later evidence changes it.
 - **The full 600 trials mattered.** [Measured: Qwen3.5-9B, one search] The best edits came at trials
   205-428 and none improved in the 117 trials after. 150 trials would have missed them all; by 300
   the one-layer best was within 1% of the final KL, the per-layer best 7-11% above it. (step 6)
-- **One layer's direction at layer 12 gives the lowest KL.** [Measured: Qwen3.5-9B, thinking off
-  only] Trials 205 and 417: 0-1 refused at KL 0.03, against 0.079 for the best per-layer edit and
-  0.092 for Trial 161 rebuilt (24 refused). Not yet scored as used; one-layer edits slipped most
-  when thinking (above). (step 6)
+- **One layer's direction at layer 12 gives the lowest KL, and one such edit holds as used.**
+  [Measured: Qwen3.5-9B, 100 test prompts] Trial 205: 1 refused as used at KL 0.037; trial 417
+  slipped from 1 to 6. Per-layer edits within the cap as used sit at KL 0.085-0.100; Trial 161
+  rebuilt, thinking off, 0.092 refusing 24. (step 6)
 - **Per-layer edits press the 3.0 ceiling on attention.** [Measured: Qwen3.5-9B, one search] Every
   per-layer best puts attention at 2.9-3.0, so a better per-layer edit may lie beyond it. (step 6)
 - **Refusals fall gradually as strength rises; there is no cliff.** [Measured: 8 searches on 3
@@ -78,9 +86,9 @@ entry is corrected rather than deleted when later evidence changes it.
 ## Pods
 
 - **A llama-server process failed its GPU allocations after 395 trials, then CUDA wouldn't start.**
-  [Hypothesis] Either the server's memory grew trial by trial, or the machine's GPU failed. GPU
-  memory is now logged every minute on pods; growth across a long search would show the first.
-  It matters for 27B, which leaves less memory spare.
+  [Hypothesis] Either the server's memory grew trial by trial, or the machine's GPU failed. Memory
+  held at 24.4-24.6 GB over 12 edits scored as used, which doesn't test a 395-trial server; it is
+  logged every minute on pods, so the next long search will tell. It matters for 27B.
 
 ## Ideas
 
@@ -109,8 +117,6 @@ entry is corrected rather than deleted when later evidence changes it.
 - **Search coordinates such as total edit mass and spread, and a GP sampler instead of TPE.**
   [Hypothesis, with literature] Only after an offline replay over several model families.
   (`evidence-2026-10-14/lit-search.md`)
-- **Edits at the thinking start.** [Published: one paper] [Measured: one trial works thinking off]
-  Trial 175 is scored as used in step 6; probably candor's setup held them back before.
 - **Cheaper as-used scoring:** vLLM or SGLang with each edit swapped into the weights, prompt
   caching, a refusal probe, multi-fidelity optimisation. [Hypothesis] (`history.md`, "Not in this
   plan")

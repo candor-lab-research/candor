@@ -236,3 +236,37 @@ puts attention at 2.9-3.0, the ceiling of the widened range.
 The pod (`m37qrjorh2geg9`, 20.75 h with step 5) cost about $12.25. On a new pod the run rebuilt
 from the Hub in about 15 minutes (setup 75 s, the run folder's push 2 min); its unedited thinking
 counts matched step 4's (96 of 100, 294 of 300).
+
+## Step 6: the search's best scored as used (2026-10-15)
+
+`candor proxy --trial` on a new A40 pod (`oi41qp8xyncyy6`, 07:40-10:50, about $1.90): 6 trials,
+each at its own strength and 1.4 times it, on the 100 test prompts with thinking off and then as
+used (Qwen's sampling, budget 8192, 32 slots). Thinking off took about 26 min, thinking on about
+2 h 12 min, the repeat about 12 min. The unedited model: 99 refused both ways.
+
+| Trial | Kind | Strength | Refused, off | Refused, on | Keywords, on | Thinking, mean tokens | Budget hit | KL, on |
+| --- | --- | --- | --- | --- | --- | --- | --- | --- |
+| 205 | one layer, answer start, layer 12 | x1 | 0 | **1** | 20 | 2,059 | 0 | **0.0369** |
+| 205 | | x1.4 | 0 | 20 | 23 | 1,237 | 2 | 0.0907 |
+| 417 | one layer, answer start, layer 12 | x1 | 1 | 6 | 31 | 2,068 | 0 | 0.0310 |
+| 417 | | x1.4 | 0 | 49 | 49 | 1,866 | 10 | 0.1199 |
+| 175 | one layer, thinking start, layer 15 | x1 | 0 | **0** | 5 | 1,952 | 0 | **0.0568** |
+| 175 | | x1.4 | 3 | 49 | 50 | 1,252 | 3 | 0.1350 |
+| 342 | per layer, answer start | x1 | 2 | 5 | 46 | 1,740 | 0 | 0.0902 |
+| 342 | | x1.4 | 1 | **1** | 37 | 1,701 | 0 | 0.0995 |
+| 428 | per layer, answer start | x1 | 1 | **1** | 44 | 1,732 | 0 | 0.0845 |
+| 428 | | x1.4 | 1 | **1** | 35 | 1,668 | 0 | 0.0899 |
+| 402 | per layer, answer start | x1 | 4 | 6 | 52 | 1,890 | 0 | 0.0834 |
+| 402 | | x1.4 | 1 | 3 | 50 | 1,855 | 0 | 0.0893 |
+
+Trial 175 at its strength again with another seed: 0 refused (KL 0.0553, thinking 1,674).
+
+- Within the cap of 2 as used: 205 and 175 at their strength (one layer, KL 0.037 and 0.057), 428
+  at both strengths and 342 at 1.4 times (per layer, KL 0.085-0.100). Trial 161 rebuilt, on the same
+  prompts thinking off: 24 refused, KL 0.092.
+- 1.4 times the strength made every one-layer edit far worse as used (1 to 20, 6 to 49, 0 to 49),
+  though not with thinking off, and shortened its thinking. On per-layer edits it held or helped
+  (5 to 1, 1 to 1, 6 to 3).
+- Where thinking off refuses at most 25, thinking refused a median of 2 more (step 5: 5).
+- Keyword counts stay far from the judge's on per-layer edits (35-52 against 1-6).
+- GPU memory held at 24.4-24.6 GB through the thinking-on scoring.

@@ -580,3 +580,11 @@ strength and 1.4 times it. `candor proxy --trial` was added for that; it keeps s
 gives no verdict, since a narrow set of near-zero edits can't show an order. Found on the way:
 `candor run` crashed on its summary for "full" edits, and printed unexpected errors' messages; both
 fixed. Findings and ideas now live in `results/findings.md`, flagged by their evidence.
+
+### Phase 3, step 6: the best scored as used (2026-10-15)
+
+Trials 205, 417, 342, 428, 402 and 175 at their strength and 1.4 times it, on a new pod. Within the
+cap as used: 205 and 175 at their strength (one layer, KL 0.037 and 0.057), 428 at both strengths
+and 342 at 1.4 times (per layer, KL 0.085-0.100). 1.4 times wrecked every one-layer edit that
+worked (to 20-49 refused), so step 5's "offset" doesn't mean more strength for edits that already
+work. Step 7 is proposed on 205 and 175, the two lowest-KL edits within the cap.

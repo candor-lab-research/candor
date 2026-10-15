@@ -15,7 +15,7 @@ anything else. Every model is scored and shipped as a GGUF in llama-server, and 
 | 0 | Score edits as per-layer LoRA adapters in llama.cpp | Done |
 | 1 | Core maths and `candor inspect` | Done |
 | 2 | rude-llama end to end: search, export, measure against heretic's Trial 170 | Done 2026-10-13: trial 535 passes and ships (`results/milestone-rude-llama-vs-heretic.md`) |
-| 3 | Qwen3.5-9B, a thinking model, scored as used against heretic's Trial 161 | Step 6 running (below); `results/phase-3-qwen3.5-9b.md` |
+| 3 | Qwen3.5-9B, a thinking model, scored as used against heretic's Trial 161 | Step 7 next (below); `results/phase-3-qwen3.5-9b.md` |
 | 4 | K2-Horizon at your real settings, with its own chat template and reasoning level | |
 
 Qwen3.5-9B is a testbed: the process must work, affordably, for larger thinking models used with
@@ -35,18 +35,16 @@ thinking on (next, e.g. Qwen3.8-27B). A 9B model must not take days.
   `results/evidence-2026-10-14/ara-missed.md`). Tools checked 2026-10-14: heretic master 66a952b
   (2.0.0.dev0, default edit ARA); last release 1.4.0.
 
-## Now: phase 3, step 6
+## Now: phase 3, step 7, waiting for the user's go
 
-- The search stopped at 545 of 600 trials, thinking off, when its pod's GPU failed; no new best
-  after trial 428. Best: one layer at layer 12, 0-1 refused at KL 0.03; per layer, 0-2 at
-  0.079-0.084 (Trial 161 rebuilt: 24 at 0.092).
-- Trials 205, 417, 342, 428, 402 and 175 are being scored as used, at their strength and 1.4 times
-  it, on pod `oi41qp8xyncyy6` (from 07:58 on 2026-10-15, about 3.5 h; the watchdog deletes it at
-  15:40).
+- Step 6 done: the search's best 6 scored as used. Within the cap of 2: one-layer trials 205 (1
+  refused, KL 0.037) and 175 (0 with two seeds, KL 0.057) at their strength; per-layer 428 and 342
+  (1 refused, KL 0.085-0.100). 1.4 times the strength wrecked every one-layer edit as used.
+  `results/phase-3-qwen3.5-9b.md`, `results/findings.md`.
 
 ## Next
 
-1. When the scoring ends: the best 2 for step 7, quoted first (a top-up needed).
+1. Step 7 on trials 205 and 175 at their strength, quoted first (a top-up needed).
 2. Not blocking, each when there is a reason:
    - speed: 64 slots (15% faster than 32), weights cached on the GPU for "full" trials, the proxy's
      adapters loaded into one server;
@@ -96,8 +94,7 @@ or by a lower KL. Measured on the full 1,319 maths questions, as Trial 161 was.
 
 | Step | What | State |
 | --- | --- | --- |
-| 1-5 | Settings, pods, Qwen3.5-9B and Trial 161 measured as used, the decision rule; the "full" edit, a thinking-off search, `candor proxy` ("offset") | Done 2026-10-14 (history, results file) |
-| 6 | The search, thinking off, to 545 trials; its best 6 scored as used at their strength and 1.4 times it | Scoring as used: running |
+| 1-6 | Settings, pods, Qwen3.5-9B and Trial 161 measured as used, the decision rule; the "full" edit, a thinking-off search to 545 trials, `candor proxy` ("offset"); the search's best 6 scored as used | Done 2026-10-15 (history, results file) |
 | 7 | The best 2 exported and measured as used (held-out prompts, 400 maths, then the winner's 1,319); copied to the Mac; `serve`. Then the user reads the thinking of the unedited model, candor's best and Trial 161 on about 5 requests and 5 maths problems each, and reports counts only (working, weighing whether to answer, circling, garbled; changed its mind; finished; maths right) for `findings.md` | |
 
 ## Parked, to review later
