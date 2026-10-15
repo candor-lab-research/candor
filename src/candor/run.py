@@ -919,10 +919,14 @@ class Run:
             )
             for name in kept
         }
-        return {
-            "edit targets": len(next(iter(made.values()))),
-            "direction sets": len(made),
-            "adapters": sum(map(len, made.values())),
-            "prompts": sum(map(len, ids.values())),
-            **thought,
-        }
+        # A "full" edit builds each edit's own adapter when it is scored, so none are shared to count.
+        shared = (
+            {
+                "edit targets": len(next(iter(made.values()))),
+                "direction sets": len(made),
+                "adapters": sum(map(len, made.values())),
+            }
+            if made
+            else {}
+        )
+        return {**shared, "prompts": sum(map(len, ids.values())), **thought}

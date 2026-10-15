@@ -169,6 +169,12 @@ def test_a_full_edit_has_one_adapter_built_at_its_strengths_and_no_shared_ones(
     assert path.stat().st_mtime_ns == stamp and messages == []
 
 
+def test_a_run_with_a_full_edit_has_no_shared_adapters_to_count(tiny):
+    tiny.settings.edit.row_norm = "full"
+    done = tiny.prepare()
+    assert "adapters" not in done and done["prompts"] > 0
+
+
 def test_unchanged_adapters_are_reused_untouched(current):
     this, messages = current
     first = this.adapters()

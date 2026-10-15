@@ -5,7 +5,8 @@ answering after an empty thinking block. The cheap score only helps if it ranks 
 and no published work shows that it does: the gap between the two changes size and even sign by model
 and by edit. So candor proxy scores edits both ways on the search's own test prompts and compares the
 order. The edits are the best a short search scored with thinking off found, as random edits mostly
-change nothing (on Qwen3.5-9B 11 of 12 refused 97-99 of 100) and so can't show an order. Its scores
+change nothing (on Qwen3.5-9B 11 of 12 refused 97-99 of 100) and so can't show an order; or, once the
+search may score thinking off, the trials named, so the ones it suggests are scored as used. Its scores
 are kept in the run's proxy folder, so a stopped check carries on.
 """
 
@@ -71,11 +72,12 @@ class Check:
         return "offset" if self.offset > OFFSET else "holds"
 
 
-def edits(run: Run) -> tuple[list[Edit], list[int], list[float]]:
-    """The edits checked: from the run's search, scored with thinking off, the BEST trials scored in
-    full of each kind and position, fewest refusals first and then least KL, each as found and at the
-    other FACTORS of its strength, held within search.widest_strength. Each position's own best are
-    taken, as the cheap score may favour directions read where the answer starts."""
+def edits(run: Run, chosen: Sequence[int] = ()) -> tuple[list[Edit], list[int], list[float]]:
+    """The edits checked: from the run's search, scored with thinking off, the trials chosen, or else
+    the BEST trials scored in full of each kind and position, fewest refusals first and then least KL;
+    each as found and at the other FACTORS of its strength, held within search.widest_strength. Each
+    position's own best are taken, as the cheap score may favour directions read where the answer
+    starts."""
     record = run.path("search", "inputs.json")
     if not record.exists() or json.loads(record.read_text()).get("trials think") != "off":
         raise RunError(
@@ -84,21 +86,32 @@ def edits(run: Run) -> tuple[list[Edit], list[int], list[float]]:
         )
     found = load(run)
     full = scored_in_full(found) if found else []
+    if chosen:
+        by_trial = {c.trial: c for c in full}
+        missing = [str(trial) for trial in dict.fromkeys(chosen) if trial not in by_trial]
+        if missing:
+            raise RunError(f"not trials the search scored in full: {', '.join(missing)}")
+        picked = [by_trial[trial] for trial in dict.fromkeys(chosen)]
+    else:
+        picked = []
+        for scope in SCOPES:
+            for position in POSITIONS:
+                group = [
+                    c for c in full if scope_of(c.params) == scope and c.params.get("position") == position
+                ]
+                picked += sorted(group, key=lambda c: (c.refusals, c.kl))[:BEST]
     _, layers, _, _ = run.shape
     low, high = run.settings.search.widest_strength
     made, trials, factors = [], [], []
-    for scope in SCOPES:
-        for position in POSITIONS:
-            group = [c for c in full if scope_of(c.params) == scope and c.params.get("position") == position]
-            for best in sorted(group, key=lambda c: (c.refusals, c.kl))[:BEST]:
-                for factor in FACTORS:
-                    params = {
-                        name: min(max(value * factor, low), high) if name.endswith(".strength") else value
-                        for name, value in best.params.items()
-                    }
-                    made.append(replace(edit_from(params, best.trial, layers), name=f"edit-{len(made) + 1}"))
-                    trials.append(best.trial)
-                    factors.append(factor)
+    for best in picked:
+        for factor in FACTORS:
+            params = {
+                name: min(max(value * factor, low), high) if name.endswith(".strength") else value
+                for name, value in best.params.items()
+            }
+            made.append(replace(edit_from(params, best.trial, layers), name=f"edit-{len(made) + 1}"))
+            trials.append(best.trial)
+            factors.append(factor)
     if not made:
         raise RunError("the search has no trials scored in full yet")
     return made, trials, factors
@@ -126,18 +139,20 @@ def _ranks(values: Sequence[float]) -> list[float]:
     return ranks
 
 
-def check(run: Run) -> Check:
+def check(run: Run, chosen: Sequence[int] = ()) -> Check:
     """Score the edits with thinking off, then thinking as the model is used, then the edit refusing
     fewest thinking again with another seed, to see how far sampling alone moves a score."""
     if not run.settings.deployment.think_close:
         raise RunError("candor proxy is for a model that thinks; this one doesn't")
     search = Search(run)
-    made, trials, factors = edits(run)
+    made, trials, factors = edits(run, chosen)
     with run.locked():
         ids = run.prompt_ids()
         run.directions()
         inputs = _inputs(search, ids, run.kl_ids(ids, "harmless_test"), trials)
-        saved = _load(run, inputs)
+        # Trials named are kept apart, so checking them never replaces the check of the best.
+        name = "trials.json" if chosen else "scores.json"
+        saved = _load(run, inputs, name)
         for mode, thinks in MODES.items():
             todo = [i for i in range(len(made)) if str(i) not in saved[mode]]
             if not todo and mode in saved["base"]:
@@ -146,7 +161,7 @@ def check(run: Run) -> Check:
 
             def keep(index: int, score: Score, mode: str = mode, todo: list[int] = todo) -> None:
                 saved[mode][str(todo[index])] = asdict(score)
-                _save(run, saved)
+                _save(run, saved, name)
 
             scores = search.score_locked(
                 [made[i] for i in todo],
@@ -157,7 +172,7 @@ def check(run: Run) -> Check:
             )
             if scores.base_refusals is not None:
                 saved["base"][mode] = scores.base_refusals
-                _save(run, saved)
+                _save(run, saved, name)
         on = [Score(**saved["on"][str(i)]) for i in range(len(made))]
         repeated = min(range(len(made)), key=lambda i: (on[i].refusals, on[i].kl))
         if not saved["repeat"]:
@@ -166,7 +181,7 @@ def check(run: Run) -> Check:
                 [made[repeated]], True, seed=run.settings.sampling.seed + 1, base=False, beside_search=False
             ).edits[0]
             saved["repeat"] = {str(repeated): asdict(again)}
-            _save(run, saved)
+            _save(run, saved, name)
     off = [Score(**saved["off"][str(i)]) for i in range(len(made))]
     index, repeat = next(iter(saved["repeat"].items()))
     return Check(made, trials, factors, off, on, saved["base"], int(index), Score(**repeat))
@@ -187,8 +202,8 @@ def _inputs(
     }
 
 
-def _load(run: Run, inputs: dict[str, Any]) -> dict[str, Any]:
-    path = run.path("proxy", "scores.json")
+def _load(run: Run, inputs: dict[str, Any], name: str) -> dict[str, Any]:
+    path = run.path("proxy", name)
     empty = {"inputs": json.loads(json.dumps(inputs)), "base": {}, "off": {}, "on": {}, "repeat": {}}
     if not path.exists():
         return empty
@@ -199,9 +214,9 @@ def _load(run: Run, inputs: dict[str, Any]) -> dict[str, Any]:
     return empty
 
 
-def _save(run: Run, saved: dict[str, Any]) -> None:
-    path = run.path("proxy", "scores.json")
+def _save(run: Run, saved: dict[str, Any], name: str) -> None:
+    path = run.path("proxy", name)
     path.parent.mkdir(exist_ok=True)
-    partial = path.with_name("scores.json.building")
+    partial = path.with_name(f"{name}.building")
     partial.write_text(json.dumps(saved, sort_keys=True))
     partial.replace(path)

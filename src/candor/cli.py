@@ -460,9 +460,7 @@ def run(folder: Annotated[Path, typer.Argument(help="A run folder made by candor
         console.print(f"[red]The run stopped:[/] {escape(str(error))}")
         raise typer.Exit(FAILED_CHECK) from None
     except Exception as error:
-        console.print(
-            f"[red]The run stopped on an unexpected error:[/] {escape(f'{type(error).__name__}: {error}')}"
-        )
+        console.print(f"[red]The run stopped on an unexpected error:[/] {escape(_where(error))}")
         raise typer.Exit(COULD_NOT_INSPECT) from None
     summary = ", ".join(f"{count} {what}" for what, count in done.items())
     console.print(
@@ -1187,13 +1185,22 @@ def score_command(
 
 
 @app.command("proxy")
-def proxy_command(folder: Annotated[Path, typer.Argument(help="A run folder made by candor init.")]) -> None:
+def proxy_command(
+    folder: Annotated[Path, typer.Argument(help="A run folder made by candor init.")],
+    trial: Annotated[
+        list[int] | None,
+        typer.Option(
+            help="A trial of candor search to check, by the number shown; repeat it for more. Without it, "
+            "the best of each kind and place are checked.",
+        ),
+    ] = None,
+) -> None:
     """Check whether a thinking model's search may score its trials with thinking off, many times
-    faster. The best edits a short search scored with thinking off found, of each kind and place, are
-    scored on the test prompts with thinking off and thinking as the model is used, also at more
-    strength, and the two orders compared; the edit refusing fewest thinking is scored again with
-    another seed, to show how far sampling alone moves a score. A stopped check carries on. Shows
-    counts only."""
+    faster. The best edits a short search scored with thinking off found, of each kind and place, or
+    the trials named, are scored on the test prompts with thinking off and thinking as the model is
+    used, also at more strength, and the two orders compared (for trials named, the counts only,
+    without the verdict); the edit refusing fewest thinking is scored again with another seed, to show
+    how far sampling alone moves a score. A stopped check carries on. Shows counts only."""
     console = Console()
     folder = folder.expanduser()
 
@@ -1203,7 +1210,7 @@ def proxy_command(folder: Annotated[Path, typer.Argument(help="A run folder made
     try:
         with _stopped_by_signals(), _awake():
             run = Run.open(folder, report)
-            checked = proxy.check(run)
+            checked = proxy.check(run, trial or ())
     except config.ConfigError as error:
         console.print(f"[red]{escape(str(error))}[/]")
         raise typer.Exit(COULD_NOT_INSPECT) from None
@@ -1229,10 +1236,10 @@ def proxy_command(folder: Annotated[Path, typer.Argument(help="A run folder made
     for heading in headings:
         table.add_column(heading, justify="left" if heading in {"Edit", "Direction"} else "right")
     rows = zip(checked.edits, checked.trials, checked.factors, checked.off, checked.on, strict=True)
-    for edit, trial, factor, off, on in rows:
+    for edit, number, factor, off, on in rows:
         table.add_row(
             edit.name,
-            str(trial),
+            str(number),
             search.direction(edit.direction_layer, edit.answering),
             f"x{factor:g}",
             str(off.refusals),
@@ -1259,9 +1266,10 @@ def proxy_command(folder: Annotated[Path, typer.Argument(help="A run folder made
     }
     for mode, names in within.items():
         console.print(f"Within the cap of {cap} with thinking {mode}: {', '.join(names) or 'none'}.")
-    agreement = checked.agreement
-    shown = f"{agreement:.2f}" if agreement == agreement else "none: one way scores every edit alike"
-    console.print(f"Rank agreement (Spearman) between the two: {shown}.")
+    if not trial:
+        agreement = checked.agreement
+        shown = f"{agreement:.2f}" if agreement == agreement else "none: one way scores every edit alike"
+        console.print(f"Rank agreement (Spearman) between the two: {shown}.")
     near = f"{proxy.NEARLY_WORKS:.0%} of the prompts"
     if checked.offset is None:
         console.print(f"No edit refused at most {near} with thinking off, so none came near working.")
@@ -1270,6 +1278,12 @@ def proxy_command(folder: Annotated[Path, typer.Argument(help="A run folder made
             f"Where thinking off refuses at most {near}, thinking refuses a median of "
             f"{checked.offset:g} more."
         )
+    if trial:
+        console.print(
+            "The trials were named, so whether the search may score thinking off isn't judged here: "
+            "candor proxy without --trial judges it on the best of each kind and place."
+        )
+        return
     verdict = checked.verdict()
     if verdict == "holds":
         console.print(

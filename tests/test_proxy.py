@@ -58,6 +58,42 @@ def test_the_edits_are_each_kind_and_places_best_of_a_thinking_off_search(tiny, 
             )
 
 
+def test_the_trials_named_are_checked_once_each_in_the_order_given(tiny, monkeypatch):
+    searched_thinking_off(tiny, monkeypatch)
+    found = search.load(tiny)
+    assert found is not None
+    first, *_, last = sorted(c.trial for c in search.scored_in_full(found))
+    edits, trials, factors = proxy.edits(tiny, [last, first, last])
+    assert trials == [last, last, first, first] and factors == list(proxy.FACTORS) * 2
+    assert [edit.name for edit in edits] == ["edit-1", "edit-2", "edit-3", "edit-4"]
+    _, layers, _, _ = tiny.shape
+    assert edits[0].kernels == search.edit_from(found.trials[last].params, last, layers).kernels
+
+
+def test_a_trial_named_must_be_one_the_search_scored_in_full(tiny, monkeypatch):
+    searched_thinking_off(tiny, monkeypatch)
+    found = search.load(tiny)
+    assert found is not None
+    full = [c.trial for c in search.scored_in_full(found)]
+    with pytest.raises(RunError, match=r"scored in full: 9999$"):
+        proxy.edits(tiny, [full[0], 9999])
+
+
+def test_proxy_passes_the_trials_named_to_the_check(tiny, monkeypatch):
+    chosen = []
+
+    def check(run, trials=()):
+        chosen.append(list(trials))
+        raise RunError("stopped by a test")
+
+    monkeypatch.setattr(proxy, "check", check)
+    folder = config.write(tiny.folder.parent, "cli", tiny.settings, "made by a test").parent
+    runner = CliRunner(env={"COLUMNS": "200"})
+    assert runner.invoke(app, ["proxy", str(folder), "--trial", "5", "--trial", "7"]).exit_code != 0
+    runner.invoke(app, ["proxy", str(folder)])
+    assert chosen == [[5, 7], []]
+
+
 def test_the_check_needs_a_search_scored_with_thinking_off(tiny):
     thinking(tiny)
     with pytest.raises(RunError, match="run candor search with --trials 150 first"):
@@ -73,7 +109,7 @@ def fixed(monkeypatch, count: int = 24) -> int:
     edits = [Edit(f"edit-{n}", None, {}) for n in range(1, count + 1)]
     trials = [101 + n // len(proxy.FACTORS) for n in range(count)]
     factors = list(proxy.FACTORS) * (count // len(proxy.FACTORS))
-    monkeypatch.setattr(proxy, "edits", lambda run: (edits, trials, factors))
+    monkeypatch.setattr(proxy, "edits", lambda run, chosen=(): (edits, trials, factors))
     return count
 
 
@@ -144,6 +180,35 @@ def test_the_check_starts_afresh_when_what_it_depends_on_changes(tiny, monkeypat
     assert calls == []
 
 
+def test_a_check_of_named_trials_carries_on_only_for_the_same_ones_and_keeps_the_default_check(
+    tiny, monkeypatch
+):
+    thinks_through(monkeypatch)
+    thinking(tiny)
+
+    def edits(run, chosen=()):
+        trials = [trial for trial in dict.fromkeys(chosen or (101, 102)) for _ in proxy.FACTORS]
+        made = [Edit(f"edit-{n}", None, {}) for n in range(1, len(trials) + 1)]
+        return made, trials, list(proxy.FACTORS) * (len(trials) // len(proxy.FACTORS))
+
+    monkeypatch.setattr(proxy, "edits", edits)
+    refusals = {False: [1, 2, 3, 4], True: [2, 3, 4, 5]}
+    faked(monkeypatch, refusals)
+    proxy.check(tiny)
+    default = tiny.path("proxy", "scores.json").read_text()
+    calls = faked(monkeypatch, refusals, die_after=1)
+    with pytest.raises(KeyboardInterrupt):
+        proxy.check(tiny, [5, 7])
+    calls.clear()
+    proxy.check(tiny, [5, 7, 5])
+    assert calls[0][0] == ["edit-2", "edit-3", "edit-4"]
+    calls.clear()
+    proxy.check(tiny, [7, 5])
+    assert calls[0][0] == ["edit-1", "edit-2", "edit-3", "edit-4"]
+    assert tiny.path("proxy", "scores.json").read_text() == default
+    assert tiny.path("proxy", "trials.json").exists()
+
+
 def test_the_check_is_only_for_a_model_that_thinks(tiny):
     with pytest.raises(RunError, match="for a model that thinks"):
         proxy.check(tiny)
@@ -183,6 +248,23 @@ def test_proxy_shows_both_counts_and_whether_the_cheap_score_may_be_used(tiny, m
         "Where thinking off refuses at most 25% of the prompts, thinking refuses a median of 2 more." in shown
     )
     assert "the edits the search suggests must also be scored thinking at more strength" in shown
+
+
+def test_proxy_of_named_trials_leaves_whether_the_search_may_think_off_to_the_default_check(
+    tiny, monkeypatch
+):
+    thinks_through(monkeypatch)
+    thinking(tiny)
+    count = fixed(monkeypatch)
+    faked(monkeypatch, {False: list(range(count)), True: [n + 2 for n in range(count)]})
+    folder = config.write(tiny.folder.parent, "cli", tiny.settings, "made by a test").parent
+    result = CliRunner(env={"COLUMNS": "200"}).invoke(app, ["proxy", str(folder), "--trial", "101"])
+    assert result.exit_code == 0, result.output
+    shown = flat(result.output)
+    assert "Within the cap of 2 with thinking on: edit-1." in shown
+    assert "thinking refuses a median of 2 more." in shown
+    assert "Rank agreement" not in shown and "cheap score" not in shown
+    assert "candor proxy without --trial judges it" in shown
 
 
 def scored(refusals: list[int], judged: int = 100) -> list[Score]:

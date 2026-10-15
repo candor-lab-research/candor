@@ -32,6 +32,7 @@ uv run candor measure runs/rude                                # the unedited mo
 uv run candor measure runs/rude --heretic STUDY.jsonl --trial 170   # a heretic trial, rebuilt
 uv run candor compare runs/rude base heretic-170               # prompt by prompt
 uv run candor proxy runs/qwen                                  # a thinking model: may the search think off?
+uv run candor proxy runs/qwen --trial 37 --trial 41            # the search's picks, scored thinking too
 uv run candor search runs/rude                                 # search for a better edit, overnight
 uv run candor measure runs/rude --trial 37                     # one of its trials, on held-out prompts
 uv run candor score runs/rude --heretic STUDY.jsonl --trial 170     # where it would sit in the search
@@ -63,7 +64,10 @@ uv run candor serve runs/rude --trial 37                       # chat with it in
   search carries on from those trials. It says the cheap score holds, holds but thinking needs stronger edits (the search's
   suggestions must then also be scored thinking at more strength), or can't be trusted. Set
   `scoring.thinking = "off"` only when it holds; edits are chosen on numbers measured thinking
-  either way. Its scores are kept in `proxy/`, so a stopped check carries on.
+  either way. Its scores are kept in `proxy/`, so a stopped check carries on. `--trial`, repeated,
+  scores the trials named instead (the search's best, once it may score thinking off), each also at
+  1.4 times its strength, kept apart in `proxy/trials.json`, with counts but no verdict; naming other
+  trials starts that afresh.
 - `edit.row_norm = "full"` makes heretic's "full" edit: each edited weight row keeps its own length, at
   heretic's rank of 3, built as heretic builds it (checked against its code; its randomised SVD's seed
   moves the result by about 1e-5). On Qwen3.5-9B

@@ -98,9 +98,8 @@ def heretic_trial(journal_path: Path, number: int, row_norm: str, think_close: s
         settings.get("row_normalization") == "full"
         and settings.get("full_normalization_lora_rank", 3) != FULL_RANK
     ):
-        problems.append(
-            f'it built "full" edits at rank {settings["full_normalization_lora_rank"]}, and candor at {FULL_RANK}'
-        )
+        rank = settings["full_normalization_lora_rank"]
+        problems.append(f'it built "full" edits at rank {rank}, and candor at {FULL_RANK}')
     if settings.get("winsorization_quantile", 1.0) < 1:
         problems.append("it winsorised the residuals, which candor doesn't")
     if settings.get("orthogonalize_direction") is not True:

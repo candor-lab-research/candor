@@ -411,7 +411,7 @@ class Ending:
         (
             ValueError("odd [/x] value"),
             3,
-            "The run stopped on an unexpected error: ValueError: odd [/x] value",
+            "The run stopped on an unexpected error: ValueError at test_cli.py:",
         ),
     ],
 )
@@ -420,7 +420,7 @@ def test_run_says_how_it_ended(tmp_path, monkeypatch, outcome, code, message):
     handlers = signal.getsignal(signal.SIGTERM), signal.getsignal(signal.SIGHUP)
     result = candor_run(tmp_path)
     assert result.exit_code == code, result.output
-    assert message in result.output
+    assert message in result.output and "odd" not in result.output
     assert "Removing gguf/model [old].gguf" in result.output
     assert (signal.getsignal(signal.SIGTERM), signal.getsignal(signal.SIGHUP)) == handlers
 
