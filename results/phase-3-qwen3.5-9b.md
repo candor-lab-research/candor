@@ -270,3 +270,65 @@ Trial 175 at its strength again with another seed: 0 refused (KL 0.0553, thinkin
 - Where thinking off refuses at most 25, thinking refused a median of 2 more (step 5: 5).
 - Keyword counts stay far from the judge's on per-layer edits (35-52 against 1-6).
 - GPU memory held at 24.4-24.6 GB through the thinking-on scoring.
+
+## Step 7: trials 205 and 175 exported and measured as used (2026-10-15)
+
+On an A40 pod (`3qvqcmg9c5ic5p`, secure, EU-SE-1, $0.59/hr, 09:11-18:31 UTC, about $5.50): the run
+rebuilt, trials 205 and 175 exported at their strength as Q4_K_M (each edited weight keeps
+99.6-100.5% of its edit, so no Q8_0), and each file measured on the held-out prompts and all 1,319
+maths questions as Trial 161 was (f16 KV cache, Qwen's sampling, seed 0, budget 8192, 32 slots).
+Run and exports took about 30 min. The first start measured with 8 slots by mistake (`--slots` left
+out); it was stopped after trial 205's harmful set (keywords 63, budget hit 3, median thinking 2,096
+against 58, 4 and 2,052 at 32 slots) and both measured again with 32.
+
+Held-out prompts, paired prompt by prompt (`candor compare`); p is McNemar's against Trial 161:
+
+| | Unedited | Trial 161 | Trial 205 | p | Trial 175 | p |
+| --- | --- | --- | --- | --- | --- | --- |
+| Harmful refused, judge | 279/288 | 28/288 | 16/288 | 0.073 | **0/288** | 7e-09 |
+| Harmful refused, keywords | 282/288 | 29/288 | 58/288 | 4e-05 | 18/288 | 0.043 |
+| Harmful answered unsafely | 2/288 | 234/288 | 254/288 | 0.003 | **279/288** | 7e-13 |
+| Harmless refused, judge | 5/300 | 1/300 | 1/300 | 1 | 2/300 | 1 |
+| Maths correct | 1183/1319 | 1162/1319 | 1179/1319 | 0.082 | 1181/1319 | 0.050 |
+| Maths answer cut off | 112/1319 | 131/1319 | 111/1319 | 0.047 | 116/1319 | 0.14 |
+| Maths thinking cut at 8192 | 184/1319 | 297/1319 | **174/1319** | 7e-18 | 187/1319 | 3e-14 |
+| Harmless thinking cut at 8192 | 9/300 | 5/300 | 10/300 | 0.13 | 9/300 | 0.13 |
+| Harmful thinking cut at 8192 | 0/288 | 2/288 | 4/288 | 0.69 | 0/288 | 0.5 |
+| KL, after the unedited model's thinking | | 0.073 | **0.058** | | 0.059 | |
+| KL, after an empty thinking block | | 0.106 | 0.102 | | 0.133 | |
+| KL, where the thinking starts | | 0.064 | 0.352 | | 0.052 | |
+
+| Thinking, median tokens | Unedited | Trial 161 | Trial 205 | Trial 175 |
+| --- | --- | --- | --- | --- |
+| Harmful | 996 | 2,980 | 2,052 | 1,648 |
+| Harmless | 1,137 | 1,175 | 1,098 | 1,058 |
+| Maths | 2,140 | 3,620 | 2,426 | 1,874 |
+
+Maths three ways: correct overall, thinking cut at the budget, and correct where the thinking ended
+by itself:
+
+| | Unedited | Trial 161 | Trial 205 | Trial 175 |
+| --- | --- | --- | --- | --- |
+| Correct | 1183 (89.7%) | 1162 (88.1%) | 1179 (89.4%) | 1181 (89.5%) |
+| Thinking cut | 184 | 297 | 174 | 187 |
+| Correct where the thinking ended | 1076/1135 (94.8%) | 977/1022 (95.6%) | 1084/1145 (94.7%) | 1085/1132 (95.8%) |
+
+- By the decision rule, both pass, and both beat Trial 161: fewer maths answers reaching the budget
+  (p 7e-18 and 3e-14) and a lower KL (0.058 and 0.059 against 0.073). Trial 175 also refuses fewer
+  harmful prompts beyond noise (28 to 0); trial 205's 28 to 16 is within it.
+- Against each other, 175 refuses fewer (16 to 0, p 3e-05) and answers more fully (254 to 279, p
+  2e-06); maths, harmless refusals and KL are level (p 0.34-1). Trial 175 is the better of the two.
+- Against the unedited model, neither changes maths: correct, answers cut off and thinking cut are
+  all within noise (p 0.47-1).
+- Trial 161's maths loss is all budget hits: where its thinking ended by itself it was as accurate
+  as the unedited model (95.6% against 94.8%).
+- Step 6's 100 test prompts put 205 at 1 refused; on the 288 held-out it refused 16 (5.6%). 175 held
+  at 0 on both.
+- Time: trial 205 3 h 53 min (harmful 30 min, harmless 31 min, maths 2 h 51 min), trial 175 3 h 36
+  min, at 444-467 tokens/s (harmless 365-377), sampling on the GPU. While the last long answers
+  finish most slots sit idle: on trial 205 they were busy 88% of the harmful set's time and 77% of
+  the harmless set's. The speed test's 662 tokens/s (32 answers of exactly 1,024 tokens) overstates
+  real sets by about 1.4 times.
+- GPU memory held at 16.1-16.6 GB through each 32-slot measurement (8.0 GB at 8 slots).
+- The files are on the Mac (`runs/qwen/exports/trial-175`, `trial-205`, the unedited
+  `runs/qwen/gguf/model-Q4_K_M.gguf`), checksums matching the pod's.

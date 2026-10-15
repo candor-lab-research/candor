@@ -588,3 +588,15 @@ cap as used: 205 and 175 at their strength (one layer, KL 0.037 and 0.057), 428 
 and 342 at 1.4 times (per layer, KL 0.085-0.100). 1.4 times wrecked every one-layer edit that
 worked (to 20-49 refused), so step 5's "offset" doesn't mean more strength for edits that already
 work. Step 7 is proposed on 205 and 175, the two lowest-KL edits within the cap.
+
+### Phase 3, step 7: candor's finalists beat Trial 161 as used (2026-10-15)
+
+Trials 205 and 175 were exported at their strength (Q4_K_M, no Q8_0 needed) and measured in full on
+a new pod, about $5.50. Both pass the decision rule and beat Trial 161; 175 refuses 0 of 288 held-out
+harmful prompts against 28, with maths at the unedited model's level (1,181 against 1,183), so it is
+the better of the two. The first start left out `--slots 32` and measured with 8; it was stopped
+after about 55 minutes and run again with 32, and checking every setting against the reference's
+before and after a start is now part of how jobs start. The user left Trial 161 out of the thinking
+review (re-saving it would need heretic run again), and asked that the phase end with a discussion
+of where to go, with no changes to code, defaults or the method until agreed. Numbers in
+`results/phase-3-qwen3.5-9b.md`; `results/milestone-qwen3.5-9b-vs-heretic.md`.

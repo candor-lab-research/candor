@@ -28,19 +28,22 @@ entry is corrected rather than deleted when later evidence changes it.
   one-layer edits that half-worked improved with it (41 to 18, 50 to 30), and trial 145 (layer 18,
   KL 0.39) held (6 to 5). So strength beyond an edit's own best is not a safe correction for
   thinking. (steps 5 and 6)
-- **The harder an edit pushes, the longer the model thinks.** [Measured: same 24 edits, and Trial
-  161 on held-out prompts] Edits that still refuse think 700-1,300 tokens on average; per-layer
-  edits that comply 1,600-2,000, none reaching the budget; one-layer edits that comply
-  1,800-2,900, up to 10 of 100 reaching it. Trial 161 tripled harmful thinking (median 996 to
-  2,980), took maths thinking from 2,140 to 3,620, budget hits on maths from 184 to 297 of 1,319,
-  and lost maths (1,183 to 1,162 correct, p = 0.04). (steps 4 and 5)
-- **Two different effects lengthen thinking.** [Published, with candor's numbers fitting] On
-  harmful prompts it comes with complying, even from an edit that leaves maths untouched (DreamFast,
-  12 edits of Qwen3.8-27B: base 1,207 tokens, edits 2,331-8,715). On maths it depends on the edit
-  (heretic lengthened it twice, most other tools shortened it) and looks like damage to how the model
-  stops thinking (the Halt Vector paper). The maths loss is mostly budget hits, not lost skill
-  (Gemma-4-12B: accuracy on answered problems within 3 points). Nobody has measured how length
-  depends on strength or layer. (`evidence-2026-10-15/thinking-length.md`)
+- **Complying lengthens harmful thinking; how much, and whether maths thinking grows, depends on the
+  edit.** [Measured: Qwen3.5-9B, 24 edits on the test prompts; Trial 161 and trials 205 and 175 on
+  the held-out] In step 5, edits that still refuse thought 700-1,300 tokens on average, edits that
+  comply 1,600-2,900. Harmful median: unedited 996, trial 175 1,648 (0 refused), 205 2,052, Trial
+  161 2,980. Maths median: 175 1,874 and 205 2,426 against the unedited 2,140, budget hits level
+  (187 and 174 against 184); Trial 161 3,620 and 297, and lost maths (1,183 to 1,162, p = 0.04).
+  (steps 4, 5 and 7)
+- **Two different effects lengthen thinking.** [Published, and Measured on 3 edits of Qwen3.5-9B]
+  On harmful prompts it comes with complying, even from an edit that leaves maths untouched
+  (DreamFast, 12 edits of Qwen3.8-27B: base 1,207 tokens, edits 2,331-8,715). On maths it depends on
+  the edit (heretic lengthened it twice, most other tools shortened it) and looks like damage to how
+  the model stops thinking (the Halt Vector paper). The maths loss is budget hits, not lost skill
+  (Gemma-4-12B: accuracy on answered problems within 3 points; Trial 161: 95.6% correct where its
+  thinking ended by itself, against the unedited 94.8%). candor's two finalists lengthen harmful
+  thinking but not maths. Nobody has measured how length depends on strength or layer.
+  (`evidence-2026-10-15/thinking-length.md`; step 7)
 - **Time follows the longest thinking, not the median.** [Measured: Qwen3.5-9B] A 32-prompt pilot's
   medians put the unedited maths set at 4.3 h; it took 4.9 h. (step 4)
 - **KL where the thinking starts does tell edits apart.** [Measured: Trial 161, 0.064 against the
@@ -58,10 +61,10 @@ entry is corrected rather than deleted when later evidence changes it.
   been cut before any reply; candor reads the final answer after up to 8,192 and counts an
   unfinished one against the edit. Not comparable until measured the same way.
   (`evidence-2026-10-14/ara-evidence.md`)
-- **Directions read at the thinking start mostly fail, but one works as used.** [Measured:
+- **Directions read at the thinking start mostly fail, but one gave the best edit.** [Measured:
   Qwen3.5-9B] 71-100 refused of 100 either way on 12 edits; trial 175 (one layer, layer 15) refused 0
-  as used with two seeds, at KL 0.057. [Published] They worked on Qwen3-8B (arXiv 2507.03167).
-  (step 6)
+  of 100 test prompts with two seeds and 0 of 288 held-out as used, at KL 0.059. [Published] They
+  worked on Qwen3-8B (arXiv 2507.03167). (steps 6 and 7)
 
 ## The search
 
@@ -73,10 +76,11 @@ entry is corrected rather than deleted when later evidence changes it.
 - **The full 600 trials mattered.** [Measured: Qwen3.5-9B, one search] The best edits came at trials
   205-428 and none improved in the 117 trials after. 150 trials would have missed them all; by 300
   the one-layer best was within 1% of the final KL, the per-layer best 7-11% above it. (step 6)
-- **One layer's direction at layer 12 gives the lowest KL, and one such edit holds as used.**
-  [Measured: Qwen3.5-9B, 100 test prompts] Trial 205: 1 refused as used at KL 0.037; trial 417
-  slipped from 1 to 6. Per-layer edits within the cap as used sit at KL 0.085-0.100; Trial 161
-  rebuilt, thinking off, 0.092 refusing 24. (step 6)
+- **One-layer edits give the lowest KL; 100 test prompts didn't separate the two finalists.**
+  [Measured: Qwen3.5-9B] On the 100 test prompts as used, trial 205 (layer 12) refused 1 at KL 0.037
+  and 175 (layer 15) 0 at 0.057; on the 288 and 300 held-out, 205 refused 16 and the two KLs were
+  level (0.058 and 0.059), both below Trial 161's 0.073. Per-layer edits within the cap sat at KL
+  0.085-0.100 on the test prompts. (steps 6 and 7)
 - **Per-layer edits press the 3.0 ceiling on attention.** [Measured: Qwen3.5-9B, one search] Every
   per-layer best puts attention at 2.9-3.0, so a better per-layer edit may lie beyond it. (step 6)
 - **Refusals fall gradually as strength rises; there is no cliff.** [Measured: 8 searches on 3
@@ -87,8 +91,14 @@ entry is corrected rather than deleted when later evidence changes it.
 
 - **A llama-server process failed its GPU allocations after 395 trials, then CUDA wouldn't start.**
   [Hypothesis] Either the server's memory grew trial by trial, or the machine's GPU failed. Memory
-  held at 24.4-24.6 GB over 12 edits scored as used, which doesn't test a 395-trial server; it is
-  logged every minute on pods, so the next long search will tell. It matters for 27B.
+  held at 24.4-24.6 GB over 12 edits scored as used, and at 16.1-16.6 GB through two 4-hour
+  measurements, which doesn't test a 395-trial server; it is logged every minute on pods, so the
+  next long search will tell. It matters for 27B.
+- **Real sets run 1.4-1.8 times slower than the speed test.** [Measured: Qwen3.5-9B, A40, 2
+  edits] 444-467 tokens/s on harmful and maths sets (harmless 365-377) at 32 slots, against the
+  test's 662 (32 answers of exactly 1,024 tokens): while the last long answers finish, most slots
+  idle (on trial 205, busy 77-88% of a set's time), and answers run to 8,000 tokens. 8 slots: 283.
+  A full measurement of a 9B edit took 3 h 36 min-3 h 53 min. (step 7)
 
 ## Ideas
 
@@ -98,8 +108,6 @@ entry is corrected rather than deleted when later evidence changes it.
 - **Measure the best public edit as a second reference.** [Hypothesis] `candor export --outside`
   then `candor measure --outside` on trohrbaugh's Qwen3.5-9B edit, as Trial 161 was, would show
   whether its 0/400 holds as used; a first look on the 100 test prompts costs minutes.
-- **Report maths three ways in step 7:** accuracy, budget hits, and accuracy on the problems
-  answered, which tells loops from lost skill. [Published method; no new runs]
 - **Thinking length by verdict on Trial 161's held-out harmful set,** from its labels and token
   counts: if prompts refused after long thinking are the longest, the model is deliberating.
   [Hypothesis; counts only, no new runs]
@@ -107,9 +115,10 @@ entry is corrected rather than deleted when later evidence changes it.
   length decides. [Published, on unedited models only]
 - **A shorter search on larger models (about 300 trials).** [Hypothesis, from one search] Test: on
   the next model, see where its best edits turn up.
-- **Thinking length as a criterion between candidates.** [Hypothesis] Edits that lengthen thinking
-  may lose maths and reach the budget more (Trial 161 did). Test: step 7 measures both on the
-  finalists.
+- **Thinking length as a criterion between candidates.** [Hypothesis; 3 edits agree] The one edit
+  that lengthened maths thinking (Trial 161) lost maths through budget hits; candor's two finalists
+  didn't lengthen it and kept maths, so it didn't decide between them. Test: on the next model,
+  whether maths thinking length on the test prompts predicts held-out maths.
 - **ARA, heretic's new default edit.** [Published: others' judged tests] It kept models intact best
   but never removed the most refusals; on Qwen3.8-27B 57.5% complied against 82.2% for a careful
   directional edit. Parked until after Qwen, or if keeping maths and thinking intact decides
