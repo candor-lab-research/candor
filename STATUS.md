@@ -1,8 +1,8 @@
 # Status
 
 The single plan for candor: anything not listed here isn't being worked on. Each phase's numbers
-are in `results/`; past decisions with their reasons, the research tables and the log are in
-`results/history.md`.
+are in `results/`; what candor has found and the ideas parked are in `results/findings.md`; past
+decisions with their reasons, the research tables and the log are in `results/history.md`.
 
 ## Plan
 
@@ -28,6 +28,8 @@ thinking on (next, e.g. Qwen3.8-27B). A 9B model must not take days.
   spend wait for the user's go. Runpod credit: check before each pod job.
 - Every step gets an independent review; findings are fixed with tests until a review is clean.
 - The method changes only with evidence that holds across model families, not on one run.
+  Findings and ideas go in `results/findings.md` as they come, each flagged measured, published
+  or hypothesis.
 - At each phase start, check heretic upstream as a reference point, not to copy: master's commit
   and default edit, PRs merged since the last check, issues on the model family (commands in
   `results/evidence-2026-10-14/ara-missed.md`). Tools checked 2026-10-14: heretic master 66a952b
@@ -35,17 +37,16 @@ thinking on (next, e.g. Qwen3.8-27B). A 9B model must not take days.
 
 ## Now: phase 3, step 6
 
-- Step 5 done: the "full" edit's 150-trial search, thinking off, then `candor proxy`. Verdict
-  "offset": thinking off ranks edits as thinking on does (Spearman 0.98) but thinking needs stronger
-  edits (a median 5 more refused where thinking off refuses at most 25). 4 edits stay within the cap
-  as used, all KL about 0.10 (Trial 161 rebuilt: 0.092, refusing 24).
-- The search carries on to its full 600 trials, thinking off, on pod `m37qrjorh2geg9` (from 22:05,
-  about 11-14 h; the watchdog deletes the pod at 14:06 on 2026-10-15).
+- The search stopped at 545 of 600 trials, thinking off, when its pod's GPU failed; no new best
+  after trial 428. Best: one layer at layer 12, 0-1 refused at KL 0.03; per layer, 0-2 at
+  0.079-0.084 (Trial 161 rebuilt: 24 at 0.092).
+- Trials 205, 417, 342, 428, 402 and 175 are being scored as used, at their strength and 1.4 times
+  it, on pod `oi41qp8xyncyy6` (from 07:58 on 2026-10-15, about 3.5 h; the watchdog deletes it at
+  15:40).
 
 ## Next
 
-1. When the search ends: which edits from its front are scored as used, and at how much more
-   strength (the proxy tried 1.4 times), quoted first.
+1. When the scoring ends: the best 2 for step 7, quoted first (a top-up needed).
 2. Not blocking, each when there is a reason:
    - speed: 64 slots (15% faster than 32), weights cached on the GPU for "full" trials, the proxy's
      adapters loaded into one server;
@@ -97,27 +98,13 @@ or by a lower KL. Measured on the full 1,319 maths questions, as Trial 161 was.
 | --- | --- | --- |
 | 1-4 | Thinking-model settings; pods; the method changes; Qwen3.5-9B and Trial 161 measured as used, the decision rule | Done 2026-10-14 (history) |
 | 5 | GPU sampling (2.2x faster), the "full" edit, a 150-trial thinking-off search, then `candor proxy` | Done 2026-10-14: "offset" |
-| 6 | The search on step 5's path. If thinking off ranks like thinking on (Spearman at least 0.7, perhaps with a strength correction): cheap trials, then about 15-20 edits from their front scored as used. If not: a thinking-on search of about 150 trials | Running: search to 600 |
+| 6 | The search on step 5's path. If thinking off ranks like thinking on (Spearman at least 0.7, perhaps with a strength correction): cheap trials, then about 15-20 edits from their front scored as used. If not: a thinking-on search of about 150 trials | Search done (545 trials); its best scored as used |
 | 7 | The best 2 exported and measured as used (held-out prompts, 400 maths, then the winner's 1,319); copied to the Mac; `serve` | |
 
 ## Parked, to review later
 
-- **ARA**, heretic's new default edit (2026-10-14): not now. In judged, thinking-on tests by others
-  it kept models intact best but never removed the most refusals, and a directional edit already
-  reaches 0/400 judged on Qwen3.5-9B. Review after Qwen, or if keeping maths and thinking intact
-  decides between edits; a fair as-used comparison is something candor could do first
-  (`results/evidence-2026-10-14/ara.md`).
-- **The search method:** a wider strength range from the start (supported by K2 and this run);
-  coordinates such as total edit mass and spread, and a GP sampler instead of TPE, only after an
-  offline replay over several model families (`results/evidence-2026-10-14/lit-search.md`). The
-  "cliff" idea is dropped.
-- **Edits at the thinking start** never refused fewer than 97 of 100 in candor, but worked on
-  Qwen3-8B in a paper (2507.03167): probably candor's setup.
-- **Cheaper as-used scoring:** vLLM or SGLang with each edit swapped into the weights, prompt
-  caching, a refusal probe, multi-fidelity optimisation (history, "Not in this plan").
-- **3-5 directions,** if a single direction fails as used. **Optuna 5,** once candor has a baseline.
-- **Models of more than about 36 layers** with "pre" edits: the `--lora` list passes Linux's argument
-  limit. "full" loads one adapter per trial; check before 27B.
+Every idea not acted on, with what supports it (measured, published or a hypothesis), is in
+`results/findings.md`, beside what candor has found so far.
 
 ## Not in this plan
 

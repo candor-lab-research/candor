@@ -212,3 +212,27 @@ The unedited model: 99 refused both ways. Edit 24 again with another seed: 2 (ag
   refused against 24. Not yet within the decision rule's KL (Trial 161's 0.073, held-out prompts).
 - Directions read at the think start refused 71-100 either way, as before.
 - One-layer edits that comply make the thinking longest and hit the budget most (up to 10 of 100).
+
+## Step 6: the search carried on, thinking off (2026-10-14 to 15)
+
+From 150 trials towards 600 on the same pod, 22:05-07:32. It stopped at 545 trials (313 scored in
+full, the rest stopped early as unable to win) when the pod's GPU failed: llama-server's
+allocations failed after 395 trials in one server, then CUDA wouldn't start. The last 55 trials
+were skipped: no trial set a new best of either kind after trial 428. About 86 s a trial.
+
+| Trial | Kind | Read at | Layer | Refused | Keywords | KL | Strength, attention / MLP |
+| --- | --- | --- | --- | --- | --- | --- | --- |
+| 205 | one layer | answer start | 12 | 0 | 8 | 0.0325 | 1.06 / 2.42 |
+| 417 | one layer | answer start | 12 | 1 | 20 | 0.0294 | 1.12 / 2.16 |
+| 175 | one layer | thinking start | 15 | 0 | 5 | 0.0567 | 1.52 / 2.28 |
+| 342 | per layer | answer start | | 0 | 33 | 0.0837 | 2.99 / 1.35 |
+| 428 | per layer | answer start | | 1 | 35 | 0.0793 | 2.91 / 1.14 |
+| 402 | per layer | answer start | | 2 | 41 | 0.0789 | 2.92 / 1.06 |
+
+Trial 161 rebuilt, scored the same way: 24 refused, 12 by keywords, KL 0.092. By trial 300 the
+one-layer best was within 1% of this KL, the per-layer best 7-11% above it. Every per-layer best
+puts attention at 2.9-3.0, the ceiling of the widened range.
+
+The pod (`m37qrjorh2geg9`, 20.75 h with step 5) cost about $12.25. On a new pod the run rebuilt
+from the Hub in about 15 minutes (setup 75 s, the run folder's push 2 min); its unedited thinking
+counts matched step 4's (96 of 100, 294 of 300).

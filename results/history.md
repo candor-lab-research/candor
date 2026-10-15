@@ -570,3 +570,13 @@ as used at more strength; no method change. The user chose to run it overnight a
 search to its full 600 trials rather than 400: the morning start isn't delayed either way, and the
 trial where the best edit turned up shows whether a shorter search would do on larger models.
 Numbers in `results/phase-3-qwen3.5-9b.md`.
+
+### Phase 3, step 6: the search, and a pod's GPU failing (2026-10-15)
+
+The search stopped at 545 of 600 trials when the pod's GPU failed; the results were pulled and the
+pod deleted. With no new best after trial 428, the last 55 trials were skipped (the user agreed),
+and a new pod scores the best 6 as used: trials 205, 417, 342, 428, 402 and 175, each at its
+strength and 1.4 times it. `candor proxy --trial` was added for that; it keeps such checks apart and
+gives no verdict, since a narrow set of near-zero edits can't show an order. Found on the way:
+`candor run` crashed on its summary for "full" edits, and printed unexpected errors' messages; both
+fixed. Findings and ideas now live in `results/findings.md`, flagged by their evidence.
