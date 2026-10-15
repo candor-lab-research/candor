@@ -27,6 +27,13 @@ entry is corrected rather than deleted when later evidence changes it.
   1,800-2,900, up to 10 of 100 reaching it. Trial 161 tripled harmful thinking (median 996 to
   2,980), took maths thinking from 2,140 to 3,620, budget hits on maths from 184 to 297 of 1,319,
   and lost maths (1,183 to 1,162 correct, p = 0.04). (steps 4 and 5)
+- **Two different effects lengthen thinking.** [Published, with candor's numbers fitting] On
+  harmful prompts it comes with complying, even from an edit that leaves maths untouched (DreamFast,
+  12 edits of Qwen3.8-27B: base 1,207 tokens, edits 2,331-8,715). On maths it depends on the edit
+  (heretic lengthened it twice, most other tools shortened it) and looks like damage to how the model
+  stops thinking (the Halt Vector paper). The maths loss is mostly budget hits, not lost skill
+  (Gemma-4-12B: accuracy on answered problems within 3 points). Nobody has measured how length
+  depends on strength or layer. (`evidence-2026-10-15/thinking-length.md`)
 - **Time follows the longest thinking, not the median.** [Measured: Qwen3.5-9B] A 32-prompt pilot's
   medians put the unedited maths set at 4.3 h; it took 4.9 h. (step 4)
 - **KL where the thinking starts does tell edits apart.** [Measured: Trial 161, 0.064 against the
@@ -83,6 +90,13 @@ entry is corrected rather than deleted when later evidence changes it.
 - **Measure the best public edit as a second reference.** [Hypothesis] `candor export --outside`
   then `candor measure --outside` on trohrbaugh's Qwen3.5-9B edit, as Trial 161 was, would show
   whether its 0/400 holds as used; a first look on the 100 test prompts costs minutes.
+- **Report maths three ways in step 7:** accuracy, budget hits, and accuracy on the problems
+  answered, which tells loops from lost skill. [Published method; no new runs]
+- **Thinking length by verdict on Trial 161's held-out harmful set,** from its labels and token
+  counts: if prompts refused after long thinking are the longest, the model is deliberating.
+  [Hypothesis; counts only, no new runs]
+- **A separate edit just for thinking length** (Halt Vector, ThinkEdit, SEAL: 12-50% shorter) if
+  length decides. [Published, on unedited models only]
 - **A shorter search on larger models (about 300 trials).** [Hypothesis, from one search] Test: on
   the next model, see where its best edits turn up.
 - **Thinking length as a criterion between candidates.** [Hypothesis] Edits that lengthen thinking
