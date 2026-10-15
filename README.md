@@ -50,7 +50,13 @@ uv run candor serve runs/rude --trial 37                       # chat with it in
   budget of 8192 tokens (`deployment.thinking_budget`): past it, llama-server makes the model stop
   thinking and answer. Only the answer is judged, and each answer's thinking length is kept as a
   number. The search can score at a shorter budget (`scoring.thinking_budget`) and the edits it
-  suggests are measured at the deployment's.
+  suggests are measured at the deployment's. A template that can't turn thinking off, as
+  K2-Horizon's can't, is closed by the end tag of the tag its prompts open with (`</ifm|think>`).
+- `deployment.chat_template_kwargs` holds settings the chat template is rendered with, such as
+  `{ reasoning_effort = "high" }`: every prompt candor builds is rendered with them, and `serve` passes
+  them to llama-server. `init` sets a template's reasoning effort at its own default and lists the
+  values it takes at the top of `candor.toml`. K2-Horizon opens its thinking with another tag at each
+  effort, so changing it means changing `think_close` too, which every command checks.
 - Scoring every trial thinking costs many times more than answering after an empty thinking block,
   greedily (`scoring.thinking = "off"`, answers `scoring.closed_answer_tokens` long). That cheap
   score is only worth having if it ranks edits as thinking does, which no published work shows and
@@ -62,7 +68,9 @@ uv run candor serve runs/rude --trial 37                       # chat with it in
   search carries on from those trials. It says the cheap score holds, holds but thinking needs stronger edits (the search's
   suggestions must then also be scored thinking at more strength), or can't be trusted. Set
   `scoring.thinking = "off"` only when it holds; edits are chosen on numbers measured thinking
-  either way. Its scores are kept in `proxy/`, so a stopped check carries on. `--trial`, repeated,
+  either way. A model whose chat template can't turn thinking off is never used answering after an
+  empty block, so candor refuses to score it that way, which `proxy` needs. Its scores are kept in
+  `proxy/`, so a stopped check carries on. `--trial`, repeated,
   scores the trials named instead (the search's best, once it may score thinking off), each also at
   1.4 times its strength, kept apart in `proxy/trials.json`, with counts but no verdict; naming other
   trials starts that afresh.
@@ -152,6 +160,8 @@ uv run candor serve runs/rude --trial 37                       # chat with it in
   `export --outside FOLDER --name NAME` ships a copy of the model edited elsewhere, such as heretic's
   own save of one of its trials, the same way (the run's model with each edited weight taken from
   the copy, so it is converted, quantised and checked alike), and `measure --outside NAME` measures it.
+  `--outside` also takes one unquantised GGUF (F32, F16 or BF16), for an edit published only that way;
+  a weight that differs from the run's only by rounding to the file's type counts as unedited.
 - `serve` runs the unedited model, or a trial's current export, in llama-server as candor measures
   it: the run's KV cache type, chat template settings, sampling and thinking budget, with today's
   date as apps write it. Before

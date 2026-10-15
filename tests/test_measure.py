@@ -15,7 +15,7 @@ from candor.targets import Writer
 
 from .test_heretic import PARAMETERS
 from .tiny_gguf import END_THINK, THINK, THINKING_TOKENS
-from .tiny_run import FakeGuard, fake_prompts, thinking, thinks_through
+from .tiny_run import ALWAYS_THINKING_TEMPLATE, FakeGuard, fake_prompts, thinking, thinks_through
 
 EDIT = Edit("trial", 0.4, {"attn": Kernel(1.2, 1.0, 0.8, 1.0), "mlp": Kernel(1.0, 0.0, 0.5, 1.0)})
 
@@ -543,6 +543,30 @@ def test_a_greedy_model_that_doesnt_think_keeps_the_records_it_had_before_candor
     tiny.settings.sampling.temperature = 0.6
     inputs = measurement._answer_inputs("maths", [[1]], None, [])
     assert inputs["seed"] == 0 and inputs["paired"]["sampling"]["temperature"] == 0.6
+
+
+def test_a_model_whose_thinking_ends_at_its_end_tag_answers_and_reads_kl_right_after_it(tiny, monkeypatch):
+    # As K2-Horizon's template writes an empty thinking block: the end tag, then the answer at once.
+    thought = thinks_through(monkeypatch)
+    thinking(tiny, template=ALWAYS_THINKING_TEMPLATE, close=END_THINK)
+    ids = tiny.prompt_ids()
+    end = THINKING_TOKENS.index(END_THINK)
+    for name in run.CLOSED_SETS:
+        assert ids[name + run.ANSWERING] == [[*prompt, end] for prompt in ids[name]]
+    traces = tiny.thinking_traces()["harmless_test"]
+    assert traces[0] == ids["harmless_test"][0] + thought and thought[-1] == end
+    results = Measurement(tiny, None, "base").measure()
+    assert sum(results["maths"]["thinking"]) > 0
+    assert results["harmless_held_out"]["first_token"] and results["harmless_held_out"]["first_token_empty"]
+
+
+def test_a_think_close_the_prompts_dont_open_is_caught_as_they_are_built(tiny):
+    # As when K2-Horizon's reasoning effort is changed and think_close isn't: the prompts open another tag.
+    thinking(tiny, template=ALWAYS_THINKING_TEMPLATE, close=END_THINK)
+    tiny.settings.deployment.chat_template_kwargs = {"reasoning_effort": "low"}
+    with pytest.raises(RunError, match="doesn't end a prompt by opening the thinking with <think>"):
+        tiny.prompt_ids()
+    assert not tiny.path("prompts.json").exists()
 
 
 def test_a_prompt_that_opens_thinking_needs_a_think_close(tiny):

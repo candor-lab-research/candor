@@ -22,6 +22,7 @@ from candor.toolchain import ToolchainError
 from .custom_code import write_custom_code_model
 from .test_checks import THINKING
 from .test_targets import llama
+from .tiny_run import ALWAYS_THINKING_TEMPLATE
 from .tiny_tokenizer import DATED, PINNABLE, WITH_BOS, tokenizer
 
 HIDDEN = 64
@@ -179,6 +180,27 @@ def test_init_finds_a_thinking_models_close_and_gives_it_a_budget(tmp_path):
     (tmp_path / "plain").mkdir()
     plain = init(tmp_path, model_folder(tmp_path / "plain"), "plain")
     assert plain.exit_code == 0 and config.load(tmp_path / "runs" / "plain").deployment.think_close is None
+
+
+def test_init_runs_a_template_that_takes_a_reasoning_effort_at_its_own_and_closes_the_thinking_it_opens(
+    tmp_path,
+):
+    result = init(tmp_path, model_folder(tmp_path, template=ALWAYS_THINKING_TEMPLATE))
+    assert result.exit_code == 0, result.output
+    shown = " ".join(result.output.split())
+    takes = 'the chat template takes "low" or "high"; "high" when given none'
+    assert f"Reasoning effort │ ok │ {takes}" in shown
+    assert "it is scored thinking, as its template can't turn thinking off" in shown
+    assert f'Reasoning effort: {takes}. The run uses "high" (deployment.chat_template_kwargs)' in shown
+    deployment = config.load(tmp_path / "runs" / "first").deployment
+    assert deployment.chat_template_kwargs == {"reasoning_effort": "high"}
+    assert deployment.think_close == "</think>" and deployment.thinking_budget == config.THINKING_BUDGET
+    assert f"# Reasoning effort: {takes}.\n" in (tmp_path / "runs" / "first" / config.FILE).read_text()
+    # A template that takes no reasoning effort gets no chat template settings.
+    (tmp_path / "switch").mkdir()
+    switch = init(tmp_path, model_folder(tmp_path / "switch", template=THINKING), "switch")
+    assert switch.exit_code == 0 and "Reasoning effort" not in switch.output
+    assert config.load(tmp_path / "runs" / "switch").deployment.chat_template_kwargs is None
 
 
 def test_a_local_model_has_no_revision(tmp_path):

@@ -782,6 +782,24 @@ def test_prompt_ids_take_the_pinned_date(tiny_run):
     assert first["harmful"] != second["harmful"]
 
 
+def test_prompts_are_rendered_with_the_runs_chat_template_settings(tiny_run):
+    this, _, use, _ = tiny_run
+    use(TEMPLATE.replace("assistant:", "assistant {{ effort | default('high') }}:"))
+    first = this.prompt_ids()
+    record = run.record_of(this.path("prompts.json"))
+    # A run without the setting keeps the record it had before there was one.
+    assert "chat_template_kwargs" not in json.loads(record.read_text())
+    this.settings.deployment.chat_template_kwargs = {"effort": "low"}
+    second = this.prompt_ids()
+    assert first["harmful"] != second["harmful"]
+    assert json.loads(record.read_text())["chat_template_kwargs"] == {"effort": "low"}
+    this.settings.deployment.chat_template_kwargs = {"effort": "high"}
+    assert this.prompt_ids() == first
+    this.settings.model.date = "01 Jan 2020"
+    assert this.template_kwargs() == {"effort": "high", "date_string": "01 Jan 2020"}
+    assert this.template_kwargs(run.DATE_PROBE) == {"effort": "high", "date_string": run.DATE_PROBE}
+
+
 def test_a_template_that_ignores_the_pinned_date_is_caught_even_today(tiny_run):
     this, _, use, _ = tiny_run
     use(IGNORES_THE_DATE)

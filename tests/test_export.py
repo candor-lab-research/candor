@@ -3,6 +3,7 @@ import shutil
 from dataclasses import replace
 
 import gguf
+import numpy as np
 import pytest
 import torch
 from safetensors.torch import load_file, save_file
@@ -22,19 +23,20 @@ from .test_measure import EDIT
 from .test_run import TEMPLATE
 from .test_search import write_journal
 from .tiny_gguf import HIDDEN, random_weights, write_model
-from .tiny_run import HF_NAMES, thinking
+from .tiny_run import HF_NAMES, THINKING_TEMPLATE, thinking
 
 GGUF_NAMES = {hf: kind for kind, hf in HF_NAMES.items()}
 
 
-def gguf_from_folder(folder, destination, log):
+def gguf_from_folder(folder, destination, log, thinks=False):
     """The tiny model's GGUF with the layer weights of a Hugging Face folder, as the converter would
-    write it: the tiny run's own converter only copies the unedited GGUF."""
+    write it, of the thinking model when it thinks: the tiny run's own converter only copies the unedited
+    GGUF."""
     weights = random_weights()
     for name, tensor in load_file(folder / "model.safetensors").items():
         _, _, layer, *kind, _ = name.split(".")
         weights[f"blk.{layer}.{GGUF_NAMES['.'.join(kind)]}.weight"] = tensor.numpy()
-    write_model(destination, weights, chat_template=TEMPLATE)
+    write_model(destination, weights, THINKING_TEMPLATE if thinks else TEMPLATE, thinking=thinks)
 
 
 @pytest.fixture
@@ -44,7 +46,7 @@ def converting(tiny, monkeypatch):
     def to_gguf(folder, destination, log):
         if "exports" in destination.parts:  # not the run's own conversion of the unedited model
             calls.append(folder)
-        gguf_from_folder(folder, destination, log)
+        gguf_from_folder(folder, destination, log, bool(tiny.settings.deployment.think_close))
 
     monkeypatch.setattr(convert, "to_gguf", to_gguf)
     monkeypatch.setattr(convert, "check_targets", check_targets)
@@ -426,6 +428,78 @@ def test_models_edited_elsewhere_that_cant_be_taken_are_refused(tiny, converting
         export.export_outside(tiny, "renamed", folder)
     with pytest.raises(RunError, match="has no export in Q4_K_M; run candor export --outside first"):
         Measurement(tiny, None, "missing", outside="missing").measure()
+
+
+TYPE = gguf.GGMLQuantizationType
+
+
+def gguf_holding(tiny, path, folder, kind=TYPE.F32, arch: str | None = "llama", only=None):
+    """A GGUF of only the architecture, if any, and the edit targets of a Hugging Face folder in one
+    type, as taken_from_gguf reads one."""
+    weights = load_file(folder / "model.safetensors")
+    writer = gguf.GGUFWriter(path, arch or "llama")
+    if arch is None:
+        del writer.kv_data[0][gguf.Keys.General.ARCHITECTURE]
+    for name, gguf_name in list(tiny.target_names.items())[:only]:
+        array = weights[name].numpy()
+        if kind in (TYPE.F32, TYPE.F16):
+            writer.add_tensor(gguf_name, array.astype(np.float32 if kind == TYPE.F32 else np.float16))
+        else:
+            writer.add_tensor(gguf_name, gguf.quants.quantize(array, kind), raw_dtype=kind)
+    writer.write_header_to_file()
+    writer.write_kv_data_to_file()
+    writer.write_tensors_to_file()
+    writer.close()
+    return path
+
+
+def test_a_gguf_edited_elsewhere_ships_and_measures_as_the_same_edit_of_candors(tiny, converting):
+    tiny.gguf()
+    path = gguf_holding(tiny, tiny.folder.parent / "saved.gguf", saved_elsewhere(tiny))
+    said = []
+    tiny.report = said.append
+    shipped = export.export_outside(tiny, "saved", path)
+    assert f"Taking the {len(export.deltas(tiny, EDIT))} edited weights from {path}" in said
+    export.export(tiny, EDIT)
+    theirs = Measurement(tiny, None, "saved", outside="saved").measure()
+    ours = Measurement(tiny, EDIT, "merged", exported=True).measure()
+    assert kl_between(ours, theirs) < 1e-5
+    assert export.export_outside(tiny, "saved", path) == shipped and len(converting) == 2
+    path.touch()
+    with pytest.raises(RunError, match="saved's export no longer matches this run or"):
+        Measurement(tiny, None, "saved", outside="saved").measure()
+
+
+@pytest.mark.parametrize("kind", [TYPE.F16, TYPE.BF16], ids=["F16", "BF16"])
+def test_a_gguf_in_a_narrower_type_counts_only_weights_the_edit_moved(tiny, converting, kind):
+    tiny.gguf()
+    unedited = gguf_holding(tiny, tiny.folder.parent / "unedited.gguf", tiny.model_folder, kind)
+    with pytest.raises(RunError, match="holds the run's model unchanged in every edit target"):
+        export.export_outside(tiny, "unedited", unedited)
+    edited = gguf_holding(tiny, tiny.folder.parent / "edited.gguf", saved_elsewhere(tiny), kind)
+    _, _, _, writers = tiny.shape
+    assert set(export.taken_from_gguf(tiny, edited)) == {w.name for w in writers if EDIT.strength(w)}
+
+
+def test_ggufs_edited_elsewhere_that_cant_be_taken_are_refused(tiny, converting):
+    tiny.gguf()
+    folder = saved_elsewhere(tiny)
+    made = tiny.folder.parent
+    refused = {
+        "quantised already": gguf_holding(tiny, made / "q8.gguf", folder, TYPE.Q8_0),
+        "holds a qwen2 model": gguf_holding(tiny, made / "qwen.gguf", folder, arch="qwen2"),
+        "doesn't say which architecture": gguf_holding(tiny, made / "unnamed.gguf", folder, arch=None),
+        "has no tensor blk.": gguf_holding(tiny, made / "part.gguf", folder, only=1),
+        "one part of a split GGUF": gguf_holding(tiny, made / "model-00001-of-00002.gguf", folder),
+    }
+    for message, path in refused.items():
+        with pytest.raises(RunError, match=message):
+            export.export_outside(tiny, path.stem, path)
+    text = made / "notes.txt"
+    text.write_text("not a model")
+    with pytest.raises(RunError, match="isn't a folder or a GGUF file"):
+        export.export_outside(tiny, "notes", text)
+    assert converting == []
 
 
 def test_the_command_line_exports_and_measures_a_model_edited_elsewhere(tiny, converting):

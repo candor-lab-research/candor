@@ -180,6 +180,16 @@ def test_qwen35_value_heads_are_tiled_like_the_converter():
 
 @pytest.mark.parametrize(
     ("arch", "name", "model_config"),
+    [("qwen35", OUT_PROJ, QWEN35), ("k2-horizon", "model.layers.0.self_attn.o_proj.weight", {})],
+)
+def test_a_weight_read_back_from_the_gguf_is_put_back_in_the_models_order(arch, name, model_config):
+    weight = torch.arange(32.0).expand(HIDDEN, -1)
+    converted = as_converted(weight, name, arch, model_config)
+    assert torch.equal(convert.as_original(converted, name, arch, model_config), weight)
+
+
+@pytest.mark.parametrize(
+    ("arch", "name", "model_config"),
     [
         ("llama", "model.layers.0.self_attn.o_proj.weight", LLAMA),
         ("llama", "model.layers.0.mlp.down_proj.weight", LLAMA),

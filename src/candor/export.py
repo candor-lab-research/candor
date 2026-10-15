@@ -11,7 +11,8 @@ it, and refuses the file if a weight still falls short. The file is then measure
 
 A model edited elsewhere, such as heretic's own save of one of its trials, is exported the same way:
 the run's model with each edited weight taken from it, so it is converted, quantised and checked
-exactly as candor's own edits are.
+exactly as candor's own edits are. It can be given as a folder of safetensors or as one unquantised
+GGUF, as some edits are published only that way.
 """
 
 import json
@@ -44,6 +45,15 @@ LEAST_KEPT = 0.98
 KEEPING_TYPE = "Q8_0"
 # The names of candor's own edits and measurements, which a model edited elsewhere can't take.
 RESERVED = re.compile(r"(base|(trial|heretic)-\d+)(-.*)?")
+# The types a GGUF edited elsewhere may hold its edit targets in: unquantised, so quantising them as the
+# run deploys rounds them once, as candor's own edits are.
+UNQUANTISED = {
+    gguf.GGMLQuantizationType.F32: torch.float32,
+    gguf.GGMLQuantizationType.F16: torch.float16,
+    gguf.GGMLQuantizationType.BF16: torch.bfloat16,
+}
+# A part of a GGUF split into several files, as llama-gguf-split names them.
+SPLIT = re.compile(r"-\d{5}-of-\d{5}\.gguf$")
 
 
 def deltas(run: Run, edit: "Edit") -> dict[str, tuple[Tensor, Tensor]]:
@@ -89,21 +99,23 @@ def export(run: Run, edit: "Edit") -> Path:
         return _ship(run, shipped, inputs, deltas(run, edit))
 
 
-def export_outside(run: Run, name: str, folder: Path) -> Path:
-    """A copy of the run's model edited elsewhere, such as heretic's save of one of its trials,
-    exported as name: the run's model with each edit target's weight taken from that copy, converted
-    and quantised as the run deploys, and checked as candor's own edits are. Reused while it matches."""
+def export_outside(run: Run, name: str, given: Path) -> Path:
+    """A copy of the run's model edited elsewhere, such as heretic's save of one of its trials, as a
+    folder or an unquantised GGUF, exported as name: the run's model with each edit target's weight
+    taken from that copy, converted and quantised as the run deploys, and checked as candor's own edits
+    are. Reused while it matches."""
     if RESERVED.fullmatch(name):
         raise RunError(f"{name} is how candor names its own edits and measurements; pick another name")
+    given = given.expanduser().absolute()
     with run.locked():
         run.check_remote_code()
-        shipped, inputs = _planned_outside(run, name, folder)
+        shipped, inputs = _planned_outside(run, name, given)
         if run.fresh(shipped, inputs):
             return shipped
-        changes = taken_from(run, folder)
+        changes = taken_from_gguf(run, given) if given.is_file() else taken_from(run, given)
         if not changes:
-            raise RunError(f"{folder} holds the run's model unchanged in every edit target")
-        run.report(f"Taking the {len(changes)} edited weights from {folder}")
+            raise RunError(f"{given} holds the run's model unchanged in every edit target")
+        run.report(f"Taking the {len(changes)} edited weights from {given}")
         return _ship(run, shipped, inputs, changes)
 
 
@@ -137,20 +149,78 @@ def _replaced(files: ModelFiles, name: str, _original: Tensor) -> Tensor:
     return files.tensor(name)
 
 
-def _planned_outside(run: Run, name: str, folder: Path) -> tuple[Path, dict[str, Any]]:
-    """Where a model edited elsewhere is exported and what it is built from: the folder's weight files
-    by name, size and time, and the folder itself, so a measurement can check it is unchanged."""
+def taken_from_gguf(run: Run, path: Path) -> dict[str, Change]:
+    """Each edit target whose weight in an unquantised GGUF of the run's model differs from the run's
+    own converted to the GGUF's type, by its name in the model, replaced by the GGUF's. Converting to a
+    narrower type rounds every weight a little, so only a weight that differs by more than that counts
+    as edited."""
+    _, _, arch, writers = run.shape
+    reader = gguf.GGUFReader(path)
+    field = reader.get_field("general.architecture")
+    if field is None:
+        raise RunError(f"{path} doesn't say which architecture it holds, so it can't be checked")
+    if (theirs := field.contents()) != arch:
+        raise RunError(f"{path} holds a {theirs} model, and the run's model is {arch}")
+    tensors = {tensor.name: tensor for tensor in reader.tensors}
+    model_config = source.read_config(str(run.model_folder))
+    ours = ModelFiles(run.model_folder)
+    changes: dict[str, Change] = {}
+    for writer in writers:
+        name = run.target_names[writer.name]
+        if name not in tensors:
+            raise RunError(f"{path} has no tensor {name} for the edit target {writer.name}")
+        tensor = tensors[name]
+        if tensor.tensor_type not in UNQUANTISED:
+            raise RunError(
+                f"{path} holds {name} as {tensor.tensor_type.name}, quantised already; give the GGUF it was "
+                "quantised from, so it is quantised once, as the run deploys"
+            )
+        weight = _stored(tensor)
+        original = convert.as_converted(ours.tensor(writer.name), writer.name, arch, model_config)
+        if list(weight.shape) != list(original.shape):
+            raise RunError(
+                f"{path}'s {name} is {list(weight.shape)}, not {list(original.shape)} as in the run's model"
+            )
+        if not torch.equal(weight, original.to(UNQUANTISED[tensor.tensor_type]).float()):
+            changes[writer.name] = partial(_converted_back, tensor, writer.name, arch, model_config)
+    return changes
+
+
+def _stored(tensor: gguf.ReaderTensor) -> Tensor:
+    """A GGUF tensor's values in float32, laid out as torch lays out the model's weight."""
+    values = gguf.quants.dequantize(tensor.data, tensor.tensor_type)
+    return torch.from_numpy(np.array(values, dtype=np.float32)).reshape(list(reversed(tensor.shape.tolist())))
+
+
+def _converted_back(
+    tensor: gguf.ReaderTensor, name: str, arch: str, model_config: dict[str, Any], _original: Tensor
+) -> Tensor:
+    return convert.as_original(_stored(tensor), name, arch, model_config)
+
+
+def _planned_outside(run: Run, name: str, given: Path) -> tuple[Path, dict[str, Any]]:
+    """Where a model edited elsewhere, given by its full path, is exported and what it is built from: its
+    weight files by name, size and time, and the folder or GGUF itself, so a measurement can check it is
+    unchanged."""
     run.gguf()
-    folder = folder.expanduser().absolute()
-    if not folder.is_dir():
-        raise RunError(f"{folder} isn't a folder")
-    weights = [p for p in folder.iterdir() if p.suffix == ".safetensors" or p.name == INDEX]
+    if given.is_dir():
+        kind = "folder"
+        weights = [p for p in given.iterdir() if p.suffix == ".safetensors" or p.name == INDEX]
+    elif SPLIT.search(given.name):
+        raise RunError(
+            f"{given} is one part of a split GGUF, which candor doesn't take; join the parts into one file "
+            "first (llama.cpp's llama-gguf-split --merge)"
+        )
+    elif given.is_file() and given.suffix == ".gguf":
+        kind, weights = "file", [given]
+    else:
+        raise RunError(f"{given} isn't a folder or a GGUF file")
     quantization = run.settings.deployment.quantization
     path = run.path("exports", name, f"{run.folder.name}-{name}-{quantization}.gguf")
     inputs = {
         "targets": sorted(run.target_names.items()),
         "base": run.inputs["base"],
-        "folder": str(folder),
+        kind: str(given),
         "weights": digest(sorted((p.name, p.stat().st_size, p.stat().st_mtime_ns) for p in weights)),
         "quantization": quantization,
     }
@@ -228,10 +298,7 @@ def kept(run: Run, model_gguf: Path, made: Mapping[str, Change]) -> dict[str, fl
     shares = {}
     for name, change in made.items():
         tensor = tensors[run.target_names[name]]
-        values = gguf.quants.dequantize(tensor.data, tensor.tensor_type)
-        stored = torch.from_numpy(np.array(values, dtype=np.float32)).reshape(
-            list(reversed(tensor.shape.tolist()))
-        )
+        stored = _stored(tensor)
         weight = files.tensor(name)
         original = convert.as_converted(weight, name, arch, model_config).float()
         edit = convert.as_converted(edited(weight, change) - weight.float(), name, arch, model_config)
@@ -259,10 +326,11 @@ def outside_export(run: Run, name: str) -> tuple[Path, dict[str, Any]]:
     path = run.path("exports", name, f"{run.folder.name}-{name}-{quantization}.gguf")
     if not record_of(path).exists():
         raise RunError(f"{name} has no export in {quantization}; run candor export --outside first")
-    folder = Path(json.loads(record_of(path).read_text())["folder"])
-    planned, inputs = _planned_outside(run, name, folder)
+    made = json.loads(record_of(path).read_text())
+    given = Path(made["file"] if "file" in made else made["folder"])
+    planned, inputs = _planned_outside(run, name, given)
     if not run.current(planned, inputs):
-        raise RunError(f"{name}'s export no longer matches this run or {folder}; export it again")
+        raise RunError(f"{name}'s export no longer matches this run or {given}; export it again")
     return planned, json.loads(record_of(planned).read_text())
 
 

@@ -48,6 +48,8 @@ END_TAG = re.compile(r"\s*</[^<>\s]+>\s*")
 Finite = Annotated[float, Field(strict=True, allow_inf_nan=False)]
 Range = tuple[Finite, Finite]
 Text = Annotated[str, Field(strict=True, min_length=1)]
+# A value a chat template is rendered with: one that TOML, JSON and llama-server all hold as it is.
+TemplateValue = Annotated[str, Field(strict=True)] | StrictBool | StrictInt | Finite
 
 
 class Section(BaseModel):
@@ -84,12 +86,23 @@ class Deployment(Section):
         description="The system prompt you use. Chat apps such as llama-server's page send none by "
         'default; heretic used "You are a helpful assistant."',
     )
+    chat_template_kwargs: dict[Text, TemplateValue] | None = Field(
+        default=None,
+        description="Settings the chat template is rendered with, as llama-server's --chat-template-kwargs, "
+        'such as { reasoning_effort = "high" }. Every prompt is rendered with them and candor serve '
+        "passes them to the server. init sets reasoning_effort for a template that takes one, at the "
+        "template's own default, and names the values it takes at the top of this file. A "
+        "reasoning_effort can change the tag a model's thinking opens with, as K2-Horizon's does, and "
+        "then think_close must change with it. The date is model.date.",
+    )
     think_close: Text | None = Field(
         default=None,
         description="For a model that thinks before it answers: the text that ends its thinking, as its "
-        'chat template writes it with thinking off, such as Qwen\'s "\\n</think>\\n\\n". init sets it '
-        "for a model that thinks. Answers are judged on what follows it, and KL is read where the "
-        "answer starts. Unset for a model that doesn't think.",
+        'chat template writes it with thinking off, such as Qwen\'s "\\n</think>\\n\\n", or for a '
+        "template that can't turn thinking off, the end tag of the tag its prompts open the thinking "
+        'with, such as K2-Horizon\'s "</ifm|think>". init sets it for a model that thinks. Answers are '
+        "judged on what follows it, and KL is read where the answer starts. Unset for a model that "
+        "doesn't think.",
     )
     thinking_budget: StrictInt | None = Field(
         default=None,
@@ -117,6 +130,13 @@ class Deployment(Section):
     def _known_cache(cls, value: str) -> str:
         if value not in KV_CACHE_TYPES:
             raise ValueError(f"must be one of {', '.join(sorted(KV_CACHE_TYPES))}")
+        return value
+
+    @field_validator("chat_template_kwargs")
+    @classmethod
+    def _not_the_date(cls, value: dict[str, Any] | None) -> dict[str, Any] | None:
+        if value and "date_string" in value:
+            raise ValueError("the date the template writes is set by model.date")
         return value
 
     @model_validator(mode="after")
@@ -269,7 +289,8 @@ class Scoring(Section):
         description='For a model that thinks: "on" scores the search\'s trials as the model is used, '
         'thinking to the budget; "off" closes the thinking with an empty block and answers greedily, '
         'many times faster. Set "off" only where candor proxy shows it ranks edits as thinking does: '
-        "the edits the search suggests are measured as used either way.",
+        "the edits the search suggests are measured as used either way. Only for a model whose chat "
+        "template can turn thinking off, as Qwen's can and K2-Horizon's can't.",
     )
     closed_answer_tokens: StrictInt = Field(
         default=150,

@@ -11,6 +11,7 @@ dependencies = [
     "gguf @ git+https://github.com/ggml-org/llama.cpp@b11524#subdirectory=gguf-py",
     "httpx>=0.28",
     "huggingface-hub>=2.2",
+    "jinja2>=3.1",
     "numpy>=2",
     "optuna>=4.7,<5",
     "pydantic>=2.10",

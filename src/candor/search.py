@@ -597,6 +597,8 @@ class Search:
             run.check_remote_code()
             if not run.path("directions.pt").exists():
                 run.check_memory()
+            if self.positions and not self.thinks:
+                self.check_thinking_off()
             adapters = run.adapters()
             _, quantized = run.gguf()
             ids = run.prompt_ids()
@@ -673,6 +675,8 @@ class Search:
         run.check_remote_code()
         if not run.path("directions.pt").exists():
             run.check_memory()
+        if self.positions and not (self.thinks if thinks is None else thinks):
+            self.check_thinking_off()
         _, quantized = run.gguf()
         ids = run.prompt_ids()
         run.directions()
@@ -698,6 +702,18 @@ class Search:
                 scores.append(scorer.score(applied))
                 scored(index, scores[-1])
         return Scores(len(harmful), base_refusals, scores)
+
+    def check_thinking_off(self) -> None:
+        """Stop before a thinking model is scored with its thinking off unless its chat template can turn
+        thinking off (see Run.check_thinking_off), before anything is built or recorded for it. Where the
+        run's search already scores with thinking off, as it began, nothing is checked and no server is
+        started: the template passed when that search began. For a caller that holds the run's lock."""
+        record = self.folder / "inputs.json"
+        if record.exists() and json.loads(record.read_text()).get("trials think") == "off":
+            return
+        _, quantized = self.run.gguf()
+        with self.run.server(quantized, context_per_slot=512, parallel=1) as server:
+            self.run.check_thinking_off(server)
 
     def _edit_files(self, edit: Edit, adapters: dict[str, dict[str, Path]]) -> dict[str, Path]:
         """The adapters an edit is scored with: the search's own for a direction it reads, or else

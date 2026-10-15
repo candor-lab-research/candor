@@ -266,12 +266,9 @@ From the 2026-10-10 paper review, corrected after the full review read each pape
 - Optuna is pinned below 5 (4.9, the version heretic ran), so rude-llama's search uses the same
   sampler that found Trial 170. Optuna 5 changed multivariate TPE's bandwidth and its
   multi-objective weights; worth trying once candor has its own baseline, for example on Qwen3.5.
-- Models of 64 layers or more: the `--lora` list of every adapter set passes Linux's 128 KiB
-  argument limit (about 34 KB for rude-llama's 28 layers, 46 KB for 32). A thinking model loads
-  adapters for both places directions are read, about doubling it: Qwen3.5-9B's 32 layers come to
-  about 97 KB, 118 KB once `score` adds its own, so a thinking model of more than about 36 layers
-  won't start (the server check fails loudly). Check K2-Horizon's layers before phase 4; shorter
-  adapter names would fix it.
+- Linux's 128 KiB argument limit on the `--lora` list no longer limits layers: since 2026-10-15 a
+  list too long by path goes through links named by number (K2-Horizon's 36 layers: 157,039 bytes by
+  path once `score` adds its own adapters, 34,313 by number).
 - Ideas for cheaper thinking-on scoring, researched 2026-10-14, for later:
   - vLLM or SGLang for as-used scoring, with each trial's edit swapped into the weights in place as
     RL frameworks do (LoRA is out: vLLM's gives NaN past about 400 tokens on Qwen3.5-9B, #52568).

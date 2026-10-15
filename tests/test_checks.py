@@ -2,14 +2,18 @@ import pytest
 
 from candor.checks import (
     BeginOfText,
+    Efforts,
     begin_of_text,
     chat_template,
     pinnable_date_format,
+    reasoning_efforts,
     remote_code,
     think_close,
+    turns_thinking_off,
     writes_the_date,
 )
 
+from .tiny_run import ALWAYS_THINKING_TEMPLATE
 from .tiny_tokenizer import DATED, WITH_BOS, WITHOUT_BOS, tokenizer
 
 
@@ -103,3 +107,32 @@ def test_a_thinking_models_close_is_what_turning_thinking_off_adds():
 @pytest.mark.parametrize("template", [WITHOUT_BOS, OPENS_ITS_OWN])
 def test_models_that_dont_think_or_dont_open_their_thinking_have_no_close(template):
     assert think_close(tokenizer(template, False)) is None
+
+
+def test_a_template_that_cant_turn_thinking_off_is_closed_by_the_tag_it_opens():
+    always = tokenizer(ALWAYS_THINKING_TEMPLATE, False)
+    assert not turns_thinking_off(always)
+    assert think_close(always) == think_close(always, reasoning_effort="high") == "</think>"
+    assert think_close(always, reasoning_effort="low") == "</think_less>"
+    # A template that turns thinking off keeps the close it had, whatever settings it ignores.
+    switch = tokenizer(THINKING, False)
+    assert turns_thinking_off(switch)
+    assert think_close(switch, reasoning_effort="high") == think_close(switch) == "</think>\n\n"
+
+
+def test_the_reasoning_efforts_a_template_takes_and_the_one_it_takes_when_given_none():
+    assert reasoning_efforts(tokenizer(ALWAYS_THINKING_TEMPLATE, False)) == Efforts(("low", "high"), "high")
+    # One that writes whatever it is given takes only the values it names.
+    anything = WITHOUT_BOS + "Effort: {{ reasoning_effort | default('medium') }}"
+    assert reasoning_efforts(tokenizer(anything, False)) == Efforts(("medium",), "medium")
+    named_elsewhere = WITHOUT_BOS + "{% if reasoning_effort is defined %}{{ reasoning_effort }}{% endif %}"
+    assert reasoning_efforts(tokenizer(named_elsewhere, False)) is None
+    assert reasoning_efforts(tokenizer(THINKING, False)) is None
+
+
+def test_a_value_a_template_names_elsewhere_and_treats_as_unknown_isnt_taken():
+    # It names "none" for its tools, and renders an effort of "none" as one it doesn't know: no effort.
+    template = WITHOUT_BOS + (
+        "{% if tool_choice == 'none' %}{% endif %}{% if reasoning_effort == 'low' %} briefly{% endif %}"
+    )
+    assert reasoning_efforts(tokenizer(template, False)) == Efforts(("low",), None)

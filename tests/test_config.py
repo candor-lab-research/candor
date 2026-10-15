@@ -113,6 +113,33 @@ def test_bad_values_are_explained(tmp_path, old, new, message):
         config.load(write_text(tmp_path, text.replace(old, new)))
 
 
+def test_chat_template_settings_read_back_and_a_file_from_before_them_loads(tmp_path):
+    written = settings()
+    written.deployment.chat_template_kwargs = {"reasoning_effort": "high", "a key": True, "n": 2, "x": 0.5}
+    config.write(tmp_path, "run", written, "h")
+    assert config.load(tmp_path / "run") == written
+    text = config.render(settings(), "h")
+    assert "# chat_template_kwargs =" in text
+    before = config.load(write_text(tmp_path, text.replace("# chat_template_kwargs =\n", "")))
+    assert before == settings() and before.deployment.chat_template_kwargs is None
+
+
+@pytest.mark.parametrize(
+    ("value", "message"),
+    [
+        ('{ date_string = "1 Jan 2020" }', "model.date"),
+        ("{ when = 1979-05-27 }", "valid"),
+        ("{ levels = [1, 2] }", "valid"),
+        ('{ "" = 1 }', "at least 1 character"),
+    ],
+)
+def test_chat_template_settings_that_cant_be_passed_on_as_they_are_are_refused(tmp_path, value, message):
+    text = config.render(settings(), "h")
+    text = text.replace("# chat_template_kwargs =", f"chat_template_kwargs = {value}")
+    with pytest.raises(ConfigError, match=message):
+        config.load(write_text(tmp_path, text))
+
+
 def test_a_full_edit_can_be_chosen(tmp_path):
     text = config.render(settings(), "h").replace('row_norm = "pre"', 'row_norm = "full"')
     assert config.load(write_text(tmp_path, text)).edit.row_norm == "full"

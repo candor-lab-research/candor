@@ -4,9 +4,18 @@ import re
 from dataclasses import dataclass
 from typing import Any, cast
 
+from jinja2 import TemplateError
 from transformers import CONFIG_MAPPING, PreTrainedTokenizerBase
 
 from .config import END_TAG
+
+# A prompt that ends by opening a thinking tag, such as Qwen3.5's <think> or K2-Horizon's <ifm|think>.
+OPENS_THINKING = re.compile(r"<([^<>/]*think[^<>]*)>\s*$", re.IGNORECASE)
+EFFORT = "reasoning_effort"
+# The reasoning_effort values a chat template may take, by the names OpenAI's API and chat templates use,
+# and one no template knows.
+EFFORTS = ("none", "minimal", "low", "medium", "high", "xhigh", "max")
+UNKNOWN_EFFORT = "x-unknown"
 
 
 def remote_code(*configs: dict[str, Any] | None) -> list[str]:
@@ -95,21 +104,74 @@ DATE_STRING = re.compile(r"set\s+date_string\s*=\s*strftime_now\s*\(\s*[\"']([^\
 DATE_GUARD = re.compile(r"date_string\s+is\s+(not\s+)?defined")
 
 
-def think_close(tokenizer: PreTrainedTokenizerBase) -> str | None:
-    """The text that ends a thinking model's thinking, as its chat template writes it with thinking off:
-    what enable_thinking=False adds to a prompt ready for the answer, one end tag such as </think>. None
-    for a template without that switch, or one that writes thinking off some other way, such as one
-    whose prompts don't open the thinking themselves."""
+def _ready(tokenizer: PreTrainedTokenizerBase, **settings: Any) -> str:
+    """A one-message chat as the template renders it with these settings, ready for the answer."""
+    rendered = tokenizer.apply_chat_template([USER], tokenize=False, add_generation_prompt=True, **settings)
+    return cast(str, rendered)
 
-    def ready(**settings: Any) -> str:
-        rendered = tokenizer.apply_chat_template(
-            [USER], tokenize=False, add_generation_prompt=True, **settings
-        )
-        return cast(str, rendered)
 
-    thinking, answering = ready(), ready(enable_thinking=False)
-    close = answering[len(thinking) :] if answering.startswith(thinking) else ""
+def turns_thinking_off(tokenizer: PreTrainedTokenizerBase, **settings: Any) -> bool:
+    """Whether enable_thinking=False changes the prompt the template renders with these settings."""
+    return _ready(tokenizer, **{**settings, "enable_thinking": False}) != _ready(tokenizer, **settings)
+
+
+def think_close(tokenizer: PreTrainedTokenizerBase, **settings: Any) -> str | None:
+    """The text that ends a thinking model's thinking, its chat template rendered with these settings.
+
+    For a template that turns thinking off, as Qwen's does: what enable_thinking=False adds to a prompt
+    ready for the answer, one end tag such as </think>. For one without that switch whose prompts end by
+    opening the thinking with a tag, as K2-Horizon's do with <ifm|think>: that tag's end tag alone, which
+    is what K2-Horizon's template writes after an empty thinking block and how llama-server closes the
+    thinking when a budget runs out. None for a model that doesn't think, or a template that writes
+    thinking off some other way, such as one whose prompts don't open the thinking themselves.
+    """
+    thinking = _ready(tokenizer, **settings)
+    answering = _ready(tokenizer, **{**settings, "enable_thinking": False})
+    if answering == thinking:
+        opened = OPENS_THINKING.search(thinking)
+        close = f"</{opened[1]}>" if opened else ""
+    else:
+        close = answering[len(thinking) :] if answering.startswith(thinking) else ""
     return close if END_TAG.fullmatch(close) else None
+
+
+@dataclass(frozen=True)
+class Efforts:
+    """The reasoning_effort values a chat template takes, and the one that renders as the template does
+    when given none, if any does."""
+
+    values: tuple[str, ...]
+    default: str | None
+
+
+def reasoning_efforts(tokenizer: PreTrainedTokenizerBase) -> Efforts | None:
+    """The reasoning_effort values the chat template takes: those of EFFORTS it names and renders a
+    prompt with, unlike a value it doesn't know, such as K2-Horizon's low, medium and high. None for a
+    template that takes none."""
+    template = chat_template(tokenizer) or ""
+    if not re.search(rf"\b{EFFORT}\b", template):
+        return None
+    given_none = _ready(tokenizer)
+    unknown = _effort(tokenizer, UNKNOWN_EFFORT)
+    values, default = [], None
+    for value in EFFORTS:
+        if f"'{value}'" not in template and f'"{value}"' not in template:
+            continue
+        rendered = _effort(tokenizer, value)
+        if rendered is None or rendered == unknown:
+            continue
+        values.append(value)
+        if default is None and rendered == given_none:
+            default = value
+    return Efforts(tuple(values), default) if values else None
+
+
+def _effort(tokenizer: PreTrainedTokenizerBase, value: str) -> str | None:
+    """A one-message chat rendered with this reasoning_effort, or None if the template refuses it."""
+    try:
+        return _ready(tokenizer, **{EFFORT: value})
+    except TemplateError:
+        return None
 
 
 def pinnable_date_format(template: str) -> str | None:

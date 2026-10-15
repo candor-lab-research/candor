@@ -111,15 +111,26 @@ def as_converted(weight: Tensor, name: str, arch: str, config: dict[str, Any]) -
     conversion/qwen.py), so it reorders the input columns of linear_attn.out_proj to match. The
     rows, which are what the edit changes, keep their order. Every other target is written as is.
     """
+    order = _column_order(name, arch, config)
+    return weight if order is None else weight[:, order]
+
+
+def as_original(weight: Tensor, name: str, arch: str, config: dict[str, Any]) -> Tensor:
+    """A weight read from a GGUF, as the model stores it: as_converted undone."""
+    order = _column_order(name, arch, config)
+    return weight if order is None else weight[:, torch.argsort(order)]
+
+
+def _column_order(name: str, arch: str, config: dict[str, Any]) -> Tensor | None:
+    """The order the converter writes a weight's input columns in, for a weight it reorders."""
     hparams = config | config.get("text_config", {})
     keys, values = hparams.get("linear_num_key_heads", 0), hparams.get("linear_num_value_heads", 0)
     if arch != "qwen35" or "linear_attn." not in name or ".out_proj." not in name:
-        return weight
+        return None
     if keys <= 0 or values <= 0 or keys == values:
-        return weight
+        return None
     head = hparams["linear_value_head_dim"]
-    order = torch.arange(values * head).reshape(keys, values // keys, head).transpose(0, 1).reshape(-1)
-    return weight[:, order]
+    return torch.arange(values * head).reshape(keys, values // keys, head).transpose(0, 1).reshape(-1)
 
 
 def _as_float(tensor: gguf.ReaderTensor) -> np.ndarray:

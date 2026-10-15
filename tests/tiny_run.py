@@ -16,7 +16,25 @@ from .test_engine import LLAMA_SERVER
 from .test_run import TEMPLATE, fake_everything_but_the_stages, pinned
 from .tiny_gguf import HIDDEN, LAYERS, random_weights, write_model
 
-THINKING_TEMPLATE = TEMPLATE.replace("assistant:{% endif %}", "assistant:<think>\n{% endif %}")
+# A thinking model's template that turns thinking off with an empty thinking block, as Qwen3.5's does.
+# It writes past thinking too, by which llama-server knows it thinks and leaves its thinking on.
+THINKING_TEMPLATE = TEMPLATE.replace(
+    "{{ m['content'] }}",
+    "{% if m.reasoning_content %}<think>\n{{ m.reasoning_content }}\n</think>\n\n{% endif %}"
+    "{{ m['content'] }}",
+).replace(
+    "assistant:{% endif %}",
+    "assistant:<think>\n{% if enable_thinking is defined and not enable_thinking %}"
+    "{{ '\\n</think>\\n\\n' }}{% endif %}{% endif %}",
+)
+# One that always opens the thinking, as K2-Horizon's does, with a tag that depends on the reasoning
+# effort: "high" when none is given, and refused unless it is one the template knows.
+ALWAYS_THINKING_TEMPLATE = TEMPLATE.replace(
+    "assistant:{% endif %}",
+    "assistant:{% set effort = reasoning_effort | default('high') %}"
+    "{% if effort == 'high' %}<think>\n{% elif effort == 'low' %}<think_less>\n"
+    "{% else %}{{ raise_exception('no such effort') }}{% endif %}{% endif %}",
+)
 
 REFUSED = "Safety: Safe\nCategories: None\nRefusal: Yes"
 ANSWERED = "Safety: Unsafe\nCategories: Violent\nRefusal: No"
@@ -127,11 +145,13 @@ def thinks_through(monkeypatch, words: int = 2, asked: list | None = None) -> li
     return thought
 
 
-def thinking(tiny: Run, budget: int = 6) -> Run:
+def thinking(
+    tiny: Run, budget: int = 6, template: str = THINKING_TEMPLATE, close: str = "\n</think>\n\n"
+) -> Run:
     """The tiny run with a model that thinks before it answers, sampled, so its answers vary."""
-    write_model(tiny.folder.parents[1] / "tiny.gguf", random_weights(), THINKING_TEMPLATE, thinking=True)
+    write_model(tiny.folder.parents[1] / "tiny.gguf", random_weights(), template, thinking=True)
     tiny.settings.deployment = config.Deployment(
-        think_close="\n</think>\n\n", thinking_budget=budget, thinking_budget_message="w1"
+        think_close=close, thinking_budget=budget, thinking_budget_message="w1"
     )
     tiny.settings.sampling = config.Sampling(temperature=1.0, top_k=0, min_p=0.0)
     # Room for thinking and an answer in the tiny model's 256 tokens.

@@ -168,12 +168,24 @@ def _tokenizer_rows(model: str) -> list[Row]:
         rows.append(("Date in prompt", "warn", detail))
     else:
         rows.append(("Date in prompt", "ok", "none"))
+    if efforts := checks.reasoning_efforts(tokenizer):
+        rows.append(("Reasoning effort", "ok", _efforts(efforts)))
     if close := checks.think_close(tokenizer):
         detail = f"thinks before answering, and its thinking ends with {close!r}; it is scored thinking"
+        if not checks.turns_thinking_off(tokenizer):
+            detail += ", as its template can't turn thinking off"
         rows.append(("Thinking", "ok", detail))
     else:
-        rows.append(("Thinking", "ok", "answers without thinking, or its template has no enable_thinking"))
+        rows.append(("Thinking", "ok", "answers without thinking, or its template doesn't open the thinking"))
     return rows
+
+
+def _efforts(efforts: checks.Efforts) -> str:
+    """The reasoning_effort values a chat template takes, as a sentence."""
+    *values, last = [f'"{value}"' for value in efforts.values]
+    listed = f"{', '.join(values)} or {last}" if values else last
+    default = f'; "{efforts.default}" when given none' if efforts.default else ""
+    return f"the chat template takes {listed}{default}"
 
 
 def _rows(model: str) -> list[Row]:
@@ -246,13 +258,19 @@ def inspect(model: Annotated[str, typer.Argument(help="A Hugging Face model id o
         raise typer.Exit(FAILED_CHECK)
 
 
-def _from_template(model: str, revision: str | None) -> tuple[str | None, str | None]:
-    """The date to pin, if the chat template writes one it can be given, and what ends the model's
-    thinking, if it thinks."""
+def _from_template(
+    model: str, revision: str | None
+) -> tuple[str | None, dict[str, Any] | None, str | None, checks.Efforts | None]:
+    """The date to pin, if the chat template writes one it can be given; the settings to render it
+    with, a reasoning_effort at the template's own default if it takes one; what ends the model's
+    thinking with those settings, if it thinks; and the reasoning_effort values it takes."""
     with _quiet_transformers():
         tokenizer = AutoTokenizer.from_pretrained(model, revision=revision, trust_remote_code=False)
     date_format = checks.pinnable_date_format(checks.chat_template(tokenizer) or "")
-    return config.today_in(date_format) if date_format else None, checks.think_close(tokenizer)
+    efforts = checks.reasoning_efforts(tokenizer)
+    settings = {checks.EFFORT: efforts.default} if efforts and efforts.default else None
+    close = checks.think_close(tokenizer, **(settings or {}))
+    return config.today_in(date_format) if date_format else None, settings, close, efforts
 
 
 def _revision(model: str) -> str | None:
@@ -305,7 +323,7 @@ def init(
 
     try:
         revision = _revision(model)
-        pinned_date, close = _from_template(model, revision)
+        pinned_date, template_settings, close, efforts = _from_template(model, revision)
         model_settings = config.Model(
             source=model,
             revision=revision,
@@ -313,13 +331,17 @@ def init(
             date=pinned_date,
         )
         deployment = config.Deployment(
-            think_close=close, thinking_budget=config.THINKING_BUDGET if close else None
+            chat_template_kwargs=template_settings,
+            think_close=close,
+            thinking_budget=config.THINKING_BUDGET if close else None,
         )
         header = (
             f"Settings for the candor run {name!r}, created {date.today()} by candor {version('candor')} "
             f"for llama.cpp {LLAMA_CPP_RELEASE}.\n"
             "Edit freely: every later command reads and checks this file."
         )
+        if efforts:
+            header += f"\nReasoning effort: {_efforts(efforts)}."
         record = [dict(zip(("check", "result", "detail"), row, strict=True)) for row in rows]
         path = config.write(
             runs,
@@ -340,6 +362,18 @@ def init(
         console.print(f"[red]candor couldn't create the run:[/] {escape(f'{type(error).__name__}: {error}')}")
         raise typer.Exit(COULD_NOT_INSPECT) from None
     console.print(f"[green]Created {escape(str(path))}[/]")
+    if efforts:
+        chosen = (
+            f'The run uses "{efforts.default}"'
+            if template_settings
+            else "The run leaves it unset, so the template uses its own default"
+        )
+        console.print(
+            escape(
+                f"Reasoning effort: {_efforts(efforts)}. {chosen} (deployment.chat_template_kwargs): set it "
+                "to the one you run at, and think_close to match."
+            )
+        )
     if close:
         console.print(
             f"[yellow]This model thinks before it answers.[/] Its thinking is capped at "
@@ -688,8 +722,8 @@ def export_command(
     outside: Annotated[
         Path | None,
         typer.Option(
-            help="A copy of the run's model edited elsewhere, such as heretic's own save of a trial, to "
-            "export as candor exports its own edits. Needs --name."
+            help="A copy of the run's model edited elsewhere, such as heretic's own save of a trial, as a "
+            "folder or one unquantised GGUF file, to export as candor exports its own edits. Needs --name."
         ),
     ] = None,
     name: Annotated[str | None, typer.Option(help="What to call a model given with --outside.")] = None,

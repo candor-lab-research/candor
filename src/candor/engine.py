@@ -6,6 +6,7 @@ Generated text is handed back to the caller. Nothing here prints or logs it.
 import os
 import socket
 import subprocess
+import tempfile
 import time
 from collections.abc import Callable, Generator, Iterable, Mapping, Sequence
 from concurrent.futures import ThreadPoolExecutor, as_completed
@@ -81,8 +82,11 @@ class LlamaServer:
         self.model = model.absolute()
         self.log = log
         self.adapters = [path.resolve() for path in adapters]
-        # llama-server runs in the folder holding every adapter, so it can name each one briefly.
+        # llama-server runs in the folder holding every adapter, so it can name each one briefly by its
+        # path from there; or, where that isn't brief enough, in a temporary folder of links (see _link).
         self.workdir = Path(os.path.commonpath([p.parent for p in self.adapters])) if self.adapters else None
+        self.names = [str(path.relative_to(self.workdir)) for path in self.adapters] if self.workdir else []
+        self.links: tempfile.TemporaryDirectory | None = None
         self.parallel = parallel
         self.context = parallel * context_per_slot
         self.port = port or _free_port()
@@ -112,12 +116,14 @@ class LlamaServer:
             "-np", str(self.parallel), "-c", str(self.context), "-ngl", "999", "--no-webui",
             "--cache-ram", "0", "--ctx-checkpoints", "0", *self.extra,
         ]  # fmt: skip
-        if self.adapters:
-            args += ["--lora", self._lora_list(), "--lora-init-without-apply"]
         started = time.perf_counter()
-        with self.log.open("ab") as log:
-            self.process = subprocess.Popen(args, cwd=self.workdir, stdout=log, stderr=subprocess.STDOUT)
         try:
+            if self.adapters:
+                if len(self._lora_list().encode()) >= MAX_ARGUMENT:
+                    self._link()
+                args += ["--lora", self._lora_list(), "--lora-init-without-apply"]
+            with self.log.open("ab") as log:
+                self.process = subprocess.Popen(args, cwd=self.workdir, stdout=log, stderr=subprocess.STDOUT)
             self._wait_until_ready(started, timeout)
             self._check_model()
             self._zero_default_scales()
@@ -126,20 +132,26 @@ class LlamaServer:
             raise
 
     def _lora_list(self) -> str:
-        """Every adapter in the one --lora argument llama.cpp wants, as a comma-separated list.
+        """Every adapter in the one --lora argument llama.cpp wants, as a comma-separated list of their
+        names in the server's folder, which keeps it short, as Linux limits the argument's length. Each
+        is quoted, so a comma in a folder name can't split it."""
+        return ",".join(map(_quoted, self.names))
 
-        The paths are relative to the server's folder, because Linux limits the argument's length.
-        Each is quoted, so a comma in a folder name can't split it.
-        """
-        assert self.workdir is not None
-        value = ",".join(_quoted(str(path.relative_to(self.workdir))) for path in self.adapters)
-        size = len(value.encode())
+    def _link(self) -> None:
+        """Run the server in a temporary folder of links to the adapters, named by number, for adapters
+        whose paths pass Linux's limit even from the folder holding them all, as a thinking model of 36
+        layers' do once candor score adds its own. No adapter is renamed."""
+        names = [f"{i}.gguf" for i in range(len(self.adapters))]
+        size = len(",".join(map(_quoted, names)).encode())
         if size >= MAX_ARGUMENT:
             raise ServerError(
                 f"the paths of {len(self.adapters)} adapters take {size} bytes, more than Linux allows in"
                 f" one argument ({MAX_ARGUMENT - 1}), so load fewer adapters into one server"
             )
-        return value
+        self.links = tempfile.TemporaryDirectory(prefix="candor-adapters-")
+        self.workdir, self.names = Path(self.links.name), names
+        for name, path in zip(names, self.adapters, strict=True):
+            (self.workdir / name).symlink_to(path)
 
     def _wait_until_ready(self, started: float, timeout: float) -> None:
         assert self.process is not None
@@ -177,6 +189,9 @@ class LlamaServer:
                 self.process.kill()
                 self.process.wait()
         self.client.close()
+        if self.links is not None:
+            self.links.cleanup()
+            self.links = None
 
     def _healthy(self) -> bool:
         try:

@@ -12,7 +12,7 @@ from optuna.study import StudyDirection
 from optuna.trial import FixedTrial, TrialState
 from typer.testing import CliRunner
 
-from candor import cli, config, run, search
+from candor import cli, config, proxy, run, search
 from candor.cli import app
 from candor.engine import GREEDY, Answer, LlamaServer
 from candor.judge import is_refusal
@@ -22,7 +22,16 @@ from candor.run import RunError
 from candor.search import Score, Search
 from candor.targets import Writer
 
-from .tiny_run import ANSWERED, REFUSED, FakeGuard, fake_prompts, thinking, thinks_through
+from .tiny_gguf import END_THINK
+from .tiny_run import (
+    ALWAYS_THINKING_TEMPLATE,
+    ANSWERED,
+    REFUSED,
+    FakeGuard,
+    fake_prompts,
+    thinking,
+    thinks_through,
+)
 
 CHANGES = [
     (lambda s, m: setattr(s.deployment, "quantization", "Q8_0"), "model file"),
@@ -1845,6 +1854,49 @@ def test_a_thinking_search_with_thinking_off_answers_greedily_after_an_empty_blo
     tiny.settings.scoring.thinking = "on"
     with pytest.raises(RunError, match="trials think"):
         Search(tiny).search(4)
+
+
+def test_a_model_whose_template_cant_turn_thinking_off_is_scored_thinking_and_never_with_it_off(
+    tiny, monkeypatch
+):
+    thinks_through(monkeypatch)
+    small(thinking(tiny, budget=8, template=ALWAYS_THINKING_TEMPLATE, close=END_THINK))
+    tiny.settings.scoring.thinking = "off"
+    with pytest.raises(RunError, match="can't turn its thinking off"):
+        Search(tiny).search(2)
+    # Refused before anything is sampled or recorded, so a search scored thinking can start.
+    assert not tiny.path("search").exists() and not tiny.path("thinking").exists()
+    with pytest.raises(RunError, match="can't turn its thinking off"):
+        Search(tiny).score([Edit("e", None, {"mlp": Kernel(1.0, 1.0, 0.0, 0.5)})], thinks=False)
+    # candor proxy needs a search scored with thinking off, which there can't be.
+    with pytest.raises(RunError, match="run candor search with --trials 150 first"):
+        proxy.check(tiny)
+    tiny.settings.scoring.thinking = "on"
+    Search(tiny).search(2)
+    assert sum(search._score(trial).thinking for trial in finished(tiny)) > 0
+
+
+def test_a_search_already_scored_with_thinking_off_starts_no_server_to_check_it(tiny, monkeypatch):
+    thinks_through(monkeypatch)
+    small(thinking(tiny, budget=8))
+    tiny.settings.scoring.thinking = "off"
+    tiny.settings.scoring.closed_answer_tokens = 12
+    started = []
+    real = run.Run.server
+
+    def server(self, *args, **kwargs):
+        started.append(kwargs.get("parallel"))
+        return real(self, *args, **kwargs)
+
+    monkeypatch.setattr(run.Run, "server", server)
+    Search(tiny).search(2)
+    # A new search checks once that the template turns thinking off, with a server of one slot.
+    assert started[0] == 1
+    started.clear()
+    Search(tiny).search(2)
+    assert started == []
+    Search(tiny).score([Edit("e", None, {"mlp": Kernel(1.0, 1.0, 0.0, 0.5)})])
+    assert started == [search.THINKING_MODEL_SLOTS]
 
 
 @pytest.mark.parametrize("thinks", [False, True])

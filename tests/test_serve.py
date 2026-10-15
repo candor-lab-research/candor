@@ -130,6 +130,21 @@ def test_the_sample_shows_the_servers_own_template_settings(tiny, tmp_path, monk
     assert f"mode=deep<s>Today: {date.today().strftime('%d %b %Y')}\nuser: Hello" in result.output
 
 
+def test_the_server_renders_with_the_runs_chat_template_settings(tiny, tmp_path, stopped_by_ctrl_c):
+    effort = "effort={{ reasoning_effort | default('high') }}\n"
+    write_model(tmp_path / "tiny.gguf", random_weights(), chat_template=effort + TEMPLATE)
+    settings = {"reasoning_effort": "low", "short": True}
+    tiny.settings.deployment.chat_template_kwargs = settings
+    args = serve.arguments(tiny, tiny.folder / "model.gguf", 8080, 4096)
+    # The pinned date is left out: apps write today's.
+    assert json.loads(args[args.index("--chat-template-kwargs") + 1]) == settings
+    folder = cli_folder(tiny)
+    result = CliRunner(env={"COLUMNS": "250"}).invoke(app, ["serve", str(folder), "--port", str(free_port())])
+    assert result.exit_code == 0, result.output
+    assert 'chat template settings: {"reasoning_effort": "low", "short": true}' in result.output
+    assert f"effort=low<s>Today: {date.today().strftime('%d %b %Y')}\nuser: Hello" in result.output
+
+
 def test_a_server_that_exits_or_hangs_while_starting_is_stopped_and_reported(tmp_path, monkeypatch):
     stopped = []
     real = serve.stop

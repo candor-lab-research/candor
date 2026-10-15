@@ -237,6 +237,16 @@ def test_a_failed_start_leaves_no_server_running(files, monkeypatch, stop_later)
     assert s.process is not None and s.process.poll() is not None
 
 
+def test_adapters_loaded_through_short_links_apply_as_by_their_own_paths(files, references, monkeypatch):
+    folder, scales, unused = files
+    _, merged = references
+    # Short enough that the adapters' own names don't fit, and their numbers do.
+    monkeypatch.setattr(engine, "MAX_ARGUMENT", 40)
+    with server(folder, "base.gguf", [*scales, unused]) as s:
+        assert s.links is not None and set(s.adapter_ids) == {*scales, unused}
+        assert_same(s.top_logprobs(PROMPTS, 50, scales), merged)
+
+
 def test_a_server_that_dies_is_reported_with_its_log(files):
     folder, _, _ = files
     with server(folder, "base.gguf") as s:
@@ -279,14 +289,54 @@ def test_thousands_of_adapters_fit_in_one_argument(tmp_path):
     workdir = Path((tmp_path / "cwd").read_text().strip())
     listed = next(csv.reader([args[args.index("--lora") + 1]]))
     assert [(workdir / path).resolve() for path in listed] == adapters
+    # They fit by their paths from the folder holding them, so no links are made.
+    assert workdir == root.resolve() and s.links is None
 
 
-def test_more_adapters_than_one_argument_holds_are_refused(tmp_path):
-    adapters = [tmp_path / "set" / f"{i:05d}-{'x' * 40}.gguf" for i in range(3000)]
+def test_a_thinking_model_of_36_layers_scored_with_adapters_of_its_own_starts_through_short_links(tmp_path):
+    # K2-Horizon's 72 edit targets for each of its 40 direction sets, both places directions are read,
+    # and the set candor score builds for a heretic trial's direction between two layers: as paths from
+    # the run folder they pass the limit.
+    root = tmp_path / "root" / "candor" / "runs" / "k2"
+    sets = [
+        root / "adapters" / f"{place}{name}"
+        for place in ("", "answer-")
+        for name in ["per-layer", *(f"layer-{i}" for i in range(14, 33))]
+    ]
+    sets.append(root / "scores" / f"answer-layer-{20.123456789012346!r}")
+    adapters = [
+        folder / f"blk.{layer}.{target}.weight.gguf"
+        for folder in sets
+        for layer in range(36)
+        for target in ("attn_output", "ffn_down")
+    ]
+    listed = ",".join(f'"{path.relative_to(root)}"' for path in adapters)
+    assert len(listed.encode()) >= MAX_ARGUMENT
+    for path in adapters:
+        path.parent.mkdir(parents=True, exist_ok=True)
+        path.touch()
+    report = f'pwd > "{tmp_path}/cwd"\nprintf "%s\\n" "$@" > "{tmp_path}/args"\n'
+    report += f'for f in *; do printf "%s\\t%s\\n" "$f" "$(readlink "$f")"; done > "{tmp_path}/links"\nexit 1'
+    binary = stub(tmp_path, report)
+    s = LlamaServer(binary, tmp_path / "model.gguf", tmp_path / "server.log", adapters)
+    with pytest.raises(ServerError, match="exited with code 1"):
+        s.start()
+    args = (tmp_path / "args").read_text().splitlines()
+    assert max(len(arg.encode()) for arg in args) < MAX_ARGUMENT
+    links = dict(line.split("\t") for line in (tmp_path / "links").read_text().splitlines())
+    names = next(csv.reader([args[args.index("--lora") + 1]]))
+    assert [Path(links[name]) for name in names] == [path.resolve() for path in adapters]
+    # The links are gone once the server is stopped, and the adapters are where they were.
+    assert not Path((tmp_path / "cwd").read_text().strip()).exists() and s.links is None
+    assert all(path.exists() for path in adapters)
+
+
+def test_more_adapters_than_one_argument_holds_even_by_number_are_refused(tmp_path):
+    adapters = [tmp_path / "set" / f"{i:05d}-{'x' * 40}.gguf" for i in range(12000)]
     s = LlamaServer(tmp_path / "llama-server", tmp_path / "model.gguf", tmp_path / "server.log", adapters)
     with pytest.raises(ServerError, match="more than Linux allows in one argument"):
         s.start()
-    assert s.process is None
+    assert s.process is None and s.links is None
 
 
 def test_every_prompt_gets_first_token_probabilities(files):

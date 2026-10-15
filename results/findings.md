@@ -134,5 +134,3 @@ entry is corrected rather than deleted when later evidence changes it.
   short timed pilot on an A100 and an H100 before quoting 27B.
 - **3-5 refusal directions,** if a single direction fails as used. [Hypothesis] **Optuna 5,** once
   candor has a baseline. [Housekeeping]
-- **Models of more than about 36 layers with "pre" edits** pass Linux's argument limit in the
-  `--lora` list. [Measured limit] "full" loads one adapter per trial; check before 27B.

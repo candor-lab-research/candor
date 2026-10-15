@@ -14,7 +14,6 @@ import hashlib
 import json
 import math
 import os
-import re
 import shutil
 from collections.abc import Callable, Iterator, Sequence
 from contextlib import contextmanager
@@ -58,8 +57,6 @@ ANSWER_SETS = "answer-"
 THINKING_SLOTS = 8
 # A sampled answer's seed is never llama.cpp's "pick one at random".
 RANDOM_SEED = 2**32 - 1
-# A prompt that ends by opening a thinking tag, such as Qwen3.5's <think> or K2-Horizon's <ifm|think>.
-OPENS_THINKING = re.compile(r"<[^<>/]*think[^<>]*>\s*$", re.IGNORECASE)
 DATE_PROBE = "31 Dec 1999"
 CHECKED_PER_SET = 3
 # The version of each stage's code, in stage order. Bump a stage's number in any commit that changes
@@ -470,9 +467,12 @@ class Run:
 
     # Prompt ids
 
-    def template_kwargs(self, date: str | None = None) -> dict[str, str]:
+    def template_kwargs(self, date: str | None = None) -> dict[str, Any]:
+        """What the chat template renders every prompt with: the run's chat template settings, and the
+        pinned date unless another is given."""
         date = date or self.settings.model.date
-        return {"date_string": date} if date else {}
+        settings = self.settings.deployment.chat_template_kwargs or {}
+        return {**settings, "date_string": date} if date else dict(settings)
 
     def sampling(self) -> dict[str, float]:
         """How llama-server picks each token, as the run's settings say the model is used, seeds
@@ -487,7 +487,7 @@ class Run:
         deployment = self.settings.deployment
         rendered = server.apply_template(self.chats(["x"])[0], self.template_kwargs())
         if deployment.think_close is None:
-            if OPENS_THINKING.search(rendered):
+            if checks.OPENS_THINKING.search(rendered):
                 raise RunError(
                     "every prompt ends by opening the model's thinking, but deployment.think_close isn't "
                     "set, so its thinking would be judged as its answer; set it, and a thinking_budget"
@@ -504,6 +504,26 @@ class Run:
         assert budget is not None
         close = deployment.think_close.rstrip()
         return Thinking(start, end, close, opened, budget, deployment.thinking_budget_message)
+
+    def check_thinking_off(self, server: LlamaServer) -> None:
+        """A thinking model answers after an empty thinking block in use only where its chat template
+        turns thinking off by writing that block, as Qwen's does. K2-Horizon's always opens the thinking,
+        so answers after an empty block would score a way the model is never run."""
+        chat, kwargs = self.chats(["x"])[0], self.template_kwargs()
+        on = server.apply_template(chat, kwargs)
+        off = server.apply_template(chat, {**kwargs, "enable_thinking": False})
+        if off == on:
+            raise RunError(
+                "this model's chat template can't turn its thinking off, so the model is never used "
+                "answering after an empty thinking block and a score with thinking off would measure a way "
+                'no one runs it: keep scoring.thinking = "on"'
+            )
+        if off != on + (self.settings.deployment.think_close or ""):
+            raise RunError(
+                "deployment.think_close isn't what the chat template writes after a prompt with thinking "
+                "off, so answers after it wouldn't be the model with its thinking off; set think_close to "
+                "match"
+            )
 
     def thinking_room(self, budget: int | None = None) -> int:
         """The most tokens a thinking model's thinking can take before its answer, the message it is
@@ -673,6 +693,9 @@ class Run:
             "prompts": settings.prompts.model_dump(),
             "maths_instruction": settings.measure.maths_instruction,
         }
+        # Only when set, so the records of runs made before the setting are as they were.
+        if template_settings := settings.deployment.chat_template_kwargs:
+            inputs["chat_template_kwargs"] = template_settings
         close = settings.deployment.think_close
         if close:
             inputs["think_close"] = close
@@ -695,6 +718,9 @@ class Run:
                     raise RunError(
                         "the chat template ignores the pinned date, so prompts would still change daily"
                     )
+            # A think_close the prompts don't open, such as one left from another reasoning effort, is
+            # caught before residuals are read from them.
+            self.thinking(server)
             ids = {name: server.chat_ids(self.chats(texts[name]), kwargs) for name in PROMPT_SETS}
             if close:
                 for name in CLOSED_SETS:
