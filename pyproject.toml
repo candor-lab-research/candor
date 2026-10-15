@@ -49,9 +49,6 @@ build-backend = "hatchling.build"
 [tool.hatch.metadata]
 allow-direct-references = true
 
-[tool.hatch.build]
-exclude = ["src/candor/js/node_modules"]
-
 [tool.ruff]
 line-length = 110
 

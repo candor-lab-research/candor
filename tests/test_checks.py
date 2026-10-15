@@ -1,11 +1,7 @@
-import shutil
-
 import pytest
 
 from candor.checks import (
-    JS,
     BeginOfText,
-    app_template_parses,
     begin_of_text,
     chat_template,
     pinnable_date_format,
@@ -87,50 +83,6 @@ def test_remote_code_from_both_configs():
     tokenizer_config = {"auto_map": {"AutoTokenizer": ["tokenization_x.XTokenizer", None]}}
     assert remote_code(config, tokenizer_config) == ["modeling_x.py", "tokenization_x.py"]
     assert remote_code({}, None) == []
-
-
-needs_node = pytest.mark.skipif(
-    shutil.which("node") is None or not (JS / "node_modules").exists(),
-    reason="Node or @huggingface/jinja missing",
-)
-
-
-PLAIN = tokenizer(WITH_BOS, adds_bos=False)
-
-
-@needs_node
-def test_app_template_parses():
-    assert app_template_parses(PLAIN, WITH_BOS).status == "ok"
-
-
-@needs_node
-def test_app_template_rejects_syntax_only_transformers_reads():
-    template = "{% if messages[0]['content'] is sameas true %}x{% endif %}{{ messages[0]['content'] }}"
-    result = app_template_parses(PLAIN, template)
-    assert result.status == "fails"
-    assert "lines 1" in result.detail
-
-
-@needs_node
-def test_app_template_is_rendered_with_a_system_message_too():
-    system_only = (
-        "{% for m in messages %}{% if m['role'] == 'system' %}{{ m['content'] | wordcount }}{% endif %}"
-        "{{ m['content'] }}{% endfor %}"
-    )
-    assert app_template_parses(PLAIN, system_only).status == "fails"
-
-
-@needs_node
-def test_a_template_that_refuses_system_messages_is_not_a_parser_failure():
-    refuses = (
-        "{% for m in messages %}{% if m['role'] == 'system' %}"
-        "{{ raise_exception('System role not supported') }}{% endif %}{{ m['content'] }}{% endfor %}"
-    )
-    assert app_template_parses(PLAIN, refuses).status == "ok"
-
-
-def test_a_template_transformers_cannot_render_is_skipped():
-    assert app_template_parses(PLAIN, "{{ raise_exception('never') }}").status == "skipped"
 
 
 THINKING = WITHOUT_BOS + (

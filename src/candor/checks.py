@@ -1,19 +1,12 @@
 """Checks on a model's tokenizer and chat template that decide whether a measurement means anything."""
 
-import json
 import re
-import shutil
-import subprocess
-import tempfile
 from dataclasses import dataclass
-from pathlib import Path
 from typing import Any, cast
 
 from transformers import CONFIG_MAPPING, PreTrainedTokenizerBase
 
 from .config import END_TAG
-
-JS = Path(__file__).parent / "js"
 
 
 def remote_code(*configs: dict[str, Any] | None) -> list[str]:
@@ -42,58 +35,7 @@ def chat_template(tokenizer: PreTrainedTokenizerBase) -> str | None:
     return template if isinstance(template, str) else None
 
 
-@dataclass(frozen=True)
-class TemplateCheck:
-    status: str
-    detail: str = ""
-
-
-SYSTEM = {"role": "system", "content": "You are a helpful assistant."}
 USER = {"role": "user", "content": "hi"}
-ASSISTANT = {"role": "assistant", "content": "Hello."}
-CONVERSATIONS = [[USER], [SYSTEM, USER], [SYSTEM, USER, ASSISTANT, USER], [USER, ASSISTANT, USER]]
-
-
-def app_template_parses(tokenizer: PreTrainedTokenizerBase, template: str) -> TemplateCheck:
-    """Whether Bionic and LM Studio's template parser (@huggingface/jinja) can use the template.
-
-    If it can't, those apps fall back to a prompt format the model wasn't trained on. Only the
-    conversations transformers renders are tried, so a template that deliberately refuses one
-    (some reject system messages) isn't reported as unreadable.
-    """
-    renderable = []
-    for conversation in CONVERSATIONS:
-        try:
-            tokenizer.apply_chat_template(
-                conversation, chat_template=template, tokenize=False, add_generation_prompt=True
-            )
-        except Exception:
-            continue
-        renderable.append(conversation)
-    if not renderable:
-        return TemplateCheck("skipped", "transformers can't render any test conversation with it either")
-    node = shutil.which("node")
-    if node is None:
-        return TemplateCheck("skipped", "Node.js isn't installed")
-    if not (JS / "node_modules" / "@huggingface" / "jinja").exists():
-        return TemplateCheck("skipped", f"run once: npm install --prefix {JS}")
-    with tempfile.NamedTemporaryFile("w", suffix=".jinja") as file:
-        file.write(template)
-        file.flush()
-        args = [node, str(JS / "check_template.mjs"), file.name, json.dumps(renderable)]
-        try:
-            run = subprocess.run(args, capture_output=True, text=True, timeout=60)
-        except subprocess.TimeoutExpired:
-            return TemplateCheck("skipped", "the checker timed out")
-    try:
-        result = json.loads(run.stdout)
-    except json.JSONDecodeError:
-        last_line = run.stderr.strip().splitlines()[-1:] or ["no output"]
-        return TemplateCheck("skipped", f"the checker itself failed: {last_line[0]}")
-    if result["ok"]:
-        return TemplateCheck("ok")
-    lines = ", ".join(map(str, result["lines"])) or "unknown"
-    return TemplateCheck("fails", f"{result['error']} (statements on lines {lines})")
 
 
 def _leading(ids: list[int], token: int) -> int:
@@ -109,7 +51,7 @@ class BeginOfText:
 
     @property
     def transformers(self) -> int:
-        """transformers' apply_chat_template, mlx-lm and Bionic's MLX engine send the template's own."""
+        """transformers' apply_chat_template and mlx-lm send the template's own."""
         return self.template
 
     @property

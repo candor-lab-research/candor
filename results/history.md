@@ -11,7 +11,7 @@ format you run them, before anything else. Every model is scored and shipped as 
 in llama-server, the llama.cpp server candor scores in, so nothing differs between testing and use.
 For every model, the final check (refusals, KL and maths, with your KV cache type) runs on the exact
 file shipped, since merging and re-quantising can shift the result (phase 0: KL 0.01 between adapters
-and merged weights in Q4_K_M). (Decided 2026-10-11: the user isn't tied to Bionic; Bionic or LM Studio stay possible, unchecked.)
+and merged weights in Q4_K_M). (Decided 2026-10-15: the user runs models only in llama-server, or a local runner that runs them better.)
 
 | Phase | What | Done when | State |
 | --- | --- | --- | --- |
@@ -19,7 +19,7 @@ and merged weights in Q4_K_M). (Decided 2026-10-11: the user isn't tied to Bioni
 | 1 | Core maths and `candor inspect` | candor's rebuild of a heretic trial matches its refusals, and measuring heretic's saved model under heretic's conditions gives heretic's numbers exactly; `inspect` reports correctly on rude-llama, Qwen3.5-9B and K2-Horizon | Done |
 | 2 | rude-llama end to end on the Mac: measure, search, export a GGUF to run in llama-server | Under the decision rule written in step 4 before any search runs, candor's shipped GGUF is at least as good as heretic's Trial 170 converted and quantised the same way: fewer or equal refusals on held-out prompts, no higher KL, no maths loss. It runs in llama-server. (A blind A/B was dropped by the user on 2026-10-12: 535 and Trial 170 are too close to tell apart by hand.) | Done 2026-10-13: trial 535, exported, passes against Trial 170 exported the same way, and ships (`runs/rude/exports/trial-535/`); see `results/milestone-rude-llama-vs-heretic.md` |
 | 3 | Qwen3.5-9B, a thinking model: scored with thinking on at your settings; residuals read on a pod | Written in step 4 before any search runs, from the measured noise, against heretic's own Trial 161 exported and measured as candor ships its edits | Steps 1-4 done 2026-10-14 (below); the decision rule awaits sign-off, then step 5 |
-| 4 | K2-Horizon at your real settings | Measured honestly with its own chat template (Bionic couldn't parse it; llama-server's reader is to be checked) and the reasoning level you use, then improved | |
+| 4 | K2-Horizon at your real settings | Measured honestly with its own chat template (whether llama-server reads it is to be checked) and the reasoning level you use, then improved | |
 
 From phase 3 a job expected to take over about 2 hours, or needing more memory than the Mac has,
 runs on a pod (the user's decision, 2026-10-12); shorter jobs (a measurement, a pilot) can run on
@@ -84,7 +84,7 @@ phase 3: `results/phase-3-qwen3.5-9b.md`).
   compared prompt by prompt. `serve` uses the same settings. Greedy isn't how the model is used, and
   thinking models tend to loop under it. Sampling adds noise greedy didn't have, so the first Qwen
   measurement is the unedited model twice with different seeds, and the decision rule allows for it.
-- A thinking budget of 8192 tokens in real use (the user's Bionic setting; they are unsure of it):
+- A thinking budget of 8192 tokens in real use (the user's setting; they are unsure of it):
   after it the model is made to close its thinking and answer. Measurements and `serve` use it. The
   search scores at a shorter budget, set by the pilot from how long answers think (numbers only),
   since 8192 for 600 trials would take days. If answers rarely think past about 1,500 tokens, the
@@ -329,8 +329,8 @@ Numbers: `runs/phase0/results.json` (not in git). Script: `spikes/phase0.py`, la
   with candor's own direction finding and edit. On rude-llama Trial 170 it gets heretic's 2/100.
 - Heretic tokenizes the rendered chat with the tokenizer's own special tokens added, so Llama 3
   and K2-Horizon get two begin-of-text tokens. Proved by running heretic's own `Model.generate`
-  with a recording stub. transformers, mlx-lm, Bionic's MLX engine (`model_kit.py`) and llama.cpp
-  (`chat.cpp`) all send one. Qwen3.5 has none, so it is unaffected.
+  with a recording stub. transformers, mlx-lm and llama.cpp (`chat.cpp`) all send one. Qwen3.5 has
+  none, so it is unaffected.
 - `spikes/compare_models.py` (last in `2bb6bba`) scored the saved heretic model (`models/local/rude-llama-heretic`)
   against the original on heretic's test prompts:
 
@@ -349,9 +349,8 @@ Numbers: `runs/phase0/results.json` (not in git). Script: `spikes/phase0.py`, la
   only save memory and time, since nothing is reused without the prompt cache.
 - `candor inspect MODEL` reads the config, tokenizer and file headers only. On the three models:
   rude-llama passes (warns: doubled token, date); Qwen3.5-9B passes and finds all 64 writers,
-  including 24 linear-attention `out_proj` (llama.cpp's `ssm_out`); K2-Horizon fails because Bionic
-  can't parse its chat template (lines 89, 91, 127, 129, 628), and warns about remote code and
-  the doubled token.
+  including 24 linear-attention `out_proj` (llama.cpp's `ssm_out`); K2-Horizon passes, and
+  warns about remote code and the doubled token.
 - `gguf` now comes from the same llama.cpp release as the engine (PyPI's 0.19.0 doesn't know
   K2-Horizon), and candor mirrors the converter's `language_model.` prefix stripping.
 - Reading the papers corrected the review: 2609.04721 doesn't cover Qwen3.5 (its linear-attention

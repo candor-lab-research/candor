@@ -173,14 +173,6 @@ def _tokenizer_rows(model: str) -> list[Row]:
         rows.append(("Thinking", "ok", detail))
     else:
         rows.append(("Thinking", "ok", "answers without thinking, or its template has no enable_thinking"))
-    result = checks.app_template_parses(tokenizer, template)
-    if result.status == "fails":
-        detail = f"Bionic and LM Studio can't use it and fall back to another format: {result.detail}"
-        rows.append(("Bionic template", "fail", detail))
-    elif result.status == "skipped":
-        rows.append(("Bionic template", "skipped", result.detail))
-    else:
-        rows.append(("Bionic template", "ok", "parses and renders in Bionic and LM Studio"))
     return rows
 
 
@@ -254,10 +246,6 @@ def inspect(model: Annotated[str, typer.Argument(help="A Hugging Face model id o
         raise typer.Exit(FAILED_CHECK)
 
 
-# Failures that matter for using the model in an app but don't stop candor from editing it.
-NOT_BLOCKING = {"Bionic template"}
-
-
 def _from_template(model: str, revision: str | None) -> tuple[str | None, str | None]:
     """The date to pin, if the chat template writes one it can be given, and what ends the model's
     thinking, if it thinks."""
@@ -307,7 +295,7 @@ def init(
     model = _resolved(model)
     rows = _checked_rows(console, model)
     _print_table(console, f"candor init {name}: checking {model}", rows)
-    blocking = [check for check, status, _ in rows if status == "fail" and check not in NOT_BLOCKING]
+    blocking = [check for check, status, _ in rows if status == "fail"]
     if blocking:
         failed = ", ".join(blocking)
         console.print(
@@ -352,11 +340,6 @@ def init(
         console.print(f"[red]candor couldn't create the run:[/] {escape(f'{type(error).__name__}: {error}')}")
         raise typer.Exit(COULD_NOT_INSPECT) from None
     console.print(f"[green]Created {escape(str(path))}[/]")
-    if any(check in NOT_BLOCKING and status == "fail" for check, status, _ in rows):
-        console.print(
-            "[yellow]Bionic can't read this model's chat template.[/] candor still works, but test the "
-            "result in Bionic only after pasting in a fixed template."
-        )
     if close:
         console.print(
             f"[yellow]This model thinks before it answers.[/] Its thinking is capped at "

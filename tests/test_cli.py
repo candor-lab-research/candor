@@ -20,7 +20,7 @@ from candor.run import Run, RunError
 from candor.toolchain import ToolchainError
 
 from .custom_code import write_custom_code_model
-from .test_checks import THINKING, needs_node
+from .test_checks import THINKING
 from .test_targets import llama
 from .tiny_tokenizer import DATED, PINNABLE, WITH_BOS, tokenizer
 
@@ -159,14 +159,6 @@ def test_init_never_overwrites_a_run(tmp_path):
     assert result.exit_code == 1
     assert "already exists" in result.output
     assert (tmp_path / "runs" / "first" / "candor.toml").read_text() == before
-
-
-@needs_node
-def test_init_goes_ahead_when_only_bionic_cannot_read_the_template(tmp_path):
-    template = "{% if messages[0]['content'] is sameas true %}x{% endif %}{{ messages[0]['content'] }}"
-    result = init(tmp_path, model_folder(tmp_path, template=template))
-    assert result.exit_code == 0, result.output
-    assert "Bionic can't read this model's chat template" in result.output
 
 
 def test_init_pins_the_date_in_the_templates_own_format(tmp_path):

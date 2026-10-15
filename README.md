@@ -44,9 +44,7 @@ uv run candor measure runs/rude --outside heretic-saved        # measured like c
 uv run candor serve runs/rude --trial 37                       # chat with it in llama-server
 ```
 
-- `inspect` reads only the config, tokenizer and file headers, so it is quick and needs no GPU. Its
-  check that Bionic and LM Studio can parse the chat template needs Node.js and a one-time
-  `npm install --prefix src/candor/js`; without them that check is reported as skipped.
+- `inspect` reads only the config, tokenizer and file headers, so it is quick and needs no GPU.
 - A model that thinks before it answers (its chat template opens the thinking, as Qwen3.5's does) is
   scored thinking, as you run it. `init` finds the text that closes its thinking and gives it a
   budget of 8192 tokens (`deployment.thinking_budget`): past it, llama-server makes the model stop
