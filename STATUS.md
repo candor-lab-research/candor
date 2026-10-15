@@ -96,10 +96,9 @@ or by a lower KL. Measured on the full 1,319 maths questions, as Trial 161 was.
 
 | Step | What | State |
 | --- | --- | --- |
-| 1-4 | Thinking-model settings; pods; the method changes; Qwen3.5-9B and Trial 161 measured as used, the decision rule | Done 2026-10-14 (history) |
-| 5 | GPU sampling (2.2x faster), the "full" edit, a 150-trial thinking-off search, then `candor proxy` | Done 2026-10-14: "offset" |
-| 6 | The search on step 5's path. If thinking off ranks like thinking on (Spearman at least 0.7, perhaps with a strength correction): cheap trials, then about 15-20 edits from their front scored as used. If not: a thinking-on search of about 150 trials | Search done (545 trials); its best scored as used |
-| 7 | The best 2 exported and measured as used (held-out prompts, 400 maths, then the winner's 1,319); copied to the Mac; `serve` | |
+| 1-5 | Settings, pods, Qwen3.5-9B and Trial 161 measured as used, the decision rule; the "full" edit, a thinking-off search, `candor proxy` ("offset") | Done 2026-10-14 (history, results file) |
+| 6 | The search, thinking off, to 545 trials; its best 6 scored as used at their strength and 1.4 times it | Scoring as used: running |
+| 7 | The best 2 exported and measured as used (held-out prompts, 400 maths, then the winner's 1,319); copied to the Mac; `serve`. Then the user reads the thinking of the unedited model, candor's best and Trial 161 on about 5 requests and 5 maths problems each, and reports counts only (working, weighing whether to answer, circling, garbled; changed its mind; finished; maths right) for `findings.md` | |
 
 ## Parked, to review later
 
@@ -109,7 +108,6 @@ Every idea not acted on, with what supports it (measured, published or a hypothe
 ## Not in this plan
 
 - `tune/heretic-kit` is frozen (our kit; heretic itself is checked at each phase start).
-  `tune/abliterate.py` is deleted.
 - Cut for depth first: `candor doctor`, a live dashboard, one-command pod orchestration, rewriting
   the guide, more model families.
 - Reporting the llama.cpp prompt-cache bug upstream.

@@ -37,6 +37,13 @@ entry is corrected rather than deleted when later evidence changes it.
   [Published] Keywords with thinking off flatter thinking models badly: Qwen3.5-35B-A3B 3-5 refused
   by keywords against 33+ by a judge, Qwen3.8-27B 0 against 30.5% (DreamFast;
   `evidence-2026-10-14/ara.md`). candor decides on the judge.
+- **The best public Qwen3.5-9B edit's 0/400 may not be as used.** [Published, with caveats]
+  DreamFast judged trohrbaugh's heretic edit (`Qwen3.5-9B-heretic-v2`) at 0 of 400 HarmBench
+  refusals, GSM8K 87.64 to 85.97; its report notes a 2,048-token cap and truncated thinking. Edited
+  Qwen thinks longer than that on harmful prompts (Trial 161's median 2,980), so many answers may have
+  been cut before any reply; candor reads the final answer after up to 8,192 and counts an
+  unfinished one against the edit. Not comparable until measured the same way.
+  (`evidence-2026-10-14/ara-evidence.md`)
 - **Directions read at the thinking start mostly fail.** [Measured: Qwen3.5-9B] 71-100 refused of
   100 either way on 12 edits; but trial 175 (layer 15) refused 0 at KL 0.057, thinking off, not yet
   scored as used. [Published] They worked on Qwen3-8B (arXiv 2507.03167).
@@ -73,6 +80,9 @@ entry is corrected rather than deleted when later evidence changes it.
 - **Start strength wide (to 3.0 or more) rather than widening once the best presses 1.5.**
   [Measured: 2 models] The best-supported change; it is only a default setting. Before making it
   the default: one more model family.
+- **Measure the best public edit as a second reference.** [Hypothesis] `candor export --outside`
+  then `candor measure --outside` on trohrbaugh's Qwen3.5-9B edit, as Trial 161 was, would show
+  whether its 0/400 holds as used; a first look on the 100 test prompts costs minutes.
 - **A shorter search on larger models (about 300 trials).** [Hypothesis, from one search] Test: on
   the next model, see where its best edits turn up.
 - **Thinking length as a criterion between candidates.** [Hypothesis] Edits that lengthen thinking
