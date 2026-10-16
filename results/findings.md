@@ -138,5 +138,10 @@ entry is corrected rather than deleted when later evidence changes it.
 - **A faster GPU for 27B.** [Hypothesis] On the A40, llama-server reached about 660 tokens/s,
   well below what the GPU's memory allows, so a faster card may help less than its price. Test: a
   short timed pilot on an A100 and an H100 before quoting 27B.
+- **A near-duplicate check between prompt sets.** [Hypothesis] The held-out StrongREJECT set drops
+  its AdvBench prompts by source, but paraphrases from its other sources could still match the
+  AdvBench-derived prompts the direction is read from, and AdvBench's train and test splits may
+  share near-copies. Test: embed every set with a small sentence embedder and count cross-set pairs
+  above a similarity cutoff; counts only, minutes on the Mac.
 - **3-5 refusal directions,** if a single direction fails as used. [Hypothesis] **Optuna 5,** once
   candor has a baseline. [Housekeeping]
