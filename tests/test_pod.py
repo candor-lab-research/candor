@@ -283,6 +283,49 @@ def test_start_log_and_stop_a_command(pod):
         os.killpg(group, 0)
 
 
+def test_wait_keeps_the_mac_awake_until_the_command_ends(pod):
+    pod.boot()
+    (pod.folder / "root" / "candor").mkdir()
+    tool(pod.tools, "caffeinate", '#!/bin/bash\necho "caffeinate $* for $PPID" >>"$CALLS"\n')
+    pod.env["POD_WAIT_INTERVAL"] = "0.05"
+    assert pod.run("start", "nap", "sleep", "1").returncode == 0
+    began = time.time()
+    made = pod.run("wait", "nap")
+    assert made.returncode == 0, made.stderr
+    assert 0.8 < time.time() - began < 5
+    assert "nap has ended" in made.stdout
+    [awake] = [line for line in calls(pod.folder) if line.startswith("caffeinate")]
+    assert re.fullmatch(r"caffeinate -is -w (\d+) for \1", awake)
+
+
+def test_wait_rides_out_dropped_connections_but_not_a_pod_thats_gone(pod):
+    pod.boot()
+    (pod.folder / "root" / "candor").mkdir()
+    tool(pod.tools, "caffeinate", "#!/bin/bash\n")
+    pod.env["POD_WAIT_INTERVAL"] = "0.05"
+    made = pod.run("wait", "nap")
+    assert made.returncode == 1 and "nap was never started" in made.stderr
+    assert pod.run("start", "nap", "sleep", "0").returncode == 0
+    (pod.tools / "ssh").rename(pod.tools / "reach")
+    tries = pod.folder / "tries"
+
+    def drop(first: int) -> None:
+        """The pod's SSH fails the first FIRST times it is asked, then works."""
+        tries.write_text("")
+        tool(
+            pod.tools,
+            "ssh",
+            f"#!/bin/bash\necho >>{tries}\n(($(wc -l <{tries}) > {first})) || exit 255\n"
+            f'exec {pod.tools}/reach "$@"\n',
+        )
+
+    drop(4)
+    assert pod.run("wait", "nap").returncode == 0
+    drop(5)
+    made = pod.run("wait", "nap")
+    assert made.returncode == 1 and "hasn't answered 5 times in a row" in made.stderr
+
+
 def test_push_and_pull_files_and_folders(pod, tmp_path):
     here = tmp_path / "here"
     (here / "runs" / "r" / "gguf").mkdir(parents=True)

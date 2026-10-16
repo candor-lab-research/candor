@@ -203,7 +203,9 @@ does everything but create and delete it (its header lists every command):
 3. `push`, `start NAME candor ...`, `log NAME`, `stop NAME` and `pull runs/NAME` move files, run a
    command detached and bring a run's results back, leaving out its GGUFs unless named
    (`pull runs/NAME/exports/trial-37`). Paths are the same as here, under `/root/candor` on the pod;
-   anything there that git doesn't ignore is replaced by the next `code`.
+   anything there that git doesn't ignore is replaced by the next `code`. `wait NAME` waits for the
+   command to end and keeps this Mac awake until it does, so nothing needs a timed `caffeinate`;
+   it gives up if the pod stops answering for about five minutes.
 4. `scripts/pod.sh deadline` checks the watchdog and says when it deletes the pod, and
    `deadline HOURS` moves that to HOURS from now. Everything lives on the container disk, which
    Runpod wipes when a pod is stopped or restarted and which a stopped pod's watchdog can't

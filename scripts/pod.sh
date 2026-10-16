@@ -13,6 +13,8 @@
 #   scripts/pod.sh start NAME CMD..  run a command in the code folder, detached, logged as NAME
 #   scripts/pod.sh log NAME          the end of that log
 #   scripts/pod.sh stop NAME         stop that command
+#   scripts/pod.sh wait NAME         wait for that command to end, keeping this Mac awake until it
+#                                    does, or until the pod stops answering
 #   scripts/pod.sh deadline [HOURS]  check the watchdog and when it deletes the pod, or move that to
 #                                    HOURS from now
 #   scripts/pod.sh ssh [CMD..]       a shell or a command on the pod
@@ -63,7 +65,7 @@ connect() {
     host=${CANDOR_POD%:*}
     port=${CANDOR_POD##*:}
     mkdir -p "$(dirname "$KNOWN_HOSTS")"
-    ssh_command="ssh -p $port -o StrictHostKeyChecking=accept-new -o UserKnownHostsFile=$KNOWN_HOSTS -o ServerAliveInterval=30"
+    ssh_command="ssh -p $port -o StrictHostKeyChecking=accept-new -o UserKnownHostsFile=$KNOWN_HOSTS -o ServerAliveInterval=30 -o ConnectTimeout=30"
 }
 
 on_pod() {
@@ -203,9 +205,35 @@ stop() {
     echo "stopped $1"
 }
 
+wait_for() {
+    local name=$1 misses=0 state
+    named "$name"
+    # Ends by itself when this script does, so the Mac stays awake exactly as long as the wait.
+    caffeinate -is -w $$ &
+    while true; do
+        if state=$(on_pod "if [ ! -f $LOGS/$name.pid ]; then echo unknown
+            elif kill -0 -- -\$(cat $LOGS/$name.pid) 2>/dev/null; then echo running
+            else echo ended; fi"); then
+            misses=0
+            case $state in
+            ended)
+                echo "$name has ended; scripts/pod.sh log $name shows how"
+                return
+                ;;
+            unknown) die "$name was never started on this pod" ;;
+            esac
+        else
+            # The pod's SSH sometimes drops a connection, so only a run of failures means it's gone.
+            misses=$((misses + 1))
+            ((misses < 5)) || die "the pod hasn't answered $misses times in a row: stopped waiting"
+        fi
+        sleep "${POD_WAIT_INTERVAL:-60}"
+    done
+}
+
 # Each command runs on a line of its own, not after && or ||, so set -e stops it at its first failure.
 command=${1:-}
-need "$# >= 1" "args|setup|code|push|pull|start|log|stop|deadline|ssh ..."
+need "$# >= 1" "args|setup|code|push|pull|start|log|stop|wait|deadline|ssh ..."
 shift
 case $command in
 args)
@@ -247,6 +275,11 @@ stop)
     need "$# == 1" "stop NAME"
     connect
     stop "$1"
+    ;;
+wait)
+    need "$# == 1" "wait NAME"
+    connect
+    wait_for "$1"
     ;;
 deadline)
     need "$# <= 1" "deadline [HOURS]"
