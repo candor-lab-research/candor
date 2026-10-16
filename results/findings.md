@@ -79,6 +79,12 @@ entry is corrected rather than deleted when later evidence changes it.
 
 ## The search
 
+- **Batched answers aren't repeatable run to run.** [Measured: rude-llama, 8 slots, 100 prompts, the
+  slots change's checks] Two runs at the same settings gave different answers and first-token
+  probabilities, by up to 0.15 nats on 19 of 100 prompts; at 1 slot they are bit-identical. So
+  noise of this size is in every measurement and search score already. [Hypothesis] It may blur
+  KL between edits whose KL differs little. Test: measure one edit twice at its slots and compare
+  per-prompt KL and counts. (`history.md`, the slots change)
 - **More strength than heretic's 1.5 made every best edit.** [Measured: Qwen3.5-9B, and K2-Horizon]
   Qwen's best was 22 refused before the range widened to 3.0 at about trial 120, then 0-2. Every
   best since uses more than 1.5 (one layer: 2.2-2.5 on the feed-forward weights; per layer: 2.9 on
@@ -113,9 +119,11 @@ entry is corrected rather than deleted when later evidence changes it.
 
 - **Slots that fit depend on the model's KV cache, not the GPU alone.** [Measured: K2-Horizon-7B,
   A40] A dense model's f16 cache is 144 KiB a token (K2: 36 layers of 8 KV heads), so 32 slots of a
-  thinking budget of 8192 need 41.5 GB: `measure` fits 28 on an A40. The search sizes every slot
-  for its longest KL read plus a whole thinking answer, 15.6k tokens, so it fits only 16; its 32 and
-  the build's 8 are fixed in code. Qwen3.5-9B's hybrid layers never hit this. (step 2)
+  thinking budget of 8192 need 41.5 GB: `measure` fits 28 on an A40. The search sized every slot for
+  its longest KL read plus a whole thinking answer (15.6k tokens), so it fit only 16. Since
+  2026-10-16 slots are run settings (`[slots]`), each search slot is sized for its largest request,
+  and `inspect` shows the cache a token takes. Qwen3.5-9B's hybrid layers (32 KiB a token, plus
+  50 MiB of state a slot) never hit this. (step 2)
 
 - **Sampling the whole vocabulary is what limits speed at full batch.** [Measured: K2-Horizon-7B,
   A40 and A100, made-up prompts] With top_k 0 (K2's card) each running answer adds about 1.9 ms a
@@ -158,8 +166,15 @@ entry is corrected rather than deleted when later evidence changes it.
   `<ifm|think_faster>` thinking with high's `</ifm|think>` 17 times in 32, which candor counts as
   never closed, and K2's card advises against low for evaluation. Test: accept both closes at low,
   then `candor proxy`'s rank check, low against high, on a first search's best. (step 2)
-- **A faster GPU for 27B.** [Hypothesis] On the A40, llama-server reached about 660 tokens/s,
-  well below what the GPU's memory allows, so a faster card may help less than its price. Test: a
-  short timed pilot on an A100 and an H100 before quoting 27B.
+- **More slots in one shared KV pool (`--kv-unified`).** [Hypothesis, from the speed test] At top_k
+  1,000 a step grows only about 0.5 ms per answer (10.6 ms at 1, 24.3 at 28), so 48-56 answers at
+  once might reach about 1,400 tokens/s, but f16 KV at the full budget caps K2 at 28 slots on an
+  A40. A pool the slots share, sized to what they use at once, could fit more, since most answers
+  end far short of the budget; it changes numerics and how a full pool behaves. Test: time 28
+  against 48 slots with it, and check counts against per-slot caches on one edit.
+- **A faster GPU for 27B.** [Measured on K2-Horizon-7B; Hypothesis for 27B] On K2 an A100 was about
+  10% faster than an A40 at full load for 3 times the price, as sampling the whole vocabulary, not
+  the GPU, was the limit (speed test). A 27B model reads 3 times the weights a step, so test again:
+  a short timed pilot on an A100 and an H100 before quoting 27B.
 - **3-5 refusal directions,** if a single direction fails as used. [Hypothesis] **Optuna 5,** once
   candor has a baseline. [Housekeeping]

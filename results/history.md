@@ -650,3 +650,15 @@ it is how K2 is used. A developer agent is making slots per-run settings meanwhi
   6 of 192, and 32,768 would leave about 7 slots on an A40.
 - Uno-Uncensored isn't a reference: it is built on K2 with the Uno adapter merged into its weights.
 - The A40 stays: an A100 was about 10% faster at full load for 3 times the price.
+
+### Phase 4: slots as run settings (2026-10-16)
+
+Following the user's rule that every setting is customisable, a developer agent made the slot counts
+run settings (`[slots]`: `thinking`, `search`, `measure`, with defaults that record exactly what
+runs recorded before), sized each search slot for its largest request instead of a KL read plus a
+whole answer, reported a KV cache that doesn't fit with the setting to lower, and had `inspect` show
+the KV cache a token takes (and a hybrid's state a slot). An independent review passed with 8 points
+to fix, all fixed with tests, and a re-review passed with 2 minor ones, also fixed: 763 tests pass.
+rude-llama's numbers are identical by sha256 before and after, Qwen's and K2's records still match,
+and answers were bit-identical across slot sizes on three models. The checks found batched answers
+vary run to run at 8 slots (`findings.md`). K2's run uses 28 slots throughout.

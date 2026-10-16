@@ -51,10 +51,9 @@ thinking on (next, e.g. Qwen3.8-27B). A 9B model must not take days.
    trial 205 (Trial 161 left out, the user 2026-10-15), counts only. Optional now.
 2. The phase-end discussion: where to go next, from `results/findings.md` and
    `results/new-features.md` (chiefly the search's cost for 27B); no changes until agreed.
-3. Phase 4, before step 3 (numbers in `results/phase-4-k2-horizon-7b.md`): slots as settings, the
-   search sizing each slot per request (being built and reviewed; the build's 8, the search's 32 and
-     `measure`'s default of 8 are fixed in code; K2 fits 28 and 16 on an A40). Later, for the search:
-     accepting both closes at low effort, then `candor proxy` low against high. Uno not now.
+3. Phase 4, step 3 on an A40 (about 3-3.5 h, about $2): K2's run rebuilt at the user's settings,
+   the unedited model and Avicennasis's edit measured in full at 28 slots. Later, for the search:
+   accepting both closes at low effort, then `candor proxy` low against high. Uno not now.
 4. Not blocking, each when there is a reason:
    - speed: 64 slots (15% faster than 32), weights cached on the GPU for "full" trials, the proxy's
      adapters loaded into one server;
@@ -106,7 +105,7 @@ out: it is built on K2 with the Uno adapter merged in (the user, 2026-10-16).
 
 | Step | What | State |
 | --- | --- | --- |
-| 1-2 | Code: K2's thinking, `deployment.chat_template_kwargs`, the `--lora` list limit, `--outside` GGUF files, IFM's remote code read (no network, file or process access); the timed pilot: the run built, the unedited model and Avicennasis on 64 prompts a set, 4 search trials, low effort | Done 2026-10-16 (history, results file) |
+| 1-2 | Code: K2's thinking, `deployment.chat_template_kwargs`, the `--lora` list limit, `--outside` GGUF files, IFM's remote code read (no network, file or process access); the timed pilot: the run built, the unedited model and Avicennasis on 64 prompts a set, 4 search trials, low effort; the speed test; slots as run settings (`[slots]`), each search slot sized to its requests | Done 2026-10-16 (history, results file) |
 | 3 | The unedited model and Avicennasis's edit measured as used | About $2-4 |
 | 4 | Decision rule from step 3, signed off by the user before any search | |
 | 5 | Search, the best scored as used, finalists exported and measured in full | About $20-35 for the search as it stands, less with slots sized per request |
