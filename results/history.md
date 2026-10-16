@@ -640,3 +640,13 @@ with K2's top_k 0, sampling the whole 250k vocabulary costs about 1.9 ms a step 
 top_k 1,000 or below runs 2.6-2.7 times faster at 28 slots. Which top_k is the user's call, since
 it is how K2 is used. A developer agent is making slots per-run settings meanwhile. Numbers in
 `results/phase-4-k2-horizon-7b.md`.
+
+### Phase 4: K2's settings decided (the user, 2026-10-16)
+
+- Sampling: temperature 1.0 and top_p 0.95 as K2's card says, with top_k 1,000 and min_p 0. The
+  distribution is the card's unless the top 95% spans more than 1,000 tokens, and scoring runs 2.6
+  times faster at 28 slots (the speed test). The user runs llama-server the same way.
+- Thinking budget 8192, as for Qwen: no unedited pilot answer reached it, Avicennasis's edit did on
+  6 of 192, and 32,768 would leave about 7 slots on an A40.
+- Uno-Uncensored isn't a reference: it is built on K2 with the Uno adapter merged into its weights.
+- The A40 stays: an A100 was about 10% faster at full load for 3 times the price.
