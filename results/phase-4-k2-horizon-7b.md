@@ -91,3 +91,40 @@ never closed; low wasn't measured further.
   trial here reached.
 - Reasoning effort low writes about 3.7 times fewer tokens, but needs both closes accepted before
   it can be scored, and its card advises against it for evaluation.
+
+## Step 2, speed test: GPU and sampling (2026-10-16)
+
+Two pods for about 20 minutes each (A40 `ifncdv854juqi3`, CA-MTL-1, $0.59/hr; A100 SXM 80 GB
+`d9yw07h31ud45h`, US-MD-1, $1.79/hr; about $0.65 together), deleted by hand. IFM's own
+K2-Horizon-7B Q4_K_M (at 7a75dbd; same architecture and size as the run's), candor's server flags
+and the run's sampling, made-up prompts of 40 token ids (never decoded), answers of exactly 384
+tokens; llama-server's own time per token. Rows are answers running at once.
+
+| At once | A40 | A100 |
+| --- | --- | --- |
+| 1 | 12.0 ms a step, 83 tokens/s | 8.5 ms, 115 tokens/s |
+| 4 | 18.4 ms, 213 | 16.5 ms, 237 |
+| 16 | 43.2 ms, 366 | 37.6 ms, 419 |
+| 28 | 64.9 ms, 425 | 58.8 ms, 469 |
+| 56 | | 107.8 ms, 452 |
+| 28, prompts of 4,096 tokens | 125.9 ms, 163 | |
+
+On the A40 at 28 at once, sampling's top_k (top_p 0.95 throughout):
+
+| top_k (min_p) | Step | Tokens/s |
+| --- | --- | --- |
+| 0, the card's (0) | 64.9 ms | 425 |
+| 5,000 (0) | 27.4 ms | 987 |
+| 1,000 (0) | 24.3 ms | 1,107 |
+| 100 (0) | 23.6 ms | 1,137 |
+| 40 (0.05), llama-server's defaults | 23.6 ms | 1,139 |
+
+- Allocated slots don't slow a step (1 at once: 12.0 ms with 8 or 28 slots); `--kv-unified`
+  changes nothing (66.1 ms at 28); sampling on the CPU is 6 times slower (419.5 ms at 28).
+- Each answer running adds about 1.9 ms a step on either GPU: sampling over K2's whole vocabulary
+  of 250,624 tokens when top_k doesn't cut it first. With top_k at 1,000 or below, 28 answers at
+  once run 2.6-2.7 times faster.
+- The A100 is about 10% faster at full load for 3 times the price, and 56 slots give no more than
+  28. The A40 stays.
+- Step 2's fit of a fixed 58 ms a step was wrong: it came from full batches at top_k 0 (and
+  Qwen's top_k 20, a different model). Time grows with the answers running and their context.

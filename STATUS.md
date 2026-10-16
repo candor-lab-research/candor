@@ -52,8 +52,9 @@ thinking on (next, e.g. Qwen3.8-27B). A 9B model must not take days.
 2. The phase-end discussion: where to go next, from `results/findings.md` and
    `results/new-features.md` (chiefly the search's cost for 27B); no changes until agreed.
 3. Phase 4, the user's choices before step 3 (numbers in `results/phase-4-k2-horizon-7b.md`):
-   - sampling: the card's (top_k 0, min_p 0, as the pilot ran) or llama-server's defaults the user
-     may run with (top_k 40, min_p 0.05); the budget: 8192 or the card's 32,768;
+   - sampling: the card's (top_k 0, as the pilot ran), or with top_k 1,000 (2.6 times faster at 28
+     slots), or llama-server's defaults if the user runs those (top_k 40, min_p 0.05); the budget:
+     8192 or the card's 32,768. The A40 stays (an A100 is 10% faster for 3 times the price);
    - whether Uno-Uncensored is a reference (built on K2 with the Uno adapter merged in);
    - for the search: slots as settings, sized per request (the build's 8, the search's 32 and
      `measure`'s default of 8 are fixed in code; K2 fits 28 and 16 on an A40); accepting both closes

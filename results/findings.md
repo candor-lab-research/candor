@@ -117,6 +117,12 @@ entry is corrected rather than deleted when later evidence changes it.
   for its longest KL read plus a whole thinking answer, 15.6k tokens, so it fits only 16; its 32 and
   the build's 8 are fixed in code. Qwen3.5-9B's hybrid layers never hit this. (step 2)
 
+- **Sampling the whole vocabulary is what limits speed at full batch.** [Measured: K2-Horizon-7B,
+  A40 and A100, made-up prompts] With top_k 0 (K2's card) each running answer adds about 1.9 ms a
+  step on either GPU, capping llama-server near 425-470 tokens/s at 28; top_k 1,000 or less runs
+  28 at once at 1,107-1,139 tokens/s. An A100 is about 10% faster for 3 times the price; 56 slots
+  give no more than 28. (`phase-4-k2-horizon-7b.md`, speed test)
+
 ## Ideas
 
 - **Start strength wide (to 3.0 or more) rather than widening once the best presses 1.5.**

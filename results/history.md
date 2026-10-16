@@ -629,3 +629,14 @@ take weeks to build into llama.cpp, and that Uno-Uncensored is built on K2 with 
 merged in. The user then set a rule: every setting is customisable per run, and the long-term goal
 is a tool that inspects a model and picks or offers its best settings; defaults keep existing runs
 unchanged. Numbers in `results/phase-4-k2-horizon-7b.md`.
+
+### Phase 4, step 2: speed test on an A40 and an A100 (2026-10-16)
+
+The user asked for an A40-or-bigger decision on cost and for longest-first only if it paid. A
+simulation on measured per-prompt lengths showed longest-first saves 3-17% on search trials with
+lengths known in advance and nothing on maths, so it isn't built. A 20-minute test on each GPU
+showed the A100 about 10% faster at 3 times the price, so the A40 stays, and found the real limit:
+with K2's top_k 0, sampling the whole 250k vocabulary costs about 1.9 ms a step per answer, and
+top_k 1,000 or below runs 2.6-2.7 times faster at 28 slots. Which top_k is the user's call, since
+it is how K2 is used. A developer agent is making slots per-run settings meanwhile. Numbers in
+`results/phase-4-k2-horizon-7b.md`.
