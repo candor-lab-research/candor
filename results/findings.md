@@ -85,6 +85,11 @@ entry is corrected rather than deleted when later evidence changes it.
   noise of this size is in every measurement and search score already. [Hypothesis] It may blur
   KL between edits whose KL differs little. Test: measure one edit twice at its slots and compare
   per-prompt KL and counts. (`history.md`, the slots change)
+- **KL depends on the GPU backend: compare it only within one.** [Measured: K2-Horizon-7B, 3 search
+  trials, 99 KL prompts] Read on the Mac (Metal), trials 45, 57 and 58 came out 5.0%, 2.0% and 6.4%
+  lower than the search's reads on an A40 (CUDA): 0.427, 0.441 and 0.089 against 0.450, 0.450 and
+  0.096. Per prompt the KL was spread across many prompts, with no floor or single prompt behind it,
+  so the search's two reads of 0.4500 were chance.
 - **More strength than heretic's 1.5 made every best edit.** [Measured: Qwen3.5-9B, and K2-Horizon]
   Qwen's best was 22 refused before the range widened to 3.0 at about trial 120, then 0-2. Every
   best since uses more than 1.5 (one layer: 2.2-2.5 on the feed-forward weights; per layer: 2.9 on
