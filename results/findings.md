@@ -178,3 +178,10 @@ entry is corrected rather than deleted when later evidence changes it.
   a short timed pilot on an A100 and an H100 before quoting 27B.
 - **3-5 refusal directions,** if a single direction fails as used. [Hypothesis] **Optuna 5,** once
   candor has a baseline. [Housekeeping]
+- **A 27B for the 18 GB Mac: Ternary Bonsai 2 27B with candor's adapters, unmerged.** [Hypothesis;
+  PrismML's numbers Published] Its ternary GGUF is 5.95-7.21 GB, against about 16 GB for a 27B at
+  Q4, and decodes 32.1 tok/s on an L4 (300 GB/s), so roughly half that on the M3 Pro (150 GB/s).
+  Merging an edit and repacking to ternary would round most of it away, but candor already applies
+  edits as rank-1 LoRA adapters, so the file could ship untouched with the adapters beside it. Needs
+  PrismML's llama.cpp fork. Test: timed speed on the Mac, whether the fork's `--lora` works on its
+  ternary types, and whether an unpacked FP16 exists for the directions.

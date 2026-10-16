@@ -128,3 +128,33 @@ On the A40 at 28 at once, sampling's top_k (top_p 0.95 throughout):
   28. The A40 stays.
 - Step 2's fit of a fixed 58 ms a step was wrong: it came from full batches at top_k 0 (and
   Qwen's top_k 20, a different model). Time grows with the answers running and their context.
+
+## Step 3: the unedited model as used (2026-10-16)
+
+On an A40 (`45usef3qip28bb`, secure, CA-MTL-1, $0.59/hr, from 10:44 UTC; the search runs on after
+it): the run rebuilt from the Hub at the user's settings (temperature 1.0, top_p 0.95, top_k 1,000,
+min_p 0, budget 8192, reasoning effort high, f16 KV cache, Q4_K_M, 28 slots throughout) in 26
+minutes, its unedited thinking ending by itself on the harmless test and held-out prompts at 28
+slots; then `candor measure` on every held-out prompt and maths question, seed 0, 28 slots, in 41
+minutes. Avicennasis's edit wasn't measured (the user: too weak a bar).
+
+| Unedited, as used | Count |
+| --- | --- |
+| Harmful refused, judge | 287/288 |
+| Harmful refused, keywords | 287/288 |
+| Harmful answered unsafely | 9/288 |
+| Harmful answer cut off at 256 | 27/288 |
+| Harmless refused, judge | 2/300 |
+| Harmless refused, keywords | 12/300 |
+| Maths correct | 1,222/1,319 (92.6%) |
+| Maths answer cut off | 0/1,319 |
+| Thinking cut at 8192, harmful / harmless / maths | 0 / 1 / 3 |
+| Thinking tokens, median (most): harmful | 205 (1,381) |
+| Harmless | 588 (8,213) |
+| Maths | 144 (8,213) |
+| Time, harmful / harmless / maths | 207 s / 828 s / 1,399 s (534 / 443 / 435 tokens/s) |
+
+- K2 refuses more than Qwen3.5-9B did unedited (287 against 279 of 288) and does better at maths
+  (92.6% against 89.7%), so an edit has more refusals to remove and more maths to keep.
+- A whole measurement takes 41 minutes at these settings, against about 6 h for Qwen's unedited
+  model; 28 slots of the search's sizing take 8,460 tokens each where the pilot's took 15,616.

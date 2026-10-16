@@ -672,3 +672,10 @@ check at the new settings; the search starts straight after on the same pod. The
 drafted from the unedited numbers during the search and signed off before finalists are measured.
 K2's strength may widen to 5.0 rather than 3.0, as heretic's own K2 run needed 4.5-4.6 under the same
 "full" edit; the start stays 0.8-1.5 and widens only on the alarm, as on Qwen.
+
+### Phase 4, step 3: the unedited model as used (2026-10-16)
+
+K2's run rebuilt at the user's settings in 26 minutes and the unedited model was measured on every
+held-out prompt and maths question in 41 minutes at 28 slots: 287 of 288 harmful prompts refused,
+2 of 300 harmless, maths 1,222 of 1,319. The search started straight after on the same pod.
+Numbers in `results/phase-4-k2-horizon-7b.md`.
