@@ -702,3 +702,12 @@ improved; thinking tokens and budget hits. It only reads the trials: a seeded wi
 identical trials with and without it, and the setting stays out of the search's record. Built by a
 developer agent; a review passed with 3 minor points, fixed and re-reviewed to a pass; 767 tests
 pass. Alarms that act on the report (widening early, stopping) wait for evidence from real searches.
+
+### Phase 4: thinking that runs to the budget, to investigate after K2 (the user, 2026-10-16)
+
+By trial 72 the K2 search had slowed to about 900 s a trial: the sampler had moved to strong edits,
+and some thought to the 8,192 cap on 9-39 of 100 prompts (trial 69: 39, at KL 0.81, 23 minutes).
+The search's score can't see this and nothing stopped them (`findings.md`, Ideas). The user asked
+for it to be logged as a feature to investigate and then build once K2 is done: thinking at the cap
+as a constraint beside refusals, with an early stop, tested first on this search's journal. Not
+changed mid-search, as it would restart the search; finalists are measured as used either way.
