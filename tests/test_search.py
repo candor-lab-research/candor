@@ -2050,7 +2050,7 @@ def test_a_progress_report_names_each_kinds_best_its_edges_and_the_trials_since_
         timed(10, 30, 0.20, 1.0, 1.0, seconds=40.0, thinking=50.0, forced=2),
     ]
     found = search.Found({t.user_attrs["number"]: t for t in trials}, 99, {search.PER_LAYER: (0.8, 3.0)})
-    space = config.Search(report_every=4)
+    space = config.Search(report_every=4, startup_per_scope=4)
     report = search.progress(found, space, 10, 20, 3600.0, thinks=True)
     assert report == {
         "finished": 10,
@@ -2103,10 +2103,14 @@ def test_a_progress_report_names_each_kinds_best_its_edges_and_the_trials_since_
         "  thinking over the last 4: 119 tokens per answer, 4 of 8 answers reached the budget",
     ]
     assert "thinking" not in search.progress(found, space, 10, 20, 3600.0, thinks=False)
+    # Each kind's 5 trials are all its spread start, so no end is flagged yet, as the summary flags none.
+    start = search.progress(found, config.Search(report_every=4, startup_per_scope=5), 10, 20, 3600.0, False)
+    for scope in search.SCOPES:
+        assert start[scope]["best"]["at its floor"] == start[scope]["best"]["at its ceiling"] == []
 
 
-def test_a_search_reports_its_progress_every_report_every_trials_and_never_at_0(tiny, monkeypatch):
-    small(tiny)
+def test_a_search_reports_its_progress_every_report_every_trials_its_end_and_never_at_0(tiny, monkeypatch):
+    small(tiny, trials=3)
     refusing(monkeypatch, refusals=1)
     said = []
     tiny.report = said.append
@@ -2139,6 +2143,10 @@ def test_a_search_reports_its_progress_every_report_every_trials_and_never_at_0(
     last = json.loads(path.read_text())
     assert (last["finished"], last["over the last"]) == (4, 2)
     assert [last[scope]["trials"] for scope in search.SCOPES] == [2, 2]
+    tiny.settings.search.report_every = 4
+    Search(tiny).search(5)
+    assert reports()[-1].startswith("After 5 of 5 trials")
+    assert json.loads(path.read_text())["finished"] == 5
     assert not list(tiny.path("search").glob("*.building"))
 
 

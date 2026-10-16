@@ -467,9 +467,16 @@ def fewest_refused(found: Found, scope: str) -> Candidate | None:
 
 def best_so_far(found: Found, scope: str, cap: int) -> Candidate | None:
     """The scope's best trial so far, as the search's summary names it: the least KL of those to measure,
-    or with none within the cap, the one that refused fewest."""
+    or with none within the cap, the one that refused fewest. KL is compared as shown, so where two trials'
+    KL ties at KL_DIGITS this can differ from the one widening judges by, the least KL unrounded."""
     kept = to_measure(found, scope, cap)
     return kept[-1] if kept else fewest_refused(found, scope)
+
+
+def aimed(found: Found, scope: str, space: config.Search) -> bool:
+    """Whether the sampler has aimed any of the scope's trials yet. The spread start is a fixed grid, so
+    its trials pressing on an end of a range say nothing yet."""
+    return sum(scope_of(t.params) == scope for t in found.trials.values()) > space.startup_per_scope
 
 
 def _kind_progress(found: Found, space: config.Search, scope: str) -> dict[str, Any]:
@@ -485,14 +492,19 @@ def _kind_progress(found: Found, space: config.Search, scope: str) -> dict[str, 
     if best is None:
         return kind
     strengths = {name: value for name, value in best.params.items() if name.endswith(".strength")}
+    ends = (
+        {name: _ends(value, low, high) for name, value in strengths.items()}
+        if aimed(found, scope, space)
+        else {}
+    )
     kind["best"] = {
         "trial": best.trial,
         "refused": best.refusals,
         "KL": best.kl,
         "within the cap": best.refusals <= space.max_refusals,
         "strengths": strengths,
-        "at its floor": [name for name, value in strengths.items() if _ends(value, low, high)[0]],
-        "at its ceiling": [name for name, value in strengths.items() if _ends(value, low, high)[1]],
+        "at its floor": [name for name, (floor, _) in ends.items() if floor],
+        "at its ceiling": [name for name, (_, ceiling) in ends.items() if ceiling],
         "trials since it improved": sum(number > best.trial for number in numbers),
     }
     return kind
@@ -761,7 +773,7 @@ class Search:
                             else None
                         )
                         done = self._done(studies)
-                        if space.report_every and done % space.report_every == 0:
+                        if space.report_every and (done % space.report_every == 0 or done == target):
                             self._progress(studies, done, target, time.perf_counter() - began)
             found = _found(studies)
             seconds = [t.user_attrs["seconds"] for t in found.trials.values()]

@@ -1055,10 +1055,7 @@ def search_command(
         if fewest is None:
             console.print(f"  {scope}: no trial scored in full yet")
             continue
-        # The spread start is a fixed grid, so its trials' edges say nothing yet.
-        aimed = (
-            sum(search.scope_of(t.params) == scope for t in found.trials.values()) > space.startup_per_scope
-        )
+        aimed = search.aimed(found, scope, space)
         drawn_from = search.kind_space(space, found, scope)
         if scope in found.strength:
             low, high = drawn_from.strength
