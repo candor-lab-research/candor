@@ -103,15 +103,15 @@ top_k 1,000, min_p 0, budget 8192 (the user, 2026-10-16); 28 slots on an A40. K2
 thinking off, so candor refuses a thinking-off search for it. References: the unedited model and
 Avicennasis's heretic edit refused 48/64 as used in the pilot (7/50 on its card), too weak a bar to
 measure in full, and Uno-Uncensored is built on K2 with the Uno adapter merged in: the reference is
-the unedited model (the user, 2026-10-16). Strength starts at 0.8-1.5 and may widen to 5.0 (heretic's
-K2 run needed 4.5-4.6).
+the unedited model (the user, 2026-10-16). Strength 0.8-5.0 from the start (the user, 2026-10-16:
+22 trials at 0.8-1.5 all refused 88-100 of 100; heretic's K2 run needed 4.5-4.6).
 
 | Step | What | State |
 | --- | --- | --- |
 | 1-2 | Code: K2's thinking, `deployment.chat_template_kwargs`, the `--lora` list limit, `--outside` GGUF files, IFM's remote code read (no network, file or process access); the timed pilot: the run built, the unedited model and Avicennasis on 64 prompts a set, 4 search trials, low effort; the speed test; slots as run settings (`[slots]`), each search slot sized to its requests | Done 2026-10-16 (history, results file) |
 | 3 | The unedited model measured as used (Avicennasis dropped, the user) | Done 2026-10-16: 287/288 refused, maths 1,222/1,319, 41 min (results file) |
 | 4 | Decision rule from step 3, signed off by the user before finalists are measured | Drafted during the search |
-| 5 | Search, the best scored as used, finalists exported and measured in full | Running from 11:56 UTC 2026-10-16; quoted from its first trials |
+| 5 | Search, the best scored as used, finalists exported and measured in full | Running from 12:52 UTC 2026-10-16 at 0.8-5.0; about 139 s a trial so far; checkpoint at 300 trials |
 | 6 | The user's test in llama-server, then a release decision | |
 
 ## Not in this plan

@@ -679,3 +679,14 @@ K2's run rebuilt at the user's settings in 26 minutes and the unedited model was
 held-out prompt and maths question in 41 minutes at 28 slots: 287 of 288 harmful prompts refused,
 2 of 300 harmless, maths 1,222 of 1,319. The search started straight after on the same pod.
 Numbers in `results/phase-4-k2-horizon-7b.md`.
+
+### Phase 4, step 5: the search restarted with strength 0.8-5.0 (the user, 2026-10-16)
+
+The search started at 11:56 UTC over heretic's 0.8-1.5, to widen to 5.0 at each kind's 60th trial.
+All 22 trials it ran, at 0.8 to 1.47, refused 88-100 of 100 test prompts (KL 0.004-0.033), about
+139 s each, as heretic's own K2 run had refused 54 of 100 at a cap of 1.5. Waiting for the alarm
+would have spent about 100 more trials, 4 hours, on edits too weak to win. The user chose to
+restart at 12:52 UTC with strength 0.8-5.0 from the start, still able to widen to 0.5: starting
+wide is the change `findings.md` rates best supported, and the miss-rate test's worry about it
+(halving the hits when the best lies inside 0.8-1.5) doesn't apply where nothing inside it comes
+close. The 22 trials' journal is kept on the pod beside the run.
