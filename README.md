@@ -162,9 +162,10 @@ uv run candor serve runs/rude --trial 37                       # chat with it in
   the copy, so it is converted, quantised and checked alike), and `measure --outside NAME` measures it.
   `--outside` also takes one unquantised GGUF (F32, F16 or BF16), for an edit published only that way;
   a weight that differs from the run's only by rounding to the file's type counts as unedited.
-- `serve` runs the unedited model, or a trial's current export, in llama-server as candor measures
-  it: the run's KV cache type, chat template settings, sampling and thinking budget, with today's
-  date as apps write it. Before
+- `serve` runs the unedited model, or a trial's export, in llama-server as candor measures it: the
+  run's KV cache type, chat template settings, sampling and thinking budget, with today's date as
+  apps write it. A trial's export only has to be the one built from that trial's edit, so a machine
+  that only serves needs none of the model's full-size files. Before
   serving it shows the command, the settings and how the server's own template settings render a
   first message of Hello, so a thinking model's mode is plain before you chat. The chat page can
   override both the system message and the template settings, and remembers them, so serve says what

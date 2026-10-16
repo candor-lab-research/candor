@@ -305,10 +305,24 @@ def test_a_search_trial_is_measured_with_the_very_adapters_it_was_scored_with(ti
 def test_a_trial_that_doesnt_exist_is_named(tiny):
     with pytest.raises(RunError, match="has no search yet"):
         search.trial_edit(tiny, 1)
+    with pytest.raises(RunError, match="has no search yet"):
+        search.recorded_edit(tiny, 1)
     small(tiny)
     Search(tiny).search(1)
     with pytest.raises(RunError, match="the search has no finished trial 9"):
         search.trial_edit(tiny, 9)
+    with pytest.raises(RunError, match="the search has no finished trial 9"):
+        search.recorded_edit(tiny, 9)
+
+
+def test_a_trials_recorded_edit_is_its_edit_and_needs_no_gguf(tiny):
+    small(tiny)
+    Search(tiny).search(2)
+    edit = search.trial_edit(tiny, 2)
+    for leftover in tiny.path("gguf").iterdir():
+        leftover.unlink()
+    assert search.recorded_edit(tiny, 2).record() == edit.record()
+    assert not any(tiny.path("gguf").iterdir())
 
 
 def test_search_and_measure_a_trial_from_the_command_line(tiny):

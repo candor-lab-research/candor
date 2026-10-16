@@ -566,8 +566,15 @@ def trial_edit(run: Run, number: int) -> Edit:
             f"the search was made with different {' and '.join(changed)} from this run's now, so its "
             "trials can't be rebuilt as they were scored"
         )
+    return recorded_edit(run, number)
+
+
+def recorded_edit(run: Run, number: int) -> Edit:
+    """A finished trial's edit as the search recorded it, without checking it can still be rebuilt as
+    it was scored: enough to find its export, and it needs none of the model's full-size files."""
     found = load(run)
-    assert found is not None
+    if found is None:
+        raise RunError(f"{run.folder} has no search yet; run candor search")
     if number not in found.trials:
         raise RunError(f"the search has no finished trial {number}")
     return edit_from(found.trials[number].params, number, run.shape[1])

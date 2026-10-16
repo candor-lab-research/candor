@@ -102,21 +102,28 @@ def test_serve_shows_the_mode_then_serves_until_ctrl_c(tiny, stopped_by_ctrl_c):
     assert (folder / "private" / "logs" / "serve.log").exists()
 
 
-def test_serve_runs_a_trials_export_and_only_a_current_one(tiny, converting, stopped_by_ctrl_c):  # noqa: F811
+def test_serve_runs_a_trials_export_and_only_that_edits(tiny, converting, stopped_by_ctrl_c):  # noqa: F811
     folder = cli_folder(tiny)
     journal = write_journal(tiny.folder.parent / "heretic.jsonl", 0.25)
     runner = CliRunner(env={"COLUMNS": "250"})
     picked = ["--heretic", str(journal), "--trial", "1", "--port", str(free_port())]
     early = runner.invoke(app, ["serve", str(folder), *picked])
-    assert early.exit_code == 1 and "heretic-1 has no export matching this run" in early.output
+    assert early.exit_code == 1 and "heretic-1 has no export; run candor export first" in early.output
     assert runner.invoke(app, ["export", str(folder), *picked[:4]]).exit_code == 0
+    # A machine that only serves may not hold the run's full-size GGUF: serving the export needs none.
+    for leftover in (folder / "gguf").iterdir():
+        leftover.unlink()
     served = runner.invoke(app, ["serve", str(folder), *picked])
     assert served.exit_code == 0, served.output
-    assert (
-        f"Serving heretic-1: {folder / 'exports' / 'heretic-1' / 'cli-heretic-1-Q4_K_M.gguf'}"
-        in served.output
-    )
+    shipped = folder / "exports" / "heretic-1" / "cli-heretic-1-Q4_K_M.gguf"
+    assert f"Serving heretic-1: {shipped}" in served.output and "Converting" not in served.output
     assert "leave the system message empty, as measured" in served.output
+    assert not any((folder / "gguf").iterdir())
+    record = shipped.with_name(shipped.name + ".inputs.json")
+    made = json.loads(record.read_text())
+    record.write_text(json.dumps({**made, "row_norm": "pre" if made["row_norm"] != "pre" else "none"}))
+    other = runner.invoke(app, ["serve", str(folder), *picked])
+    assert other.exit_code == 1 and "heretic-1's export was made from another edit" in other.output
 
 
 def test_the_sample_shows_the_servers_own_template_settings(tiny, tmp_path, monkeypatch, stopped_by_ctrl_c):

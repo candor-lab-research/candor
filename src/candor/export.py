@@ -72,19 +72,22 @@ def deltas(run: Run, edit: "Edit") -> dict[str, tuple[Tensor, Tensor]]:
     return made
 
 
+def _path(run: Run, name: str) -> Path:
+    quantization = run.settings.deployment.quantization
+    return run.path("exports", name, f"{run.folder.name}-{name}-{quantization}.gguf")
+
+
 def _planned(run: Run, edit: "Edit") -> tuple[Path, dict[str, Any]]:
     """Where the edit's export goes and what it is built from."""
     run.gguf()
     run.edit_directions(edit.name, edit.direction_layer, edit.answering)
-    quantization = run.settings.deployment.quantization
-    path = run.path("exports", edit.name, f"{run.folder.name}-{edit.name}-{quantization}.gguf")
     inputs = {
         **run.adapter_inputs(edit.answering),
         "base": run.inputs["base"],
         "edit": edit.record(),
-        "quantization": quantization,
+        "quantization": run.settings.deployment.quantization,
     }
-    return path, inputs
+    return _path(run, edit.name), inputs
 
 
 def export(run: Run, edit: "Edit") -> Path:
@@ -215,16 +218,14 @@ def _planned_outside(run: Run, name: str, given: Path) -> tuple[Path, dict[str, 
         kind, weights = "file", [given]
     else:
         raise RunError(f"{given} isn't a folder or a GGUF file")
-    quantization = run.settings.deployment.quantization
-    path = run.path("exports", name, f"{run.folder.name}-{name}-{quantization}.gguf")
     inputs = {
         "targets": sorted(run.target_names.items()),
         "base": run.inputs["base"],
         kind: str(given),
         "weights": digest(sorted((p.name, p.stat().st_size, p.stat().st_mtime_ns) for p in weights)),
-        "quantization": quantization,
+        "quantization": run.settings.deployment.quantization,
     }
-    return path, inputs
+    return _path(run, name), inputs
 
 
 def _ship(run: Run, shipped: Path, inputs: dict[str, Any], changes: Mapping[str, Change]) -> Path:
@@ -342,3 +343,18 @@ def exported(run: Run, edit: "Edit") -> tuple[Path, dict[str, Any]]:
     if not run.current(path, inputs):
         raise RunError(f"{edit.name} has no export matching this run; run candor export first")
     return path, json.loads(record_of(path).read_text())
+
+
+def built(run: Run, edit: "Edit") -> Path:
+    """The edit's export as it was built, to chat with: made from this edit at the run's edit
+    settings, but not checked against the model, whose full-size files a machine that only serves may
+    not hold. Measurements take exported()."""
+    path = _path(run, edit.name)
+    record = record_of(path)
+    if not (path.exists() and record.exists()):
+        raise RunError(f"{edit.name} has no export; run candor export first")
+    made = json.loads(record.read_text())
+    wanted = json.loads(json.dumps({"edit": edit.record(), "row_norm": run.settings.edit.row_norm}))
+    if {key: made.get(key) for key in wanted} != wanted:
+        raise RunError(f"{edit.name}'s export was made from another edit; run candor export again")
+    return path

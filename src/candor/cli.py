@@ -861,10 +861,10 @@ def serve_command(
                         run.settings.deployment.think_close,
                     )
                 else:
-                    edit = search.trial_edit(run, trial)
+                    edit = search.recorded_edit(run, trial)
                 name = edit.name
                 with run.locked():
-                    model, _ = export.exported(run, edit)
+                    model = export.built(run, edit)
             limit = run.context_limit
             context = min(context, limit) if limit else context
             args = serve.arguments(run, model, port, context, mcp)
