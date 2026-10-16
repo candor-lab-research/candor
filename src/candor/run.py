@@ -53,8 +53,6 @@ CLOSED_SETS = ("harmful", "harmless", *KL_SETS, "harmful_test")
 ANSWERING = "_answering"
 # The names of a thinking model's adapter sets read where the answer starts begin with this.
 ANSWER_SETS = "answer-"
-# How many answers the unedited model thinks at once for thinking/; sampled answers can shift with it.
-THINKING_SLOTS = 8
 # A sampled answer's seed is never llama.cpp's "pick one at random".
 RANDOM_SEED = 2**32 - 1
 DATE_PROBE = "31 Dec 1999"
@@ -444,7 +442,12 @@ class Run:
         return base, quantized
 
     def server(
-        self, model: Path, adapters: Sequence[Path] = (), context_per_slot: int = 8192, parallel: int = 4
+        self,
+        model: Path,
+        adapters: Sequence[Path] = (),
+        context_per_slot: int = 8192,
+        parallel: int = 4,
+        slots_setting: str | None = None,
     ) -> LlamaServer:
         extra = self.cache_flags()
         if self.settings.sampling.temperature > 0:
@@ -455,7 +458,9 @@ class Run:
         self.path("logs").mkdir(exist_ok=True)
         binary = toolchain.binaries() / "llama-server"
         log = self.path("logs", "server.log")
-        return LlamaServer(binary, model, log, adapters, parallel, context_per_slot, extra=extra)
+        return LlamaServer(
+            binary, model, log, adapters, parallel, context_per_slot, extra=extra, slots_setting=slots_setting
+        )
 
     def cache_flags(self) -> list[str]:
         """llama-server's flags for the KV cache type the run deploys with."""
@@ -553,7 +558,7 @@ class Run:
             "ids": digest([ids[name] for name in KL_SETS]),
             "kv_cache": settings.deployment.kv_cache,
             "seed": settings.sampling.seed,
-            "slots": THINKING_SLOTS,
+            "slots": settings.slots.thinking,
             **answering(settings),
         }
 
@@ -592,7 +597,8 @@ class Run:
         self.report("Thinking with the unedited model, to read KL where its answers start")
         room = max(len(p) for name in KL_SETS for p in ids[name]) + self.thinking_room() + 8
         traces: dict[str, list[list[int] | None]] = {}
-        with self.server(quantized, context_per_slot=room, parallel=THINKING_SLOTS) as server:
+        slots, setting = settings.slots.thinking, "slots.thinking in candor.toml"
+        with self.server(quantized, context_per_slot=room, parallel=slots, slots_setting=setting) as server:
             thinking = self.thinking(server)
             assert thinking is not None
             end = server.token_of(thinking.end)

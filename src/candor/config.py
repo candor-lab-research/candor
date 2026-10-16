@@ -38,7 +38,18 @@ QUANTIZATIONS = {
     "F16": 16,
     "BF16": 16,
 }
-KV_CACHE_TYPES = {"f32", "f16", "bf16", "q8_0", "q5_1", "q5_0", "q4_1", "q4_0", "iq4_nl"}
+# Each KV cache type llama-server takes, with its bits per value.
+KV_CACHE_TYPES = {
+    "f32": 32,
+    "f16": 16,
+    "bf16": 16,
+    "q8_0": 8.5,
+    "q5_1": 6,
+    "q5_0": 5.5,
+    "q4_1": 5,
+    "q4_0": 4.5,
+    "iq4_nl": 4.5,
+}
 # The thinking budget init gives a model that thinks: the longest llama-server's chat page offers.
 THINKING_BUDGET = 8192
 RUN_NAME = re.compile(r"[A-Za-z0-9][A-Za-z0-9._-]*")
@@ -434,6 +445,28 @@ class Search(Section):
         return self.widest_strength != self.strength
 
 
+class Slots(Section):
+    thinking: StrictInt = Field(
+        default=8,
+        ge=1,
+        description="How many answers the unedited model thinks at once for thinking/, the thinking KL is "
+        "read after. Sampled thinking can shift with it, so changing it samples that thinking afresh.",
+    )
+    search: StrictInt | None = Field(
+        default=None,
+        ge=1,
+        description="How many answers the search, candor score and candor proxy work on at once. A search "
+        "is carried on only at the number it was made with. Unset: 32 for a model that thinks, whose "
+        "answers are long and come faster the more are made together, and 8 otherwise.",
+    )
+    measure: StrictInt = Field(
+        default=8,
+        ge=1,
+        description="How many answers candor measure works on at once, unless --slots gives another "
+        "number. A measurement at other than 8 has -slots-N in its name.",
+    )
+
+
 class RunConfig(Section):
     model: Model = Field(description="The model this run edits.")
     deployment: Deployment = Field(
@@ -453,6 +486,12 @@ class RunConfig(Section):
         description="How finished edits are measured, on prompts the search never sees.",
     )
     search: Search = Field(default_factory=Search, description="The search over edits.")
+    slots: Slots = Field(
+        default_factory=Slots,
+        description="How many answers llama-server works on at once. Each slot's context is held in the KV "
+        "cache, all of it from the server's start, so more slots need more GPU memory (candor inspect "
+        "shows how much a token takes); answers can shift slightly with the number.",
+    )
 
     @model_validator(mode="after")
     def _search_thinks(self) -> "RunConfig":

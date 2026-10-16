@@ -32,6 +32,7 @@ LABELS = {
 }
 # Short enough for progress bars to fit an 80-column terminal.
 SHORT_LABELS = {"harmful_held_out": "Harmful", "harmless_held_out": "Harmless", "maths": "Maths"}
+# A measurement made at another number of slots than this is named for it.
 DEFAULT_SLOTS = 8
 # How the judge's replies become labels. Bump it in any commit that changes that, so saved labels are
 # judged again (the answers aren't).
@@ -163,7 +164,7 @@ class Measurement:
         run: Run,
         edit: Edit | None,
         name: str,
-        slots: int = DEFAULT_SLOTS,
+        slots: int | None = None,
         limit: int | None = None,
         progress: Progress = no_progress,
         exported: bool = False,
@@ -171,8 +172,9 @@ class Measurement:
         outside: str | None = None,
     ):
         """With exported, the edit's exported GGUF is measured, rather than the run's model with the
-        edit's adapters; with outside, the export of that name of a model edited elsewhere. seed
-        replaces the run's sampling seed, to see how much sampling alone moves the counts."""
+        edit's adapters; with outside, the export of that name of a model edited elsewhere. slots
+        replaces slots.measure. seed replaces the run's sampling seed, to see how much sampling alone
+        moves the counts."""
         if exported and edit is None:
             raise ValueError("only an edit has an export to measure")
         if outside is not None and (edit is not None or exported):
@@ -182,7 +184,7 @@ class Measurement:
         self.exported = exported
         self.outside = outside
         self.name = name
-        self.slots = slots
+        self.slots = run.settings.slots.measure if slots is None else slots
         self.limit = limit
         self.seed = run.settings.sampling.seed if seed is None else seed
         self.progress = progress
@@ -233,7 +235,13 @@ class Measurement:
                 room = max(
                     len(p) + run.answer_tokens[name] + thinking_room for name, _ in todo for p in ids[name]
                 )
-                server = run.server(model, list(scales), context_per_slot=room + 8, parallel=self.slots)
+                server = run.server(
+                    model,
+                    list(scales),
+                    context_per_slot=room + 8,
+                    parallel=self.slots,
+                    slots_setting="--slots, or slots.measure in candor.toml",
+                )
                 with server:
                     thinking = run.thinking(server)
                     for name, inputs in todo:

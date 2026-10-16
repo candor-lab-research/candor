@@ -44,6 +44,7 @@ CHANGES = [
     (lambda s, m: setattr(s.sampling, "temperature", 0.7), "sampling"),
     (lambda s, m: setattr(s.search, "strength", (0.9, 1.4)), "search settings"),
     (lambda s, m: setattr(s.search, "widest_strength", (0.5, 2.0)), "search settings"),
+    (lambda s, m: setattr(s.slots, "search", 3), "slots"),
     (lambda s, m: m.setattr(search, "VERSION", search.VERSION + 1), "code"),
     (lambda s, m: m.setattr(optuna, "__version__", "9.9.9"), "Optuna"),
 ]
@@ -1486,9 +1487,11 @@ def test_kl_after_long_unedited_thinking_fits_the_scorers_context(tiny, monkeypa
     Search(tiny).search(1)
     longest = max(len(p) for p in tiny.kl_ids(tiny.prompt_ids(), "harmless_test"))
     answer_room = tiny.settings.scoring.answer_tokens + tiny.thinking_room(6)
-    assert longest > max(len(p) for p in tiny.prompt_ids()["harmful_test"]) + answer_room + 8
+    answering = max(len(p) for p in tiny.prompt_ids()["harmful_test"]) + answer_room
+    assert longest > answering + 8
     # llama-server pads a small model's slots, so the room asked for is checked rather than the answers.
-    assert asked[-1]["context_per_slot"] > longest
+    # A slot holds an answer or a KL read at a time, so it needs room for the larger, not both.
+    assert asked[-1]["context_per_slot"] == max(answering, longest + 1) + 8
 
 
 def test_the_unedited_thinking_is_sampled_as_deployed_each_prompt_with_its_seed(tiny, monkeypatch):
@@ -1511,6 +1514,27 @@ def test_the_unedited_thinking_is_sampled_as_deployed_each_prompt_with_its_seed(
         for name in run.KL_SETS
         for count in (1, 2, 3)
     ]
+
+
+def test_the_unedited_model_thinks_slots_thinking_at_once_recorded_as_before_at_8(tiny, monkeypatch):
+    thinks_through(monkeypatch)
+    thinking(tiny)
+    started = []
+    real = LlamaServer.start
+
+    def start(self, *args, **kwargs):
+        started.append((self.parallel, self.slots_setting))
+        return real(self, *args, **kwargs)
+
+    monkeypatch.setattr(LlamaServer, "start", start)
+    for slots in (8, 3):
+        tiny.settings.slots.thinking = slots
+        tiny.thinking_traces()
+        assert started[-1] == (slots, "slots.thinking in candor.toml")
+        record = run.record_of(tiny.path("thinking", f"{tiny.thinking_key()}.json"))
+        assert json.loads(record.read_text())["slots"] == slots
+    # Thinking sampled at other slots is kept apart, so going back finds the first again.
+    assert len(list(tiny.path("thinking").glob("*.json.inputs.json"))) == 2
 
 
 def test_run_reports_how_many_prompts_the_unedited_model_thought_through(tiny, monkeypatch):
@@ -1914,20 +1938,39 @@ def test_a_search_already_scored_with_thinking_off_starts_no_server_to_check_it(
 
 
 @pytest.mark.parametrize("thinks", [False, True])
-def test_scoring_answers_a_thinking_models_trials_many_at_once(tiny, monkeypatch, thinks):
+@pytest.mark.parametrize("slots", [None, 3])
+def test_scoring_answers_a_thinking_models_trials_many_at_once_unless_set(tiny, monkeypatch, thinks, slots):
     thinks_through(monkeypatch)
     started = []
-    real = run.Run.server
+    real = LlamaServer.start
 
-    def server(self, *args, **kwargs):
-        started.append(kwargs.get("parallel"))
+    def start(self, *args, **kwargs):
+        started.append((self.parallel, self.slots_setting))
         return real(self, *args, **kwargs)
 
-    monkeypatch.setattr(run.Run, "server", server)
+    monkeypatch.setattr(LlamaServer, "start", start)
+    small(thinking(tiny) if thinks else tiny)
+    tiny.settings.slots.search = slots
+    Search(tiny).search(1)
+    used = slots or (search.THINKING_MODEL_SLOTS if thinks else search.SLOTS)
+    # The scorer's server is the last one the search starts.
+    assert started[-1] == (used, "slots.search in candor.toml")
+    recorded = json.loads(tiny.path("search", "inputs.json").read_text())
+    # A model that doesn't think records its slots only where they aren't the number used before.
+    assert recorded.get("slots") == (used if thinks or slots else None)
+
+
+@pytest.mark.parametrize("thinks", [False, True])
+def test_a_search_carries_on_with_its_slots_set_to_the_number_it_used_unset(tiny, monkeypatch, thinks):
+    thinks_through(monkeypatch)
     small(thinking(tiny) if thinks else tiny)
     Search(tiny).search(1)
-    # The scorer's server is the last one the search starts.
-    assert started[-1] == (search.THINKING_MODEL_SLOTS if thinks else search.SLOTS)
+    tiny.settings.slots.search = search.THINKING_MODEL_SLOTS if thinks else search.SLOTS
+    Search(tiny).search(2)
+    assert len(finished(tiny)) == 2
+    tiny.settings.slots.search = 3
+    with pytest.raises(RunError, match="holds a search made with a different slots"):
+        Search(tiny).search(3)
 
 
 def test_a_full_edits_trials_each_restart_the_server_with_an_adapter_built_for_them(tiny, monkeypatch):

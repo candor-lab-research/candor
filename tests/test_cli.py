@@ -69,6 +69,49 @@ def test_inspect_passes_a_llama_style_model_and_warns_about_heretic(tmp_path):
     assert "fail" not in result.output
 
 
+KV = {"num_key_value_heads": 8, "head_dim": 128}
+# Qwen3.5's: a full-attention layer after every three linear-attention ones.
+HYBRID = (["linear_attention"] * 3 + ["full_attention"]) * 8
+
+
+@pytest.mark.parametrize(
+    ("text", "arch", "shown"),
+    [
+        (
+            {"num_hidden_layers": 28, **KV},
+            "llama",
+            "112 KiB a token at f16 (28 layers, 8 KV heads of 128), so 9,362 tokens of context per GiB",
+        ),
+        ({"num_hidden_layers": 36, **KV}, "k2-horizon", "144 KiB a token at f16 (36 layers"),
+        (
+            {"num_hidden_layers": 32, "num_key_value_heads": 4, "head_dim": 256, "layer_types": HYBRID},
+            "qwen35",
+            "32 KiB a token at f16 (8 full-attention layers of 32, 4 KV heads of 256), so 32,768 tokens",
+        ),
+        ({"num_hidden_layers": 28, "num_key_value_heads": 8}, "llama", None),
+        ({"num_hidden_layers": 28, **KV}, "gemma2", None),
+        (
+            {"num_hidden_layers": 4, **KV, "layer_types": ["sliding_attention", "full_attention"] * 2},
+            "qwen3",
+            None,
+        ),
+    ],
+)
+def test_inspect_shows_the_kv_cache_a_token_takes_only_where_it_knows_it(text, arch, shown):
+    rows = cli._kv_cache_rows({"architectures": ["X"], "text_config": text}, arch)
+    assert rows == ([("KV cache", "ok", rows[0][2])] if shown else [])
+    assert shown is None or rows[0][2].startswith(shown)
+
+
+def test_inspect_shows_the_kv_cache_of_a_model_whose_config_states_it(tmp_path):
+    stated = {"architectures": ["LlamaForCausalLM"], "hidden_size": HIDDEN, "num_hidden_layers": 2, **KV}
+    result = run(model_folder(tmp_path, config=stated))
+    assert result.exit_code == 0, result.output
+    assert "8 KiB a token at f16 (2 layers, 8 KV heads of 128), so 131,072 tokens of context per GiB" in (
+        " ".join(result.output.split())
+    )
+
+
 def test_inspect_fails_on_a_writer_it_cannot_place(tmp_path):
     result = run(model_folder(tmp_path, {"model.layers.1.mlp.mystery.weight": [HIDDEN, 128]}))
     assert result.exit_code == 1
@@ -350,6 +393,18 @@ def test_upgrade_pins_the_judge_it_adds(tmp_path):
     assert result.exit_code == 0, result.output
     assert "measure = { answer_tokens = 256" in result.output
     assert config.load(path.parent).measure.judge_revision == "Qwen/Qwen3Guard-Gen-0.6B@commit"
+
+
+def test_upgrade_adds_the_slots_at_the_numbers_used_before_they_were_settings(tmp_path):
+    assert init(tmp_path, model_folder(tmp_path)).exit_code == 0
+    path = tmp_path / "runs" / "first" / config.FILE
+    text = path.read_text()
+    path.write_text(text[: text.index("# How many answers llama-server works on at once.")])
+    result = upgrade(path.parent)
+    assert result.exit_code == 0, result.output
+    assert "slots = { thinking = 8, measure = 8 }" in result.output
+    assert config.load(path.parent).slots == config.Slots()
+    assert config.load(path.parent).slots.search is None
 
 
 def test_upgrade_with_nothing_missing_changes_nothing(tmp_path):

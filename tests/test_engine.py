@@ -159,6 +159,26 @@ def test_adapters_left_on_by_default_are_refused(files, monkeypatch, stop_later)
     assert s.process is not None and s.process.poll() is not None
 
 
+def test_a_slots_context_changes_neither_answers_nor_first_tokens(files):
+    # The search sizes each slot for the larger of what its requests need, as the size changes nothing.
+    # One slot, as several can batch requests differently from run to run.
+    folder, scales, _ = files
+    sampled = {"temperature": 1.0, "top_k": 0, "top_p": 1.0, "min_p": 0.0}
+    found = []
+    for context in (64, 1024):
+        with LlamaServer(
+            LLAMA_SERVER, folder / "base.gguf", folder / "server.log", list(scales), 1, context
+        ) as s:
+            found.append(
+                (
+                    s.generate(PROMPTS, 8, scales),
+                    s.generate(PROMPTS, 8, scales, None, sampled, run_seeds(0, len(PROMPTS))),
+                    s.top_logprobs(PROMPTS, 50, scales),
+                )
+            )
+    assert found[0] == found[1]
+
+
 def test_cached_prompts_are_not_shared_between_adapter_settings(files, references):
     folder, scales, _ = files
     base, merged = references
@@ -268,6 +288,48 @@ def test_a_server_that_ignores_terminate_is_killed(tmp_path):
             assert process.returncode == -signal.SIGKILL
         finally:
             process.kill()
+
+
+# What llama.cpp logs when a KV cache doesn't fit on the GPU, as K2-Horizon's search did on an A40.
+NO_ROOM = (
+    "ggml_backend_cuda_buffer_type_alloc_buffer: allocating 61488.00 MiB on device 0: cudaMalloc failed: "
+    "out of memory"
+)
+KV_FAILED = "llama_init_from_model: failed to initialize the context: failed to allocate buffer for kv cache"
+
+
+@pytest.mark.parametrize(
+    ("logged", "message"),
+    [
+        (
+            [NO_ROOM, "alloc_tensor_range: failed to allocate CUDA0 buffer of size 64474841088", KV_FAILED],
+            r"llama-server couldn't allocate its KV cache for 28 slots of 15,616 tokens: it asked for a "
+            r"buffer of 61,488 MiB, more GPU memory than it could get; lower slots\.search in candor\.toml$",
+        ),
+        (
+            ["ggml_metal_buffer_init: error: failed to allocate buffer, size =  4096.00 MiB", KV_FAILED],
+            "28 slots of 15,616 tokens: it asked for a buffer of 4,096 MiB",
+        ),
+        # The model's weights didn't fit, not its KV cache.
+        ([NO_ROOM, "llama_model_load: error loading model: unable to allocate CUDA0 buffer"], "code 1, see"),
+        ([], "exited with code 1, see"),
+    ],
+)
+def test_a_kv_cache_that_doesnt_fit_says_how_much_it_asked_for_and_what_to_lower(tmp_path, logged, message):
+    log = tmp_path / "server.log"
+    # An earlier start's failure, which this start mustn't take for its own.
+    log.write_text(f"{NO_ROOM}\n{KV_FAILED}\n")
+    binary = stub(tmp_path, "".join(f"echo '{line}'\n" for line in logged) + "exit 1")
+    s = LlamaServer(
+        binary,
+        tmp_path / "model.gguf",
+        log,
+        parallel=28,
+        context_per_slot=15616,
+        slots_setting="slots.search in candor.toml",
+    )
+    with pytest.raises(ServerError, match=message):
+        s.start()
 
 
 def test_thousands_of_adapters_fit_in_one_argument(tmp_path):

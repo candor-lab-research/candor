@@ -54,9 +54,9 @@ from .kernel import Kernel
 from .measure import Edit, edit_adapters
 from .run import ANSWER_SETS, ANSWERING, STAGES, Run, RunError, answering, digest, seeds
 
+# How many answers trials are scored at once when slots.search is unset. A thinking model's answers are
+# long, and the server makes more tokens a second the more it answers together.
 SLOTS = 8
-# A thinking model's trials are answered this many at once: its answers are long, and the server makes
-# more tokens a second the more it answers together.
 THINKING_MODEL_SLOTS = 32
 # Harmful prompts judged at a time, so a trial that can't win stops early. The server answers the
 # next ones meanwhile.
@@ -589,6 +589,14 @@ class Search:
         # Whether trials think, as the model is used: a thinking model's do unless scoring.thinking is off.
         self.thinks = bool(run.settings.deployment.think_close) and run.settings.scoring.thinking == "on"
 
+    @property
+    def slots(self) -> int:
+        """How many answers the server works on at once as edits are scored."""
+        settings = self.run.settings
+        if settings.slots.search is not None:
+            return settings.slots.search
+        return THINKING_MODEL_SLOTS if settings.deployment.think_close else SLOTS
+
     def search(
         self,
         target: int,
@@ -773,12 +781,15 @@ class Search:
         budget = settings.scoring.thinking_budget
         tokens = settings.scoring.closed_answer_tokens if closed else settings.scoring.answer_tokens
         answer = tokens if closed else tokens + run.thinking_room(budget)
-        read = [p for prompts in [harmful, harmless, *beside.values()] for p in prompts]
-        room = max(len(p) for p in read) + answer + 8
-        slots = THINKING_MODEL_SLOTS if settings.deployment.think_close else SLOTS
+        reads = [p for prompts in [harmless, *beside.values()] for p in prompts]
+        # A slot holds one request at a time: an answer to a harmful prompt, or a KL read of one token.
+        room = max(max(map(len, harmful)) + answer, max(map(len, reads)) + 1) + 8
+        slots, setting = self.slots, "slots.search in candor.toml"
 
         def server_with(adapters: list[Path]) -> LlamaServer:
-            return run.server(quantized, adapters, context_per_slot=room, parallel=slots)
+            return run.server(
+                quantized, adapters, context_per_slot=room, parallel=slots, slots_setting=setting
+            )
 
         guard = Guard(settings.measure.judge, settings.measure.judge_revision)
         scorer = None
@@ -829,8 +840,9 @@ class Search:
         if "thinking" in how:
             how["thinking"]["budget"] = settings.scoring.thinking_budget or how["thinking"]["budget"]
         # Only a search that may widen strength records how far, so searches made before it could still
-        # carry on.
+        # carry on; and a model that doesn't think records its slots only at another number than SLOTS.
         unrecorded = {"trials_per_scope"} | (set() if settings.search.widens() else {"widest_strength"})
+        slots = {"slots": self.slots} if settings.deployment.think_close or self.slots != SLOTS else {}
         return {
             "model file": self.run.inputs["quantized"],
             **_rebuilt_from(self.run),
@@ -841,6 +853,7 @@ class Search:
             "judge": [settings.measure.judge, settings.measure.judge_revision],
             "KV cache": settings.deployment.kv_cache,
             "search settings": settings.search.model_dump(exclude=unrecorded),
+            **slots,
             "Optuna": optuna.__version__,
         } | (self._thinking(harmless) if settings.deployment.think_close else {})
 
@@ -849,7 +862,6 @@ class Search:
         found: dict[str, Any] = {
             "unedited thinking": self.run.thinking_key(),
             "trials think": scoring.thinking,
-            "slots": THINKING_MODEL_SLOTS,
         }
         if scoring.thinking == "off":
             found["answer length with thinking off"] = scoring.closed_answer_tokens

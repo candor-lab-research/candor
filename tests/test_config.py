@@ -46,7 +46,7 @@ def test_every_setting_and_section_has_an_explanation():
         if (
             line.startswith("[")
             or (is_setting and not line.startswith("# "))
-            or line in ("# date =", "# revision =", "# judge_revision =")
+            or line in ("# date =", "# revision =", "# judge_revision =", "# search =")
         ):
             assert lines[i - 1].startswith("# ") and not lines[i - 1].endswith(" ="), (
                 f"{line!r} has no comment above it"
@@ -67,7 +67,12 @@ def test_a_misspelt_setting_is_named(tmp_path):
 
 
 @pytest.mark.parametrize(
-    ("line", "name"), [("startup_per_scope = 20", "search.startup_per_scope"), ("[search]", "search")]
+    ("line", "name"),
+    [
+        ("startup_per_scope = 20", "search.startup_per_scope"),
+        ("[search]", "search"),
+        ("thinking = 8", "slots.thinking"),
+    ],
 )
 def test_a_missing_setting_is_an_error_not_a_default(tmp_path, line, name):
     text = config.render(settings(), "h")
@@ -104,6 +109,9 @@ def test_a_missing_setting_is_an_error_not_a_default(tmp_path, line, name):
         ('row_norm = "pre"', 'row_norm = "post"', '"none", "pre" or "full"'),
         ("trust_remote_code = false", 'trust_remote_code = "no"', "valid boolean"),
         ('split = "train[:400]"', "split = 400", "valid string"),
+        ("thinking = 8", "thinking = 0", "greater than or equal to 1"),
+        ("# search =", "search = 0", "greater than or equal to 1"),
+        ("measure = 8", "measure = 2.5", "valid integer"),
     ],
 )
 def test_bad_values_are_explained(tmp_path, old, new, message):
@@ -283,6 +291,16 @@ def test_thinking_and_sampling_settings_read_back(tmp_path):
     written.scoring.thinking_budget = 1024
     folder = config.write(tmp_path, "run", written, "made by a test").parent
     assert config.load(folder) == written
+
+
+def test_slots_read_back_and_the_searchs_may_be_left_unset(tmp_path):
+    written = settings()
+    written.slots = config.Slots(thinking=4, search=28, measure=16)
+    folder = config.write(tmp_path, "run", written, "made by a test").parent
+    assert config.load(folder) == written
+    text = config.render(settings(), "h")
+    assert "[slots]\n" in text and "\n# search =\n" in text
+    assert config.load(write_text(tmp_path, text)).slots == config.Slots(thinking=8, search=None, measure=8)
 
 
 def test_scoring_with_thinking_off_needs_a_model_that_thinks():

@@ -4,6 +4,7 @@ Generated text is handed back to the caller. Nothing here prints or logs it.
 """
 
 import os
+import re
 import socket
 import subprocess
 import tempfile
@@ -23,6 +24,13 @@ LLAMA_CPP_RELEASE = "b11524"
 MAX_ARGUMENT = 128 * 1024
 # For requests that only read or change a setting; answers get _answering's longer limit.
 QUICK = httpx.Timeout(30, connect=5)
+# How llama.cpp logs a buffer the GPU had no room for, on CUDA and on Metal, and then that the buffer
+# was the KV cache.
+NO_ROOM = re.compile(
+    r"allocating ([\d.]+) MiB on device \d+: cudaMalloc failed: out of memory"
+    r"|error: failed to allocate buffer, size = +([\d.]+) MiB"
+)
+KV_CACHE_FAILED = "failed to allocate buffer for kv cache"
 
 
 class ServerError(RuntimeError):
@@ -77,6 +85,7 @@ class LlamaServer:
         context_per_slot: int = 1024,
         port: int | None = None,
         extra: Iterable[str] = (),
+        slots_setting: str | None = None,
     ):
         self.binary = binary.absolute()
         self.model = model.absolute()
@@ -89,6 +98,8 @@ class LlamaServer:
         self.links: tempfile.TemporaryDirectory | None = None
         self.parallel = parallel
         self.context = parallel * context_per_slot
+        # What sets the number of slots, named when their KV cache doesn't fit.
+        self.slots_setting = slots_setting
         self.port = port or _free_port()
         self.extra = list(extra)
         self.client = httpx.Client(base_url=f"http://127.0.0.1:{self.port}", timeout=QUICK)
@@ -123,8 +134,9 @@ class LlamaServer:
                     self._link()
                 args += ["--lora", self._lora_list(), "--lora-init-without-apply"]
             with self.log.open("ab") as log:
+                logged = log.tell()
                 self.process = subprocess.Popen(args, cwd=self.workdir, stdout=log, stderr=subprocess.STDOUT)
-            self._wait_until_ready(started, timeout)
+            self._wait_until_ready(started, timeout, logged)
             self._check_model()
             self._zero_default_scales()
         except BaseException:
@@ -153,16 +165,35 @@ class LlamaServer:
         for name, path in zip(names, self.adapters, strict=True):
             (self.workdir / name).symlink_to(path)
 
-    def _wait_until_ready(self, started: float, timeout: float) -> None:
+    def _wait_until_ready(self, started: float, timeout: float, logged: int) -> None:
         assert self.process is not None
         while True:
             if self.process.poll() is not None:
-                raise ServerError(f"llama-server exited with code {self.process.returncode}, see {self.log}")
+                raise self._exited(logged)
             if self._healthy():
                 return
             if time.perf_counter() - started > timeout:
                 raise ServerError(f"llama-server wasn't ready after {timeout:.0f} s, see {self.log}")
             time.sleep(0.5)
+
+    def _exited(self, logged: int) -> ServerError:
+        """Why the server exited as it started: that its KV cache didn't fit, when what it logged from
+        byte logged on says so, or else its exit code. Nothing else of the log is shown."""
+        assert self.process is not None
+        with self.log.open("rb") as log:
+            log.seek(logged)
+            text = log.read().decode(errors="replace")
+        found = NO_ROOM.findall(text)
+        if found and KV_CACHE_FAILED in text:
+            asked = float(found[-1][0] or found[-1][1])
+            fewer = f"; lower {self.slots_setting}" if self.slots_setting else ""
+            # CUDA asks for the whole cache at once, Metal for it in parts.
+            return ServerError(
+                f"llama-server couldn't allocate its KV cache for {self.parallel} slots of "
+                f"{self.context // self.parallel:,} tokens: it asked for a buffer of {asked:,.0f} MiB, more "
+                f"GPU memory than it could get{fewer}"
+            )
+        return ServerError(f"llama-server exited with code {self.process.returncode}, see {self.log}")
 
     def _check_model(self) -> None:
         served = self._call("GET", "/props").get("model_path", "")

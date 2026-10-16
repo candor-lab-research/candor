@@ -152,6 +152,34 @@ def test_measurements_with_other_settings_are_not_compared(tiny):
     assert measure.compare(first, Measurement(tiny, None, "again", slots=2).measure())
 
 
+def test_a_measurement_answers_slots_measure_at_once_unless_given_another_number(tiny, monkeypatch):
+    started = []
+    real = LlamaServer.start
+
+    def start(self, *args, **kwargs):
+        started.append((self.parallel, self.slots_setting))
+        return real(self, *args, **kwargs)
+
+    monkeypatch.setattr(LlamaServer, "start", start)
+    tiny.settings.slots.measure = 2
+    for name, slots in (("two", None), ("three", 3)):
+        Measurement(tiny, None, name, slots=slots, limit=1).measure()
+        assert started[-1] == (slots or 2, "--slots, or slots.measure in candor.toml")
+        record = run.record_of(tiny.path("measurements", name, "maths.json"))
+        assert json.loads(record.read_text())["slots"] == (slots or 2)
+
+
+def test_measure_names_a_measurement_for_slots_other_than_8_from_the_settings_or_the_command(tiny):
+    tiny.settings.slots.measure = 2
+    config.write(tiny.folder.parent, "cli", tiny.settings, "made by a test")
+    folder = tiny.folder.parent / "cli"
+    runner = CliRunner(env={"COLUMNS": "250"})
+    for given, name in (([], "base-slots-2-first-1"), (["--slots", "8"], "base-first-1")):
+        measured = runner.invoke(app, ["measure", str(folder), "--limit", "1", *given])
+        assert measured.exit_code == 0, measured.output
+        assert f"candor measure: {name}" in measured.output
+
+
 def test_prompts_that_changed_since_prompts_json_stop_the_measurement(tiny, monkeypatch):
     tiny.prompt_ids()
 

@@ -56,6 +56,10 @@ FAILED_CHECK, COULD_NOT_INSPECT = 1, 3
 # A search's progress takes its speed from every trial of the session, since trials take minutes and
 # rich otherwise looks back only 30 seconds.
 DAY = 24 * 3600
+# The llama.cpp architectures whose KV cache candor knows: a K and a V of each KV head in every layer
+# that attends to the whole context, and none in a linear-attention layer.
+KV_ARCHITECTURES = {"llama", "qwen2", "qwen3", "qwen35", "k2-horizon"}
+GIB = 2**30
 
 Row = tuple[str, str, str]
 
@@ -180,6 +184,31 @@ def _tokenizer_rows(model: str) -> list[Row]:
     return rows
 
 
+def _kv_cache_rows(model_config: dict[str, Any], arch: str | None) -> list[Row]:
+    """The KV cache a token of context takes at the cache type init gives a run, when candor knows how the
+    architecture lays it out and the config states the layer count, KV heads and head size; nothing
+    otherwise."""
+    text = source.text_config(model_config)
+    layers, heads, size = (text.get(key) for key in ("num_hidden_layers", "num_key_value_heads", "head_dim"))
+    if arch not in KV_ARCHITECTURES or not (
+        isinstance(layers, int) and isinstance(heads, int) and isinstance(size, int)
+    ):
+        return []
+    shape = f"{layers} layers"
+    if (kinds := text.get("layer_types")) is not None:
+        if not set(kinds) <= {"full_attention", "linear_attention"}:
+            return []
+        shape = f"{kinds.count('full_attention')} full-attention layers of {layers}"
+        layers = kinds.count("full_attention")
+    cache = config.Deployment().kv_cache
+    per_token = layers * 2 * heads * size * config.KV_CACHE_TYPES[cache] / 8
+    detail = (
+        f"{per_token / 1024:g} KiB a token at {cache} ({shape}, {heads} KV heads of {size}), so "
+        f"{int(GIB // per_token):,} tokens of context per GiB"
+    )
+    return [("KV cache", "ok", detail)]
+
+
 def _efforts(efforts: checks.Efforts) -> str:
     """The reasoning_effort values a chat template takes, as a sentence."""
     *values, last = [f'"{value}"' for value in efforts.values]
@@ -212,7 +241,12 @@ def _rows(model: str) -> list[Row]:
         rows.append(("Remote code", "ok", detail))
     else:
         rows.append(("Remote code", "ok", "none"))
-    return rows + _target_rows(model, hidden, layers, arch) + _tokenizer_rows(model)
+    return (
+        rows
+        + _target_rows(model, hidden, layers, arch)
+        + _tokenizer_rows(model)
+        + _kv_cache_rows(config, arch)
+    )
 
 
 def _resolved(model: str) -> str:
@@ -544,13 +578,14 @@ def measure_command(
         typer.Option(help="A trial of candor search, or with --heretic of heretic's, by the number shown."),
     ] = None,
     slots: Annotated[
-        int,
+        int | None,
         typer.Option(
             min=1,
-            help="How many answers llama-server works on at once. Results can shift slightly with it, so "
-            "measuring the same edit with two different numbers shows how much is noise.",
+            help="How many answers llama-server works on at once, instead of slots.measure. Results can "
+            "shift slightly with it, so measuring the same edit with two different numbers shows how much "
+            "is noise.",
         ),
-    ] = measure.DEFAULT_SLOTS,
+    ] = None,
     limit: Annotated[
         int | None,
         typer.Option(min=1, help="Only the first N prompts of each set, to try the measurement and time it."),
@@ -579,7 +614,8 @@ def measure_command(
         str | None,
         typer.Option(
             help="The measurement's name. By default base, trial-N or heretic-N, with -exported, "
-            "-slots-N, -seed-N and -first-N added when those are set."
+            f"-slots-N (at other than {measure.DEFAULT_SLOTS}), -seed-N and -first-N added when those are "
+            "set."
         ),
     ] = None,
 ) -> None:
@@ -594,11 +630,12 @@ def measure_command(
         raise typer.BadParameter("say which trial's export with --trial", param_hint="--exported")
     if outside is not None and (trial is not None or exported):
         raise typer.BadParameter("measures a model edited elsewhere on its own", param_hint="--outside")
-    name = name or _measurement_name(trial, heretic is not None, slots, limit, exported, seed, outside)
-    try:
-        config.check_run_name(name)
-    except config.ConfigError as error:
-        raise typer.BadParameter(str(error), param_hint="--name") from None
+    for given, hint in ((name, "--name"), (outside, "--outside")):
+        if given is not None:
+            try:
+                config.check_run_name(given)
+            except config.ConfigError as error:
+                raise typer.BadParameter(str(error), param_hint=hint) from None
 
     def report(message: str) -> None:
         console.print(f"[dim]{escape(message)}[/]")
@@ -625,6 +662,10 @@ def measure_command(
                 return done
 
             run = Run.open(folder, report)
+            slots = run.settings.slots.measure if slots is None else slots
+            name = name or _measurement_name(
+                trial, heretic is not None, slots, limit, exported, seed, outside
+            )
             edit = None
             if heretic is not None and trial is not None:
                 edit = measure.heretic_trial(
