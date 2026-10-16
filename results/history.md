@@ -690,3 +690,15 @@ restart at 12:52 UTC with strength 0.8-5.0 from the start, still able to widen t
 wide is the change `findings.md` rates best supported, and the miss-rate test's worry about it
 (halving the hits when the best lies inside 0.8-1.5) doesn't apply where nothing inside it comes
 close. The 22 trials' journal is kept on the pod beside the run.
+
+### candor: the search reports its progress (2026-10-16)
+
+After the user had to ask before the narrow K2 start was flagged, they asked that candor itself
+show whether a search is getting anywhere, so it can be stopped early when it isn't, with or
+without an assistant. Every `search.report_every` trials (25) the search prints, and writes to
+`search/progress.json`: trials done, pace and time left; per kind the best so far, its strengths
+against the range (ends flagged once the sampler aims), whether it widened, and trials since it
+improved; thinking tokens and budget hits. It only reads the trials: a seeded widening search draws
+identical trials with and without it, and the setting stays out of the search's record. Built by a
+developer agent; a review passed with 3 minor points, fixed and re-reviewed to a pass; 767 tests
+pass. Alarms that act on the report (widening early, stopping) wait for evidence from real searches.

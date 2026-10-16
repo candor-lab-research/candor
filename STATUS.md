@@ -108,7 +108,7 @@ the unedited model (the user, 2026-10-16). Strength 0.8-5.0 from the start (the 
 
 | Step | What | State |
 | --- | --- | --- |
-| 1-2 | Code: K2's thinking, `deployment.chat_template_kwargs`, the `--lora` list limit, `--outside` GGUF files, IFM's remote code read (no network, file or process access); the timed pilot: the run built, the unedited model and Avicennasis on 64 prompts a set, 4 search trials, low effort; the speed test; slots as run settings (`[slots]`), each search slot sized to its requests | Done 2026-10-16 (history, results file) |
+| 1-2 | Code: K2's thinking, `deployment.chat_template_kwargs`, the `--lora` list limit, `--outside` GGUF files, IFM's remote code read (no network, file or process access); the timed pilot: the run built, the unedited model and Avicennasis on 64 prompts a set, 4 search trials, low effort; the speed test; slots as run settings (`[slots]`), each search slot sized to its requests; the search's progress report every 25 trials | Done 2026-10-16 (history, results file) |
 | 3 | The unedited model measured as used (Avicennasis dropped, the user) | Done 2026-10-16: 287/288 refused, maths 1,222/1,319, 41 min (results file) |
 | 4 | Decision rule from step 3, signed off by the user before finalists are measured | Drafted during the search |
 | 5 | Search, the best scored as used, finalists exported and measured in full | Running from 12:52 UTC 2026-10-16 at 0.8-5.0; about 139 s a trial so far; checkpoint at 300 trials |
