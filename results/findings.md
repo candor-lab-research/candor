@@ -61,6 +61,8 @@ entry is corrected rather than deleted when later evidence changes it.
   been cut before any reply; candor reads the final answer after up to 8,192 and counts an
   unfinished one against the edit. Not comparable until measured the same way.
   (`evidence-2026-10-14/ara-evidence.md`)
+  [Measured: the user, outside candor, 400 prompts, settings not recorded] Trial 175 also refused
+  0 of 400, so the two tie on that count; trohrbaugh's edit is still unmeasured as used.
 - **Directions read at the thinking start mostly fail, but one gave the best edit.** [Measured:
   Qwen3.5-9B] 71-100 refused of 100 either way on 12 edits; trial 175 (one layer, layer 15) refused 0
   of 100 test prompts with two seeds and 0 of 288 held-out as used, at KL 0.059. [Published] They
