@@ -24,11 +24,25 @@ unknown. Nothing here is in the plan until agreed. Ideas that change the method 
   come from the model's own weights, a refusal edit to those weights should carry over, though the
   adapter was trained on the unedited model, so it may propose fewer accepted tokens on edited
   answers (less speed, not different answers).
-- **Unknown:** which engines run it (none is named; llama.cpp support would be needed for candor's
-  measurements and your Mac); the speed on a Mac; how much an edit lowers the speedup. The full
-  evaluation suite is "to be released soon".
-- **Related:** geantendormi's "K2-Horizon-7B-Uno-Uncensored" may be built on it (its name, and its
-  card mentions merging LoRA weights); unverified.
+- **What building it would take** (researched 2026-10-16, `evidence-2026-10-16/uno-build.md`):
+  - [Published, read in code] One step is a draft pass (the base plus a rank-128 LoRA on all 7
+    projections, 36 layers) and a verify pass on the base by rejection sampling: lossless under
+    temperature and top_p, and still lossless on edited weights, since the edited model verifies.
+  - [Published] Engines: IFM's own (Python, no server, no per-request seed), SGLang (needs
+    FlashAttention 3, Hopper only), a vLLM PR not merged; nothing in llama.cpp, whose speculative
+    decoding always drafts in a separate context. The A40 gets only the slower sampler: about 1.8-2.2
+    tokens per pass, not 2.71.
+  - [Published] Gain shrinks with concurrency: K2 2.2x at 1 stream, 1.47x at 64 (H200); an
+    independent vLLM build on an RTX 3090 (the A40's chip family) ran 0.72-0.77x of plain decoding
+    at 16 streams. candor scores at 32.
+  - [Hypothesis] In llama-server at 32 slots on an A40, about 1.0-1.3x. A llama.cpp build is about
+    3-4 weeks on a fork; its clearest gain is single-stream, as on the Mac.
+  - A quick check exists: IFM's engine on a pod for 30-60 min at 32 sequences, block sizes 1, 4
+    and 8, speeds only.
+- **Related:** [Published, its card] geantendormi's "K2-Horizon-7B-Uno-Uncensored" merged the Uno
+  adapter into the base weights before its edit, so it is a different model from K2-Horizon-7B,
+  and a weak reference. K2-Horizon-7B's main gained a merged "anti-doom-loop" LoRA on 2026-10-01,
+  after IFM's GGUFs (2026-09-22) and the Uno adapter's base (2026-09-03).
 
 ## From the arXiv research of 2026-10-15
 
