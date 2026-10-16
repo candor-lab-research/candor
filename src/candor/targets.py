@@ -39,6 +39,11 @@ ATTENTION = {"self_attn", "attn", "attention", "linear_attn", "mixer", "conv"}
 MLP = {"mlp", "feed_forward", "ffn", "moe", "block_sparse_moe", "shared_mlp"}
 OTHER_STACKS = ("vision", "visual", "audio", "encoder", "mtp")
 LAYER = re.compile(r"^(.*?layers)\.(\d+)\.(.+)$")
+# The llama.cpp architectures whose memory candor knows: a K and a V of each KV head for every token of
+# context in each layer that attends to all of it, and in each of Qwen3.5's linear-attention layers a
+# state per slot that doesn't grow with the context.
+KV_ARCHITECTURES = {"llama", "qwen2", "qwen3", "qwen35", "k2-horizon"}
+FULL, LINEAR = "full_attention", "linear_attention"
 
 
 @dataclass(frozen=True)
@@ -177,3 +182,53 @@ def gguf_name(writer: Writer, arch: str, layers: int) -> str | None:
     module = writer.name.removesuffix(".weight").replace("language_model.", "")
     mapped = _name_map(arch, layers).get_name(module)
     return f"{mapped}.weight" if mapped else None
+
+
+def _layer_kinds(text: dict[str, Any]) -> list[str] | None:
+    """Each layer's kind of attention, every layer's full without layer_types; None for a kind candor
+    doesn't know."""
+    kinds = text.get("layer_types")
+    if kinds is None:
+        layers = text.get("num_hidden_layers")
+        return [FULL] * layers if isinstance(layers, int) else None
+    return kinds if set(kinds) <= {FULL, LINEAR} else None
+
+
+def kv_bytes_per_token(config: dict[str, Any], arch: str | None, bits: float) -> float | None:
+    """The KV cache a token of context takes at this many bits a value, where candor knows how the
+    architecture lays it out and the config gives its sizes, the head size and KV heads defaulting as in
+    transformers and llama.cpp's converter. None otherwise, or for a model no layer of which has one."""
+    text = config.get("text_config", config)
+    heads, hidden = text.get("num_attention_heads"), text.get("hidden_size")
+    kv_heads = text.get("num_key_value_heads", heads)
+    size = text.get("head_dim") or (hidden // heads if isinstance(hidden, int) and heads else None)
+    kinds = _layer_kinds(text)
+    if arch not in KV_ARCHITECTURES or kinds is None:
+        return None
+    if not (isinstance(kv_heads, int) and isinstance(size, int)):
+        return None
+    return kinds.count(FULL) * 2 * kv_heads * size * bits / 8 or None
+
+
+def recurrent_bytes_per_slot(config: dict[str, Any], arch: str | None) -> int | None:
+    """The state each slot holds in Qwen3.5's linear-attention layers, the same whatever its context, in
+    f32 whatever the KV cache type, sized as llama.cpp's n_embd_r and n_embd_s size it from the
+    converter's settings. 0 for a model with no such layer; None where the config doesn't give its sizes."""
+    text = config.get("text_config", config)
+    kinds = _layer_kinds(text) or []
+    if arch != "qwen35" or LINEAR not in kinds:
+        return 0
+    names = (
+        "linear_conv_kernel_dim",
+        "linear_key_head_dim",
+        "linear_num_key_heads",
+        "linear_value_head_dim",
+        "linear_num_value_heads",
+    )
+    sizes = [text.get(name) for name in names]
+    if not all(isinstance(n, int) for n in sizes):
+        return None
+    kernel, key_size, key_heads, value_size, value_heads = sizes
+    inner = value_size * value_heads
+    conv = (kernel - 1) * (inner + 2 * key_heads * key_size)
+    return kinds.count(LINEAR) * (conv + key_size * inner) * 4

@@ -52,6 +52,12 @@ KV_CACHE_TYPES = {
 }
 # The thinking budget init gives a model that thinks: the longest llama-server's chat page offers.
 THINKING_BUDGET = 8192
+# How many answers llama-server works on at once unless [slots] says otherwise. A thinking model's
+# answers are long, and the server makes more tokens a second the more it answers together.
+THINKING_SLOTS = 8
+SEARCH_SLOTS = 8
+THINKING_MODEL_SEARCH_SLOTS = 32
+MEASURE_SLOTS = 8
 RUN_NAME = re.compile(r"[A-Za-z0-9][A-Za-z0-9._-]*")
 BARE_KEY = re.compile(r"[A-Za-z0-9_-]+")
 END_TAG = re.compile(r"\s*</[^<>\s]+>\s*")
@@ -447,7 +453,7 @@ class Search(Section):
 
 class Slots(Section):
     thinking: StrictInt = Field(
-        default=8,
+        default=THINKING_SLOTS,
         ge=1,
         description="How many answers the unedited model thinks at once for thinking/, the thinking KL is "
         "read after. Sampled thinking can shift with it, so changing it samples that thinking afresh.",
@@ -456,14 +462,15 @@ class Slots(Section):
         default=None,
         ge=1,
         description="How many answers the search, candor score and candor proxy work on at once. A search "
-        "is carried on only at the number it was made with. Unset: 32 for a model that thinks, whose "
-        "answers are long and come faster the more are made together, and 8 otherwise.",
+        f"is carried on only at the number it was made with. Unset: {THINKING_MODEL_SEARCH_SLOTS} for a "
+        "model that thinks, whose answers are long and come faster the more are made together, and "
+        f"{SEARCH_SLOTS} otherwise.",
     )
     measure: StrictInt = Field(
-        default=8,
+        default=MEASURE_SLOTS,
         ge=1,
         description="How many answers candor measure works on at once, unless --slots gives another "
-        "number. A measurement at other than 8 has -slots-N in its name.",
+        f"number. A measurement at other than {MEASURE_SLOTS} has -slots-N in its name.",
     )
 
 

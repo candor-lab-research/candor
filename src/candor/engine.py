@@ -25,12 +25,12 @@ MAX_ARGUMENT = 128 * 1024
 # For requests that only read or change a setting; answers get _answering's longer limit.
 QUICK = httpx.Timeout(30, connect=5)
 # How llama.cpp logs a buffer the GPU had no room for, on CUDA and on Metal, and then that the buffer
-# was the KV cache.
+# was the KV cache, or a hybrid model's recurrent state.
 NO_ROOM = re.compile(
     r"allocating ([\d.]+) MiB on device \d+: cudaMalloc failed: out of memory"
     r"|error: failed to allocate buffer, size = +([\d.]+) MiB"
 )
-KV_CACHE_FAILED = "failed to allocate buffer for kv cache"
+CACHE_FAILED = re.compile(r"failed to allocate buffer for (kv|rs) cache")
 
 
 class ServerError(RuntimeError):
@@ -177,21 +177,27 @@ class LlamaServer:
             time.sleep(0.5)
 
     def _exited(self, logged: int) -> ServerError:
-        """Why the server exited as it started: that its KV cache didn't fit, when what it logged from
-        byte logged on says so, or else its exit code. Nothing else of the log is shown."""
+        """Why the server exited as it started: that its KV cache or recurrent state didn't fit, when what
+        it logged from byte logged on says so, or else its exit code. Nothing else of the log is shown."""
         assert self.process is not None
         with self.log.open("rb") as log:
             log.seek(logged)
             text = log.read().decode(errors="replace")
-        found = NO_ROOM.findall(text)
-        if found and KV_CACHE_FAILED in text:
+        failed = CACHE_FAILED.search(text)
+        # The buffer that failed is the last one logged before the cache's failure.
+        found = NO_ROOM.findall(text, 0, failed.start()) if failed else []
+        if failed and found:
             asked = float(found[-1][0] or found[-1][1])
             fewer = f"; lower {self.slots_setting}" if self.slots_setting else ""
+            cache = (
+                f"KV cache for {self.parallel} slots of {self.context // self.parallel:,} tokens"
+                if failed[1] == "kv"
+                else f"recurrent state for {self.parallel} slots"
+            )
             # CUDA asks for the whole cache at once, Metal for it in parts.
             return ServerError(
-                f"llama-server couldn't allocate its KV cache for {self.parallel} slots of "
-                f"{self.context // self.parallel:,} tokens: it asked for a buffer of {asked:,.0f} MiB, more "
-                f"GPU memory than it could get{fewer}"
+                f"llama-server couldn't allocate its {cache}: it asked for a buffer of {asked:,.0f} MiB, "
+                f"more GPU memory than it could get{fewer}"
             )
         return ServerError(f"llama-server exited with code {self.process.returncode}, see {self.log}")
 

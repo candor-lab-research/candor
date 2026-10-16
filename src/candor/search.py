@@ -54,10 +54,6 @@ from .kernel import Kernel
 from .measure import Edit, edit_adapters
 from .run import ANSWER_SETS, ANSWERING, STAGES, Run, RunError, answering, digest, seeds
 
-# How many answers trials are scored at once when slots.search is unset. A thinking model's answers are
-# long, and the server makes more tokens a second the more it answers together.
-SLOTS = 8
-THINKING_MODEL_SLOTS = 32
 # Harmful prompts judged at a time, so a trial that can't win stops early. The server answers the
 # next ones meanwhile.
 CHUNK = 8
@@ -595,7 +591,7 @@ class Search:
         settings = self.run.settings
         if settings.slots.search is not None:
             return settings.slots.search
-        return THINKING_MODEL_SLOTS if settings.deployment.think_close else SLOTS
+        return config.THINKING_MODEL_SEARCH_SLOTS if settings.deployment.think_close else config.SEARCH_SLOTS
 
     def search(
         self,
@@ -840,9 +836,11 @@ class Search:
         if "thinking" in how:
             how["thinking"]["budget"] = settings.scoring.thinking_budget or how["thinking"]["budget"]
         # Only a search that may widen strength records how far, so searches made before it could still
-        # carry on; and a model that doesn't think records its slots only at another number than SLOTS.
+        # carry on; and a model that doesn't think records its slots only at another number than the
+        # default.
         unrecorded = {"trials_per_scope"} | (set() if settings.search.widens() else {"widest_strength"})
-        slots = {"slots": self.slots} if settings.deployment.think_close or self.slots != SLOTS else {}
+        recorded = settings.deployment.think_close or self.slots != config.SEARCH_SLOTS
+        slots = {"slots": self.slots} if recorded else {}
         return {
             "model file": self.run.inputs["quantized"],
             **_rebuilt_from(self.run),

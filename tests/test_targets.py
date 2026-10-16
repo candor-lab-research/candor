@@ -1,7 +1,15 @@
 import gguf
 import pytest
 
-from candor.targets import Writer, _converter_table, find_targets, gguf_architecture, gguf_name
+from candor.targets import (
+    Writer,
+    _converter_table,
+    find_targets,
+    gguf_architecture,
+    gguf_name,
+    kv_bytes_per_token,
+    recurrent_bytes_per_slot,
+)
 
 HIDDEN = 64
 
@@ -171,3 +179,55 @@ def test_gguf_architecture_prefers_text_config_like_the_converter():
         "text_config": {"architectures": ["LlamaForCausalLM"]},
     }
     assert gguf_architecture(exception) != "llama"
+
+
+# Qwen3.5-9B's sizes: a full-attention layer after every three linear-attention ones.
+QWEN35 = {
+    "num_hidden_layers": 32,
+    "num_attention_heads": 16,
+    "num_key_value_heads": 4,
+    "head_dim": 256,
+    "hidden_size": 4096,
+    "layer_types": (["linear_attention"] * 3 + ["full_attention"]) * 8,
+    "linear_conv_kernel_dim": 4,
+    "linear_key_head_dim": 128,
+    "linear_num_key_heads": 16,
+    "linear_value_head_dim": 128,
+    "linear_num_value_heads": 32,
+}
+# rude-llama's, a Llama 3.2 3B.
+LLAMA_3B = {"num_hidden_layers": 28, "num_attention_heads": 24, "num_key_value_heads": 8, "hidden_size": 3072}
+SMOLLM2 = {"num_hidden_layers": 30, "num_attention_heads": 9, "num_key_value_heads": 3, "hidden_size": 576}
+
+
+@pytest.mark.parametrize(
+    ("text", "arch", "per_token"),
+    [
+        # As llama.cpp's own log gives them: rude-llama's 112 KiB, Qwen3.5-9B's 32 and K2-Horizon's 144.
+        (LLAMA_3B | {"head_dim": 128}, "llama", 112 * 1024),
+        (QWEN35, "qwen35", 32 * 1024),
+        ({"num_hidden_layers": 36, "num_key_value_heads": 8, "head_dim": 128}, "k2-horizon", 144 * 1024),
+        # Without head_dim, as most Llama and Qwen2 configs, it is the hidden size over the heads.
+        (LLAMA_3B, "llama", 112 * 1024),
+        (SMOLLM2, "llama", 30 * 2 * 3 * 64 * 2),
+        # Without num_key_value_heads every head has its own K and V.
+        ({"num_hidden_layers": 2, "num_attention_heads": 4, "hidden_size": 64}, "qwen2", 2 * 2 * 4 * 16 * 2),
+        (LLAMA_3B | {"head_dim": 128}, "gemma2", None),
+        ({"num_hidden_layers": 28, "num_key_value_heads": 8}, "llama", None),
+        (QWEN35 | {"layer_types": ["sliding_attention", "full_attention"] * 16}, "qwen35", None),
+        # No layer with a KV cache.
+        (QWEN35 | {"layer_types": ["linear_attention"] * 32}, "qwen35", None),
+    ],
+)
+def test_the_kv_cache_a_token_takes_is_known_only_for_layouts_candor_knows(text, arch, per_token):
+    assert kv_bytes_per_token({"text_config": text}, arch, 16) == per_token
+    if per_token:
+        assert kv_bytes_per_token(text, arch, 8.5) == per_token * 8.5 / 16
+
+
+def test_a_hybrids_linear_attention_layers_hold_a_state_for_each_slot():
+    # 50.25 MiB, as llama.cpp's own log gives Qwen3.5-9B's for one slot.
+    assert recurrent_bytes_per_slot({"text_config": QWEN35}, "qwen35") == 24 * (3 * 8192 + 128 * 4096) * 4
+    assert recurrent_bytes_per_slot(QWEN35, "qwen35") == 50.25 * 2**20
+    assert recurrent_bytes_per_slot(LLAMA_3B, "llama") == 0
+    assert recurrent_bytes_per_slot(QWEN35 | {"linear_num_value_heads": None}, "qwen35") is None

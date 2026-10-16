@@ -56,9 +56,6 @@ FAILED_CHECK, COULD_NOT_INSPECT = 1, 3
 # A search's progress takes its speed from every trial of the session, since trials take minutes and
 # rich otherwise looks back only 30 seconds.
 DAY = 24 * 3600
-# The llama.cpp architectures whose KV cache candor knows: a K and a V of each KV head in every layer
-# that attends to the whole context, and none in a linear-attention layer.
-KV_ARCHITECTURES = {"llama", "qwen2", "qwen3", "qwen35", "k2-horizon"}
 GIB = 2**30
 
 Row = tuple[str, str, str]
@@ -185,27 +182,18 @@ def _tokenizer_rows(model: str) -> list[Row]:
 
 
 def _kv_cache_rows(model_config: dict[str, Any], arch: str | None) -> list[Row]:
-    """The KV cache a token of context takes at the cache type init gives a run, when candor knows how the
-    architecture lays it out and the config states the layer count, KV heads and head size; nothing
-    otherwise."""
-    text = source.text_config(model_config)
-    layers, heads, size = (text.get(key) for key in ("num_hidden_layers", "num_key_value_heads", "head_dim"))
-    if arch not in KV_ARCHITECTURES or not (
-        isinstance(layers, int) and isinstance(heads, int) and isinstance(size, int)
-    ):
-        return []
-    shape = f"{layers} layers"
-    if (kinds := text.get("layer_types")) is not None:
-        if not set(kinds) <= {"full_attention", "linear_attention"}:
-            return []
-        shape = f"{kinds.count('full_attention')} full-attention layers of {layers}"
-        layers = kinds.count("full_attention")
+    """The memory a token of context and a slot take, at the KV cache type init gives a run, where candor
+    knows them; nothing otherwise."""
     cache = config.Deployment().kv_cache
-    per_token = layers * 2 * heads * size * config.KV_CACHE_TYPES[cache] / 8
+    per_token = targets.kv_bytes_per_token(model_config, arch, config.KV_CACHE_TYPES[cache])
+    per_slot = targets.recurrent_bytes_per_slot(model_config, arch)
+    if per_token is None or per_slot is None:
+        return []
     detail = (
-        f"{per_token / 1024:g} KiB a token at {cache} ({shape}, {heads} KV heads of {size}), so "
-        f"{int(GIB // per_token):,} tokens of context per GiB"
+        f"{per_token / 1024:g} KiB a token at {cache}, so {int(GIB // per_token):,} tokens of context per GiB"
     )
+    if per_slot:
+        detail += f", plus {per_slot / 2**20:.2f} MiB a slot for its linear-attention layers' state"
     return [("KV cache", "ok", detail)]
 
 
@@ -554,7 +542,7 @@ def _measurement_name(
 ) -> str:
     name = "base" if trial is None else _edit_name(trial, heretic) + ("-exported" if exported else "")
     name = outside or name
-    if slots != measure.DEFAULT_SLOTS:
+    if slots != config.MEASURE_SLOTS:
         name += f"-slots-{slots}"
     if seed is not None:
         name += f"-seed-{seed}"
@@ -614,7 +602,7 @@ def measure_command(
         str | None,
         typer.Option(
             help="The measurement's name. By default base, trial-N or heretic-N, with -exported, "
-            f"-slots-N (at other than {measure.DEFAULT_SLOTS}), -seed-N and -first-N added when those are "
+            f"-slots-N (at other than {config.MEASURE_SLOTS}), -seed-N and -first-N added when those are "
             "set."
         ),
     ] = None,

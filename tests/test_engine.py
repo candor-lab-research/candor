@@ -310,6 +310,14 @@ KV_FAILED = "llama_init_from_model: failed to initialize the context: failed to 
             ["ggml_metal_buffer_init: error: failed to allocate buffer, size =  4096.00 MiB", KV_FAILED],
             "28 slots of 15,616 tokens: it asked for a buffer of 4,096 MiB",
         ),
+        # A hybrid model's recurrent state, which doesn't grow with the context.
+        (
+            [NO_ROOM.replace("61488.00", "1608.00"), KV_FAILED.replace("kv cache", "rs cache")],
+            r"couldn't allocate its recurrent state for 28 slots: it asked for a buffer of 1,608 MiB, more "
+            r"GPU memory than it could get; lower slots\.search",
+        ),
+        # A buffer that failed after the cache is not the cache's.
+        ([NO_ROOM, KV_FAILED, NO_ROOM.replace("61488.00", "512.00")], "asked for a buffer of 61,488 MiB"),
         # The model's weights didn't fit, not its KV cache.
         ([NO_ROOM, "llama_model_load: error loading model: unable to allocate CUDA0 buffer"], "code 1, see"),
         ([], "exited with code 1, see"),

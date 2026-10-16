@@ -1474,20 +1474,29 @@ def test_a_search_whose_unedited_thinking_fails_leaves_nothing_to_move_aside(tin
     assert len(finished(tiny)) == 1
 
 
-def test_kl_after_long_unedited_thinking_fits_the_scorers_context(tiny, monkeypatch):
+@pytest.mark.parametrize("thinks", ["on", "off"])
+def test_kl_after_long_unedited_thinking_fits_the_scorers_context(tiny, monkeypatch, thinks):
     # The deployment's budget, which the unedited model thinks to, is longer than the search's.
     # Long enough to need more than the room for a harmful prompt's answer, short enough for the tiny
     # model's 256 tokens.
     thinks_through(monkeypatch, words=15)
     small(thinking(tiny, budget=64))
     tiny.settings.scoring.thinking_budget = 6
+    tiny.settings.scoring.thinking = thinks
+    tiny.settings.scoring.closed_answer_tokens = 4
     asked = []
     real = run.Run.server
     monkeypatch.setattr(run.Run, "server", lambda self, *a, **k: asked.append(k) or real(self, *a, **k))
     Search(tiny).search(1)
-    longest = max(len(p) for p in tiny.kl_ids(tiny.prompt_ids(), "harmless_test"))
-    answer_room = tiny.settings.scoring.answer_tokens + tiny.thinking_room(6)
-    answering = max(len(p) for p in tiny.prompt_ids()["harmful_test"]) + answer_room
+    ids = tiny.prompt_ids()
+    longest = max(len(p) for p in tiny.kl_ids(ids, "harmless_test"))
+    if thinks == "on":
+        answering = (
+            max(map(len, ids["harmful_test"])) + tiny.settings.scoring.answer_tokens + tiny.thinking_room(6)
+        )
+    else:
+        # Answers after an empty thinking block, as long as scoring.closed_answer_tokens.
+        answering = max(map(len, ids["harmful_test" + run.ANSWERING])) + 4
     assert longest > answering + 8
     # llama-server pads a small model's slots, so the room asked for is checked rather than the answers.
     # A slot holds an answer or a KL read at a time, so it needs room for the larger, not both.
@@ -1934,7 +1943,7 @@ def test_a_search_already_scored_with_thinking_off_starts_no_server_to_check_it(
     Search(tiny).search(2)
     assert started == []
     Search(tiny).score([Edit("e", None, {"mlp": Kernel(1.0, 1.0, 0.0, 0.5)})])
-    assert started == [search.THINKING_MODEL_SLOTS]
+    assert started == [config.THINKING_MODEL_SEARCH_SLOTS]
 
 
 @pytest.mark.parametrize("thinks", [False, True])
@@ -1952,7 +1961,7 @@ def test_scoring_answers_a_thinking_models_trials_many_at_once_unless_set(tiny, 
     small(thinking(tiny) if thinks else tiny)
     tiny.settings.slots.search = slots
     Search(tiny).search(1)
-    used = slots or (search.THINKING_MODEL_SLOTS if thinks else search.SLOTS)
+    used = slots or (config.THINKING_MODEL_SEARCH_SLOTS if thinks else config.SEARCH_SLOTS)
     # The scorer's server is the last one the search starts.
     assert started[-1] == (used, "slots.search in candor.toml")
     recorded = json.loads(tiny.path("search", "inputs.json").read_text())
@@ -1965,7 +1974,7 @@ def test_a_search_carries_on_with_its_slots_set_to_the_number_it_used_unset(tiny
     thinks_through(monkeypatch)
     small(thinking(tiny) if thinks else tiny)
     Search(tiny).search(1)
-    tiny.settings.slots.search = search.THINKING_MODEL_SLOTS if thinks else search.SLOTS
+    tiny.settings.slots.search = config.THINKING_MODEL_SEARCH_SLOTS if thinks else config.SEARCH_SLOTS
     Search(tiny).search(2)
     assert len(finished(tiny)) == 2
     tiny.settings.slots.search = 3

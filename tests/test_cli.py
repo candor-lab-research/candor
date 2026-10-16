@@ -21,7 +21,7 @@ from candor.toolchain import ToolchainError
 
 from .custom_code import write_custom_code_model
 from .test_checks import THINKING
-from .test_targets import llama
+from .test_targets import LLAMA_3B, QWEN35, llama
 from .tiny_run import ALWAYS_THINKING_TEMPLATE
 from .tiny_tokenizer import DATED, PINNABLE, WITH_BOS, tokenizer
 
@@ -69,47 +69,36 @@ def test_inspect_passes_a_llama_style_model_and_warns_about_heretic(tmp_path):
     assert "fail" not in result.output
 
 
-KV = {"num_key_value_heads": 8, "head_dim": 128}
-# Qwen3.5's: a full-attention layer after every three linear-attention ones.
-HYBRID = (["linear_attention"] * 3 + ["full_attention"]) * 8
-
-
 @pytest.mark.parametrize(
     ("text", "arch", "shown"),
     [
+        (LLAMA_3B, "llama", "112 KiB a token at f16, so 9,362 tokens of context per GiB"),
         (
-            {"num_hidden_layers": 28, **KV},
-            "llama",
-            "112 KiB a token at f16 (28 layers, 8 KV heads of 128), so 9,362 tokens of context per GiB",
-        ),
-        ({"num_hidden_layers": 36, **KV}, "k2-horizon", "144 KiB a token at f16 (36 layers"),
-        (
-            {"num_hidden_layers": 32, "num_key_value_heads": 4, "head_dim": 256, "layer_types": HYBRID},
+            QWEN35,
             "qwen35",
-            "32 KiB a token at f16 (8 full-attention layers of 32, 4 KV heads of 256), so 32,768 tokens",
+            "32 KiB a token at f16, so 32,768 tokens of context per GiB, plus 50.25 MiB a slot for its "
+            "linear-attention layers' state",
         ),
-        ({"num_hidden_layers": 28, "num_key_value_heads": 8}, "llama", None),
-        ({"num_hidden_layers": 28, **KV}, "gemma2", None),
-        (
-            {"num_hidden_layers": 4, **KV, "layer_types": ["sliding_attention", "full_attention"] * 2},
-            "qwen3",
-            None,
-        ),
+        (LLAMA_3B, "gemma2", None),
+        (QWEN35 | {"layer_types": ["linear_attention"] * 32}, "qwen35", None),
+        (QWEN35 | {"linear_conv_kernel_dim": None}, "qwen35", None),
     ],
 )
-def test_inspect_shows_the_kv_cache_a_token_takes_only_where_it_knows_it(text, arch, shown):
+def test_inspect_shows_the_memory_a_token_and_a_slot_take_only_where_it_knows_them(text, arch, shown):
     rows = cli._kv_cache_rows({"architectures": ["X"], "text_config": text}, arch)
-    assert rows == ([("KV cache", "ok", rows[0][2])] if shown else [])
-    assert shown is None or rows[0][2].startswith(shown)
+    assert rows == ([("KV cache", "ok", shown)] if shown else [])
 
 
-def test_inspect_shows_the_kv_cache_of_a_model_whose_config_states_it(tmp_path):
-    stated = {"architectures": ["LlamaForCausalLM"], "hidden_size": HIDDEN, "num_hidden_layers": 2, **KV}
+def test_inspect_shows_the_kv_cache_of_a_model_whose_config_gives_its_sizes(tmp_path):
+    sizes = {"num_attention_heads": 4, "num_key_value_heads": 2}
+    stated = {"architectures": ["LlamaForCausalLM"], "hidden_size": HIDDEN, "num_hidden_layers": 2, **sizes}
     result = run(model_folder(tmp_path, config=stated))
     assert result.exit_code == 0, result.output
-    assert "8 KiB a token at f16 (2 layers, 8 KV heads of 128), so 131,072 tokens of context per GiB" in (
-        " ".join(result.output.split())
+    assert "0.25 KiB a token at f16, so 4,194,304 tokens of context per GiB" in " ".join(
+        result.output.split()
     )
+    (tmp_path / "unstated").mkdir()
+    assert "KV cache" not in run(model_folder(tmp_path / "unstated")).output
 
 
 def test_inspect_fails_on_a_writer_it_cannot_place(tmp_path):

@@ -32,8 +32,6 @@ LABELS = {
 }
 # Short enough for progress bars to fit an 80-column terminal.
 SHORT_LABELS = {"harmful_held_out": "Harmful", "harmless_held_out": "Harmless", "maths": "Maths"}
-# A measurement made at another number of slots than this is named for it.
-DEFAULT_SLOTS = 8
 # How the judge's replies become labels. Bump it in any commit that changes that, so saved labels are
 # judged again (the answers aren't).
 COUNTING = 2
