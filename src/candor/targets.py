@@ -184,28 +184,37 @@ def gguf_name(writer: Writer, arch: str, layers: int) -> str | None:
     return f"{mapped}.weight" if mapped else None
 
 
-def _layer_kinds(text: dict[str, Any]) -> list[str] | None:
-    """Each layer's kind of attention, every layer's full without layer_types; None for a kind candor
-    doesn't know."""
+def _layer_kinds(text: dict[str, Any], arch: str | None) -> list[str] | None:
+    """Each layer's kind of attention as llama.cpp reads it: from layer_types, or without them every
+    layer's full, but Qwen3.5's every full_attention_interval-th (4 by default); None for a kind
+    candor doesn't know."""
     kinds = text.get("layer_types")
-    if kinds is None:
-        layers = text.get("num_hidden_layers")
-        return [FULL] * layers if isinstance(layers, int) else None
-    return kinds if set(kinds) <= {FULL, LINEAR} else None
+    if kinds is not None:
+        return kinds if set(kinds) <= {FULL, LINEAR} else None
+    layers = text.get("num_hidden_layers")
+    if not isinstance(layers, int):
+        return None
+    if arch != "qwen35":
+        return [FULL] * layers
+    interval = text.get("full_attention_interval", 4)
+    if not isinstance(interval, int) or interval < 1:
+        return None
+    return [FULL if (i + 1) % interval == 0 else LINEAR for i in range(layers)]
 
 
 def kv_bytes_per_token(config: dict[str, Any], arch: str | None, bits: float) -> float | None:
     """The KV cache a token of context takes at this many bits a value, where candor knows how the
     architecture lays it out and the config gives its sizes, the head size and KV heads defaulting as in
     transformers and llama.cpp's converter. None otherwise, or for a model no layer of which has one."""
+    if arch not in KV_ARCHITECTURES:
+        return None
     text = config.get("text_config", config)
     heads, hidden = text.get("num_attention_heads"), text.get("hidden_size")
     kv_heads = text.get("num_key_value_heads", heads)
-    size = text.get("head_dim") or (hidden // heads if isinstance(hidden, int) and heads else None)
-    kinds = _layer_kinds(text)
-    if arch not in KV_ARCHITECTURES or kinds is None:
-        return None
-    if not (isinstance(kv_heads, int) and isinstance(size, int)):
+    whole = isinstance(hidden, int) and isinstance(heads, int) and heads > 0
+    size = text.get("head_dim") or (hidden // heads if whole else None)
+    kinds = _layer_kinds(text, arch)
+    if kinds is None or not (isinstance(kv_heads, int) and isinstance(size, int)):
         return None
     return kinds.count(FULL) * 2 * kv_heads * size * bits / 8 or None
 
@@ -215,7 +224,7 @@ def recurrent_bytes_per_slot(config: dict[str, Any], arch: str | None) -> int | 
     f32 whatever the KV cache type, sized as llama.cpp's n_embd_r and n_embd_s size it from the
     converter's settings. 0 for a model with no such layer; None where the config doesn't give its sizes."""
     text = config.get("text_config", config)
-    kinds = _layer_kinds(text) or []
+    kinds = _layer_kinds(text, arch) or []
     if arch != "qwen35" or LINEAR not in kinds:
         return 0
     names = (

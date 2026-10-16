@@ -195,6 +195,8 @@ QWEN35 = {
     "linear_value_head_dim": 128,
     "linear_num_value_heads": 32,
 }
+# As a derivative may give it: no layer_types, so llama.cpp goes by full_attention_interval.
+QWEN35_BY_INTERVAL = {k: v for k, v in QWEN35.items() if k != "layer_types"}
 # rude-llama's, a Llama 3.2 3B.
 LLAMA_3B = {"num_hidden_layers": 28, "num_attention_heads": 24, "num_key_value_heads": 8, "hidden_size": 3072}
 SMOLLM2 = {"num_hidden_layers": 30, "num_attention_heads": 9, "num_key_value_heads": 3, "hidden_size": 576}
@@ -217,6 +219,17 @@ SMOLLM2 = {"num_hidden_layers": 30, "num_attention_heads": 9, "num_key_value_hea
         (QWEN35 | {"layer_types": ["sliding_attention", "full_attention"] * 16}, "qwen35", None),
         # No layer with a KV cache.
         (QWEN35 | {"layer_types": ["linear_attention"] * 32}, "qwen35", None),
+        # Heads given per layer: not a layout candor knows, whatever the architecture.
+        (LLAMA_3B | {"num_attention_heads": [24] * 28}, "llama", None),
+        (LLAMA_3B | {"num_attention_heads": [24] * 28}, "gemma2", None),
+        # Without layer_types, llama.cpp makes every fourth Qwen3.5 layer full, or every
+        # full_attention_interval-th.
+        (QWEN35_BY_INTERVAL, "qwen35", 32 * 1024),
+        (
+            QWEN35_BY_INTERVAL | {"full_attention_interval": 2},
+            "qwen35",
+            64 * 1024,
+        ),
     ],
 )
 def test_the_kv_cache_a_token_takes_is_known_only_for_layouts_candor_knows(text, arch, per_token):
@@ -231,3 +244,4 @@ def test_a_hybrids_linear_attention_layers_hold_a_state_for_each_slot():
     assert recurrent_bytes_per_slot(QWEN35, "qwen35") == 50.25 * 2**20
     assert recurrent_bytes_per_slot(LLAMA_3B, "llama") == 0
     assert recurrent_bytes_per_slot(QWEN35 | {"linear_num_value_heads": None}, "qwen35") is None
+    assert recurrent_bytes_per_slot(QWEN35_BY_INTERVAL, "qwen35") == 50.25 * 2**20
