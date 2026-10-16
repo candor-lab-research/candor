@@ -662,3 +662,13 @@ to fix, all fixed with tests, and a re-review passed with 2 minor ones, also fix
 rude-llama's numbers are identical by sha256 before and after, Qwen's and K2's records still match,
 and answers were bit-identical across slot sizes on three models. The checks found batched answers
 vary run to run at 8 slots (`findings.md`). K2's run uses 28 slots throughout.
+
+### Phase 4: the search before the references (the user, 2026-10-16)
+
+The user dropped Avicennasis's full measurement (it refused 48 of 64 as used in the pilot, too low a
+bar to spend time on) and asked for candor's full search on K2 next. The unedited model is still
+measured in full first, about 45 minutes, as the baseline every edit is judged against and a speed
+check at the new settings; the search starts straight after on the same pod. The decision rule is
+drafted from the unedited numbers during the search and signed off before finalists are measured.
+K2's strength may widen to 5.0 rather than 3.0, as heretic's own K2 run needed 4.5-4.6 under the same
+"full" edit; the start stays 0.8-1.5 and widens only on the alarm, as on Qwen.

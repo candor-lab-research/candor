@@ -51,9 +51,10 @@ thinking on (next, e.g. Qwen3.8-27B). A 9B model must not take days.
    trial 205 (Trial 161 left out, the user 2026-10-15), counts only. Optional now.
 2. The phase-end discussion: where to go next, from `results/findings.md` and
    `results/new-features.md` (chiefly the search's cost for 27B); no changes until agreed.
-3. Phase 4, step 3 on an A40 (about 3-3.5 h, about $2): K2's run rebuilt at the user's settings,
-   the unedited model and Avicennasis's edit measured in full at 28 slots. Later, for the search:
-   accepting both closes at low effort, then `candor proxy` low against high. Uno not now.
+3. Phase 4 on one A40 (`45usef3qip28bb`, from 10:44 UTC): K2's run rebuilt at the user's settings,
+   the unedited model measured in full at 28 slots, then the search straight after (quote from its
+   first trials). Meanwhile, the decision rule drafted from the unedited model's numbers, for the
+   user to sign off before finalists are measured. Later: low effort's two closes; Uno not now.
 4. Not blocking, each when there is a reason:
    - speed: 64 slots (15% faster than 32), weights cached on the GPU for "full" trials, the proxy's
      adapters loaded into one server;
@@ -100,15 +101,17 @@ thinking on (next, e.g. Qwen3.8-27B). A 9B model must not take days.
 As used: llama-server, reasoning effort high (the user, 2026-10-15); temperature 1.0, top_p 0.95,
 top_k 1,000, min_p 0, budget 8192 (the user, 2026-10-16); 28 slots on an A40. K2 can't turn
 thinking off, so candor refuses a thinking-off search for it. References: the unedited model and
-Avicennasis's heretic edit (7/50 on its card, 48/64 as used in the pilot). Uno-Uncensored is left
-out: it is built on K2 with the Uno adapter merged in (the user, 2026-10-16).
+Avicennasis's heretic edit refused 48/64 as used in the pilot (7/50 on its card), too weak a bar to
+measure in full, and Uno-Uncensored is built on K2 with the Uno adapter merged in: the reference is
+the unedited model (the user, 2026-10-16). Strength starts at 0.8-1.5 and may widen to 5.0 (heretic's
+K2 run needed 4.5-4.6).
 
 | Step | What | State |
 | --- | --- | --- |
 | 1-2 | Code: K2's thinking, `deployment.chat_template_kwargs`, the `--lora` list limit, `--outside` GGUF files, IFM's remote code read (no network, file or process access); the timed pilot: the run built, the unedited model and Avicennasis on 64 prompts a set, 4 search trials, low effort; the speed test; slots as run settings (`[slots]`), each search slot sized to its requests | Done 2026-10-16 (history, results file) |
-| 3 | The unedited model and Avicennasis's edit measured as used | About $2-4 |
-| 4 | Decision rule from step 3, signed off by the user before any search | |
-| 5 | Search, the best scored as used, finalists exported and measured in full | About $20-35 for the search as it stands, less with slots sized per request |
+| 3 | The unedited model measured as used (Avicennasis dropped, the user) | Running |
+| 4 | Decision rule from step 3, signed off by the user before finalists are measured | Drafted during the search |
+| 5 | Search, the best scored as used, finalists exported and measured in full | Starts after step 3; quoted from its first trials |
 | 6 | The user's test in llama-server, then a release decision | |
 
 ## Not in this plan
