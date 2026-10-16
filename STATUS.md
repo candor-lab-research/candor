@@ -1,8 +1,9 @@
 # Status
 
 The single plan for candor: anything not listed here isn't being worked on. Each phase's numbers
-are in `results/`; what candor has found and the ideas parked are in `results/findings.md`; past
-decisions with their reasons, the research tables and the log are in `results/history.md`.
+are in `results/`; what candor has found and the ideas parked are in `results/findings.md`; outside
+work kept for later in `results/new-features.md`; past decisions with their reasons, the research
+tables and the log are in `results/history.md`.
 
 ## Plan
 
@@ -16,7 +17,7 @@ anything else. Every model is scored and shipped as a GGUF in llama-server, and 
 | 1 | Core maths and `candor inspect` | Done |
 | 2 | rude-llama end to end: search, export, measure against heretic's Trial 170 | Done 2026-10-13: trial 535 passes and ships (`results/milestone-rude-llama-vs-heretic.md`) |
 | 3 | Qwen3.5-9B, a thinking model, scored as used against heretic's Trial 161 | Measured 2026-10-15: trial 175 beats Trial 161 (`results/milestone-qwen3.5-9b-vs-heretic.md`); the user's thinking review and the phase-end discussion remain |
-| 4 | K2-Horizon-7B at your real settings: llama-server, reasoning effort high | Step 1 (code) done 2026-10-15; step 2's pilot next (below) |
+| 4 | K2-Horizon-7B at your real settings: llama-server, reasoning effort high | Steps 1-2 (code, pilot) done 2026-10-16; the user's choices next (below) |
 
 Qwen3.5-9B is a testbed: the process must work, affordably, for larger thinking models used with
 thinking on (next, e.g. Qwen3.8-27B). A 9B model must not take days.
@@ -39,39 +40,41 @@ thinking on (next, e.g. Qwen3.8-27B). A 9B model must not take days.
 
 - Phase 3: trial 175 beats Trial 161 (0/288 refused, maths at the unedited model's level);
   `results/phase-3-qwen3.5-9b.md`. The thinking review and the phase-end discussion remain.
-- Phase 4 step 1 done: candor runs K2-Horizon as options that leave other models unchanged
-  (rude-llama's answers byte-identical before and after, Qwen's prompt ids identical). No pod is
-  running; Runpod credit about $2.50.
+- Phase 4 step 2 done: the pilot ran K2 end to end on an A40 (about $1.60); K2 thinks far less
+  than Qwen, and an as-used search is about $20-35 as it stands (`results/phase-4-k2-horizon-7b.md`).
+  No pod is running.
 - 20 ideas from arXiv are ranked in `results/new-features.md`.
 
 ## Next
 
 1. The user's thinking review, on the Mac (`candor serve`): the unedited model, trial 175 and
    trial 205 (Trial 161 left out, the user 2026-10-15), counts only. Optional now.
-2. The phase-end discussion with the user: where to go next and what to try, from
-   `results/findings.md` and `results/new-features.md` (chiefly the search's cost for 27B). No
-   changes to code, defaults or the method until agreed.
-3. Phase 4, step 2: a timed pilot on a pod (about $2-3, needs a Runpod top-up and the user's go).
+2. The phase-end discussion: where to go next, from `results/findings.md` and
+   `results/new-features.md` (chiefly the search's cost for 27B); no changes until agreed.
+3. Phase 4, the user's choices before step 3 (numbers in `results/phase-4-k2-horizon-7b.md`):
+   - sampling: the card's (top_k 0, min_p 0, as the pilot ran) or llama-server's defaults the user
+     may run with (top_k 40, min_p 0.05); the budget: 8192 or the card's 32,768;
+   - whether Uno-Uncensored is a reference (built on K2 with the Uno adapter merged in);
+   - for the search: slots as settings, sized per request (the build's 8, the search's 32 and
+     `measure`'s default of 8 are fixed in code; K2 fits 28 and 16 on an A40); accepting both closes
+     at low effort, then `candor proxy` low against high; Uno not now (`new-features.md`).
 4. Not blocking, each when there is a reason:
    - speed: 64 slots (15% faster than 32), weights cached on the GPU for "full" trials, the proxy's
      adapters loaded into one server;
    - measurements before 2026-10-14 pair with later ones by prompt, not by draw (sampling moved to
      the GPU);
-   - an interrupted `candor proxy` scores the unedited model again;
-   - the search prints "Rebuilding scores/trial/edit.gguf" on every "full" trial;
    - the search scoring on the base it ships, edited tensors at Q8_0 too (only where quantisation
-     loses edits, as on rude-llama);
-   - whether the search should score more prompts (per-layer refusals and layer-14 KL didn't hold
-     on rude-llama's held-out prompts);
+     loses edits, as on rude-llama), and whether it should score more prompts (per-layer refusals
+     and layer-14 KL didn't hold on rude-llama's held-out prompts);
    - rude-llama: one search with the attention peak's floor and reach's ceiling widened (535 presses
      both);
-   - `candor measure` defaults to 8 slots where thinking runs use 32 (step 7 started with 8);
-   - `candor serve` downloads the model's original weights only to fingerprint the run;
    - llama-server's chat endpoint may count prompt tokens against the thinking budget (seen on a
-     tiny model only; check on a real GGUF);
-   - K2's thinking budget message was written for a close that starts with a newline;
-   - `inspect` warning when weights were quantised before; the export's file name when some tensors
-     are Q8_0; a local model copied to a pod rebuilding every stage.
+     tiny model only); K2's budget message was written for a close that starts with a newline;
+   - small fixes: an interrupted `candor proxy` scores the unedited model again; the search prints
+     "Rebuilding scores/trial/edit.gguf" every "full" trial; `serve` downloads the original weights
+     only to fingerprint the run; an `inspect` warning when weights were quantised before; the
+     export's file name when some tensors are Q8_0; a local model copied to a pod rebuilds every
+     stage.
 
 ## Phase 3: in force
 
@@ -86,11 +89,8 @@ thinking on (next, e.g. Qwen3.8-27B). A 9B model must not take days.
   its edits. Maths: the full 1,319 GSM8K questions on finalists only.
 - Strength starts at 0.8-1.5 and widens to 3.0 when a kind's best edit presses it. Directions are
   read at the think start and after a closed thinking block; the search chooses. Optuna 4.9.
-
-### Decision rule
-
-Signed off 2026-10-14 (text in `results/history.md`) and applied in step 7: both finalists pass
-and beat Trial 161.
+- The decision rule, signed off 2026-10-14 (text in `results/history.md`): both finalists pass it
+  and beat Trial 161.
 
 ### Steps
 
@@ -102,25 +102,18 @@ and beat Trial 161.
 ## Phase 4: K2-Horizon-7B
 
 As used: llama-server, reasoning effort high (the user, 2026-10-15), K2's sampling (temperature
-1.0, top_p 0.95), budget 8192. K2 can't turn thinking off, so candor refuses a thinking-off search
-for it; step 2 shows whether an as-used search is affordable. References: the unedited model and
-the two public edits, geantendormi's Uno-Uncensored (GGUF only, claims 0% refusals) and
-Avicennasis's heretic edit (7/50 refused on its own prompts).
+1.0, top_p 0.95), budget 8192, 28 slots for measurements on an A40. K2 can't turn thinking off, so
+candor refuses a thinking-off search for it. References: the unedited model and Avicennasis's
+heretic edit (7/50 on its card, 48/64 as used in the pilot); geantendormi's Uno-Uncensored (GGUF
+only, claims 0%) is built on K2 with the Uno adapter merged in, so it is the user's call.
 
 | Step | What | State |
 | --- | --- | --- |
-| 1 | Code: K2's thinking, `deployment.chat_template_kwargs`, the `--lora` list limit, `--outside` GGUF files, IFM's remote code read (no network, file or process access) | Done 2026-10-15 |
-| 2 | Timed pilot on a pod: build the run, time the unedited model thinking, a real quote | Next, about $2-3 |
-| 3 | The unedited model and both public edits measured as used | About $10-14, a guess |
+| 1-2 | Code: K2's thinking, `deployment.chat_template_kwargs`, the `--lora` list limit, `--outside` GGUF files, IFM's remote code read (no network, file or process access); the timed pilot: the run built, the unedited model and Avicennasis on 64 prompts a set, 4 search trials, low effort | Done 2026-10-16 (history, results file) |
+| 3 | The unedited model and the public edits measured as used | About $4, $6-7 with Uno-Uncensored |
 | 4 | Decision rule from step 3, signed off by the user before any search | |
-| 5 | Search, the best scored as used, finalists exported and measured in full | About $15-25, a guess |
+| 5 | Search, the best scored as used, finalists exported and measured in full | About $20-35 for the search as it stands, less with slots sized per request |
 | 6 | The user's test in llama-server, then a release decision | |
-
-## Parked, to review later
-
-Every idea not acted on, with what supports it (measured, published or a hypothesis), is in
-`results/findings.md`, beside what candor has found so far. Outside work kept for later (papers,
-tools) is in `results/new-features.md`.
 
 ## Not in this plan
 

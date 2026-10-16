@@ -613,3 +613,19 @@ server), all fixed and re-reviewed to a pass. rude-llama's trial 535 on 10 promp
 byte-identical answers before and after, and Qwen's prompt ids rebuilt identically. The same
 night, four agents searched arXiv for new features (`results/new-features.md`), and the chat-app
 template check was removed at the user's request: models run only in llama-server.
+
+### Phase 4, step 2: the timed pilot (2026-10-16)
+
+On one A40 (about $1.60), the K2 run built in 40 minutes and ran end to end. K2 thinks far less
+than Qwen3.5-9B at high effort (unedited median harmful thinking 225 tokens against 996), so a full
+measurement is at most about 1.5 h unedited and 4 h for an edit that complies in part. Avicennasis's
+heretic edit refused 48 of 64 held-out harmful prompts as used, against 7/50 on its card: thinking
+brings refusals back, as on Qwen. Four search trials as used took about 210 s each at 16 slots, so
+a 600-trial search at high is roughly $20-35. Three things in code stood in the way: slots are fixed
+(32 slots don't fit on an A40 for a dense model; the search sizes each slot for 15.6k tokens, so it
+fit 16, on a patch made on the pod only), and at low effort K2 often closes with high's tag, which
+candor doesn't accept. A research agent found Uno gains little at 32 sequences on Ampere and would
+take weeks to build into llama.cpp, and that Uno-Uncensored is built on K2 with the Uno adapter
+merged in. The user then set a rule: every setting is customisable per run, and the long-term goal
+is a tool that inspects a model and picks or offers its best settings; defaults keep existing runs
+unchanged. Numbers in `results/phase-4-k2-horizon-7b.md`.

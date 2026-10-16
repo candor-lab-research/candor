@@ -21,6 +21,15 @@ entry is corrected rather than deleted when later evidence changes it.
   edits, step 5; a median of 2 more on step 6's 12] Edits refusing 8-22 with thinking off refused 3-28 more thinking (4 of the 5 at least
   10 more); a median of 5 more where thinking off refuses at most 25. Of 5 edits within the cap of 2 thinking off, 4 stayed
   within it thinking (the one that slipped, a one-layer edit, went from 1 to 6). (step 5)
+- **Thinking brings refusals back on K2-Horizon-7B too.** [Measured: K2-Horizon-7B, 64 held-out
+  prompts; its card's count Published] Avicennasis's heretic edit refused 48/64 as used (unedited
+  61/64) against 7/50 on its card, as Trial 161 on Qwen3.5-9B went from 11/100 thinking off to
+  28/288 as used: a second family. (`phase-4-k2-horizon-7b.md`, step 2)
+- **Two models of the same size think for very different lengths.** [Measured: K2-Horizon-7B at
+  high, 64 prompts a set; Qwen3.5-9B, held-out sets] Unedited median thinking 225 / 561 / 140 tokens
+  (harmful, harmless, maths) on K2 against 996 / 1,137 / 2,140 on Qwen, with no K2 budget hits; a
+  K2 search trial that barely edits took about 210 s at 16 slots. So a model's cost can't be quoted
+  from another's: each needs its pilot. (step 2)
 - **Extra strength pushes one-layer edits that already work past their best.** [Measured:
   Qwen3.5-9B, 3 pairs of each kind, 100 test prompts] At 1.4 times the strength, every one-layer
   edit in step 6 refused far more as used (1 to 20, 6 to 49, 0 to 49), though not with thinking
@@ -102,6 +111,12 @@ entry is corrected rather than deleted when later evidence changes it.
   idle (on trial 205, busy 77-88% of a set's time), and answers run to 8,000 tokens. 8 slots: 283.
   A full measurement of a 9B edit took 3 h 36 min-3 h 53 min. (step 7)
 
+- **Slots that fit depend on the model's KV cache, not the GPU alone.** [Measured: K2-Horizon-7B,
+  A40] A dense model's f16 cache is 144 KiB a token (K2: 36 layers of 8 KV heads), so 32 slots of a
+  thinking budget of 8192 need 41.5 GB: `measure` fits 28 on an A40. The search sizes every slot
+  for its longest KL read plus a whole thinking answer, 15.6k tokens, so it fits only 16; its 32 and
+  the build's 8 are fixed in code. Qwen3.5-9B's hybrid layers never hit this. (step 2)
+
 ## Ideas
 
 - **Start strength wide (to 3.0 or more) rather than widening once the best presses 1.5.**
@@ -131,10 +146,12 @@ entry is corrected rather than deleted when later evidence changes it.
 - **Cheaper as-used scoring:** vLLM or SGLang with each edit swapped into the weights, prompt
   caching, a refusal probe, multi-fidelity optimisation, Uno's parallel decoding. [Hypothesis]
   (`history.md`, "Not in this plan"; `new-features.md`)
-- **Low reasoning effort as K2's cheap score.** [Hypothesis] K2 can't turn thinking off but also
-  thinks at low effort; searching at low and scoring the best at high would take thinking off's
-  place. Test: the pilot times the unedited model at both; then `candor proxy`'s rank check, low
-  against high, on a first search's best. Needs a search-only effort setting.
+- **Low reasoning effort as K2's cheap score.** [Measured: K2-Horizon-7B, 32 harmless test
+  prompts; the rest Hypothesis] Searching at low and scoring the best at high would take thinking
+  off's place. Low wrote 3.7 times fewer tokens (median 250 against 918), but closed its
+  `<ifm|think_faster>` thinking with high's `</ifm|think>` 17 times in 32, which candor counts as
+  never closed, and K2's card advises against low for evaluation. Test: accept both closes at low,
+  then `candor proxy`'s rank check, low against high, on a first search's best. (step 2)
 - **A faster GPU for 27B.** [Hypothesis] On the A40, llama-server reached about 660 tokens/s,
   well below what the GPU's memory allows, so a faster card may help less than its price. Test: a
   short timed pilot on an A100 and an H100 before quoting 27B.
