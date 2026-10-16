@@ -197,6 +197,11 @@ def every_tenth(report: Callable[[str], None], what: str, total: int, done: int 
     return one
 
 
+def duration(seconds: float) -> str:
+    minutes = round(seconds / 60)
+    return f"{minutes // 60} h {minutes % 60} min" if minutes >= 60 else f"{max(minutes, 1)} min"
+
+
 def drop_repeats(texts: dict[str, list[str]]) -> dict[str, int]:
     """Remove from each held-out set every prompt that is also in another set, or earlier in its own,
     so the held-out sets only hold prompts the search never saw. Returns how many each set lost."""

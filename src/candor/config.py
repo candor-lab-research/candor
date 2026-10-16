@@ -405,6 +405,14 @@ class Search(Section):
         default=(0.4, 0.9),
         description="Which layer's refusal direction a single-direction trial uses, as a fraction of depth.",
     )
+    report_every: StrictInt = Field(
+        default=25,
+        ge=0,
+        description="After every this many finished trials, of both kinds together, the search reports how "
+        "it is going and writes the report to search/progress.json: its pace and time left, and each "
+        "kind's best trial so far, strength range and trials since that best improved. 0 turns it off. "
+        "Only a report: changing it never stops a search carrying on.",
+    )
 
     @field_validator("strength", "widest_strength", "peak_layer", "edge_strength", "reach", "direction_layer")
     @classmethod

@@ -52,7 +52,7 @@ from .engine import GREEDY, LlamaServer, Thinking
 from .judge import Guard, is_refusal, judged_refusal, read_verdict
 from .kernel import Kernel
 from .measure import Edit, edit_adapters
-from .run import ANSWER_SETS, ANSWERING, STAGES, Run, RunError, answering, digest, seeds
+from .run import ANSWER_SETS, ANSWERING, STAGES, Run, RunError, answering, digest, duration, seeds
 
 # Harmful prompts judged at a time, so a trial that can't win stops early. The server answers the
 # next ones meanwhile.
@@ -291,6 +291,13 @@ def outside_space(edit: Edit, space: config.Search, layers: int, components: lis
     return outside
 
 
+def _ends(value: float, low: float, high: float) -> tuple[bool, bool]:
+    """Whether a setting presses on its range's floor, and on its ceiling: lies within EDGE of the range
+    from it."""
+    margin = EDGE * (high - low)
+    return value - low <= margin, high - value <= margin
+
+
 def at_edges(params: dict[str, Any], space: config.Search, layers: int) -> list[str]:
     """The ends of the search's ranges a trial's settings press on, where a better edit may lie just
     outside them: either end of the strength and of the direction layers read, the peak's floor and
@@ -314,9 +321,10 @@ def at_edges(params: dict[str, Any], space: config.Search, layers: int) -> list[
             continue
         low, high = ranges[setting]
         floor, ceiling = ends[setting]
-        if floor and value - low <= EDGE * (high - low):
+        at_floor, at_ceiling = _ends(value, low, high)
+        if floor and at_floor:
             pressed.append(f"{name} {value:.3g}, at its floor {low:.3g}")
-        if ceiling and high - value <= EDGE * (high - low):
+        if ceiling and at_ceiling:
             pressed.append(f"{name} {value:.3g}, at its ceiling {high:.3g}")
     return pressed
 
@@ -329,10 +337,11 @@ def widened(found: Found, scope: str, space: config.Search) -> tuple[float, floa
     best = within_cap(found, scope, space.max_refusals)
     if not best:
         return low, widest_high
-    strengths = [value for name, value in best[0].params.items() if name.endswith(".strength")]
-    margin = EDGE * (high - low)
-    floor = any(value - low <= margin for value in strengths)
-    ceiling = any(high - value <= margin for value in strengths)
+    pressed = [
+        _ends(value, low, high) for name, value in best[0].params.items() if name.endswith(".strength")
+    ]
+    floor = any(at_floor for at_floor, _ in pressed)
+    ceiling = any(at_ceiling for _, at_ceiling in pressed)
     return widest_low if floor else low, widest_high if ceiling else high
 
 
@@ -454,6 +463,106 @@ def fewest_refused(found: Found, scope: str) -> Candidate | None:
     """The scope's trial scored in full that refused fewest, then with least KL."""
     kept = [c for c in scored_in_full(found) if scope_of(c.params) == scope]
     return min(kept, key=lambda c: (c.refusals, c.kl), default=None)
+
+
+def best_so_far(found: Found, scope: str, cap: int) -> Candidate | None:
+    """The scope's best trial so far, as the search's summary names it: the least KL of those to measure,
+    or with none within the cap, the one that refused fewest."""
+    kept = to_measure(found, scope, cap)
+    return kept[-1] if kept else fewest_refused(found, scope)
+
+
+def _kind_progress(found: Found, space: config.Search, scope: str) -> dict[str, Any]:
+    numbers = [number for number, t in found.trials.items() if scope_of(t.params) == scope]
+    low, high = kind_space(space, found, scope).strength
+    kind: dict[str, Any] = {
+        "trials": len(numbers),
+        "stopped early": sum(found.trials[number].user_attrs["stopped"] for number in numbers),
+        "strength": [low, high],
+        "widened": scope in found.strength,
+    }
+    best = best_so_far(found, scope, space.max_refusals)
+    if best is None:
+        return kind
+    strengths = {name: value for name, value in best.params.items() if name.endswith(".strength")}
+    kind["best"] = {
+        "trial": best.trial,
+        "refused": best.refusals,
+        "KL": best.kl,
+        "within the cap": best.refusals <= space.max_refusals,
+        "strengths": strengths,
+        "at its floor": [name for name, value in strengths.items() if _ends(value, low, high)[0]],
+        "at its ceiling": [name for name, value in strengths.items() if _ends(value, low, high)[1]],
+        "trials since it improved": sum(number > best.trial for number in numbers),
+    }
+    return kind
+
+
+def progress(
+    found: Found, space: config.Search, done: int, target: int, seconds: float, thinks: bool
+) -> dict[str, Any]:
+    """How a search is going after done of its target trials, seconds into this session: its pace over the
+    last search.report_every trials and the time left at that pace, each kind's trials and best so far,
+    and for trials that think, how long those last trials thought."""
+    last = list(found.trials.values())[-space.report_every :]
+    pace = sum(t.user_attrs["seconds"] for t in last) / len(last)
+    report: dict[str, Any] = {
+        "finished": done,
+        "of": target,
+        "seconds": seconds,
+        "over the last": len(last),
+        "seconds a trial": pace,
+        "seconds left": pace * (target - done),
+        **{scope: _kind_progress(found, space, scope) for scope in SCOPES},
+    }
+    if thinks:
+        scores = [_score(t) for t in last]
+        answers = sum(s.judged for s in scores)
+        report["thinking"] = {
+            "tokens per answer": sum(s.thinking * s.judged for s in scores) / answers,
+            "answers": answers,
+            "reached the budget": sum(s.forced for s in scores),
+        }
+    return report
+
+
+def _trials(count: int) -> str:
+    return f"{count} trial" if count == 1 else f"{count} trials"
+
+
+def progress_lines(report: dict[str, Any]) -> list[str]:
+    """A progress report as the search shows it."""
+    done, target, last = report["finished"], report["of"], report["over the last"]
+    head = (
+        f"After {done} of {target} trials, {duration(report['seconds'])} into this session: "
+        f"{report['seconds a trial']:.0f} s a trial over the last {last}"
+    )
+    lines = [head + (f", so about {duration(report['seconds left'])} left" if done < target else "")]
+    for scope in SCOPES:
+        kind = report[scope]
+        low, high = kind["strength"]
+        span = f"range {low:g}-{high:g}" + (" (widened)" if kind["widened"] else "")
+        line = f"  {scope}: {_trials(kind['trials'])}, {kind['stopped early']} stopped early"
+        if "best" not in kind:
+            lines.append(f"{line}; none scored in full yet; strength {span}")
+            continue
+        best = kind["best"]
+        which = "best" if best["within the cap"] else "none within the cap, fewest refused"
+        line += f"; {which} trial {best['trial']}, {best['refused']} refused, KL {best['KL']:.4f}"
+        strengths = ", ".join(
+            f"{name.removesuffix('.strength')} {value:.3g}"
+            + (" at its floor" if name in best["at its floor"] else "")
+            + (" at its ceiling" if name in best["at its ceiling"] else "")
+            for name, value in best["strengths"].items()
+        )
+        since = _trials(best["trials since it improved"])
+        lines.append(f"{line}; strength {strengths}, {span}; {since} since it improved")
+    if thinking := report.get("thinking"):
+        lines.append(
+            f"  thinking over the last {last}: {thinking['tokens per answer']:.0f} tokens per answer, "
+            f"{thinking['reached the budget']} of {thinking['answers']} answers reached the budget"
+        )
+    return lines
 
 
 def _changed(before: dict[str, Any], now: dict[str, Any], keys: Iterable[str] | None = None) -> list[str]:
@@ -602,8 +711,10 @@ class Search:
         """Run trials until target are finished, taking turns between the kinds of edit, each kind up to
         search.trials_per_scope. started gets the trials already finished and the target; finished is
         called after each trial, with a line to show when it is within the cap and no earlier trial of
-        its kind refused as few with as little KL. Returns the trials and the mean seconds per trial."""
+        its kind refused as few with as little KL. Every search.report_every finished trials it reports
+        its progress (see progress). Returns the trials and the mean seconds per trial."""
         run, space = self.run, self.run.settings.search
+        began = time.perf_counter()
         with run.locked():
             run.check_remote_code()
             if not run.path("directions.pt").exists():
@@ -649,6 +760,9 @@ class Search:
                             if best
                             else None
                         )
+                        done = self._done(studies)
+                        if space.report_every and done % space.report_every == 0:
+                            self._progress(studies, done, target, time.perf_counter() - began)
             found = _found(studies)
             seconds = [t.user_attrs["seconds"] for t in found.trials.values()]
             return found, sum(seconds) / len(seconds) if seconds else 0.0
@@ -837,8 +951,10 @@ class Search:
             how["thinking"]["budget"] = settings.scoring.thinking_budget or how["thinking"]["budget"]
         # Only a search that may widen strength records how far, so searches made before it could still
         # carry on; and a model that doesn't think records its slots only at another number than the
-        # default.
-        unrecorded = {"trials_per_scope"} | (set() if settings.search.widens() else {"widest_strength"})
+        # default. How often it reports changes no score.
+        unrecorded = {"trials_per_scope", "report_every"} | (
+            set() if settings.search.widens() else {"widest_strength"}
+        )
         recorded = settings.deployment.think_close or self.slots != config.SEARCH_SLOTS
         slots = {"slots": self.slots} if recorded else {}
         return {
@@ -1006,6 +1122,16 @@ class Search:
             f"After {finished} {scope} trials {why}, so its strength widens from {low:g}-{high:g} to "
             f"{wider[0]:g}-{wider[1]:g}"
         )
+
+    def _progress(self, studies: dict[str, optuna.Study], done: int, target: int, seconds: float) -> None:
+        """Show how the search is going, and write it to search/progress.json in place of the last report."""
+        report = progress(_found(studies), self.run.settings.search, done, target, seconds, self.thinks)
+        path = self.folder / "progress.json"
+        partial = path.with_name("progress.json.building")
+        partial.write_text(json.dumps(report, indent=2))
+        partial.replace(path)
+        for line in progress_lines(report):
+            self.run.report(line)
 
     def _space(self, study: optuna.Study) -> config.Search:
         """The search settings a kind's study draws its trials from: the run's, with strength as widened."""

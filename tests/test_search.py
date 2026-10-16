@@ -2021,3 +2021,158 @@ def test_scoring_full_edits_beside_the_search_builds_each_ones_adapter(tiny, mon
     scored = Search(tiny).score(edits)
     assert started[-3:] == [[], ["one"], ["two"]]
     assert len(scored.edits) == 2 and scored.edits[0].kl != scored.edits[1].kl
+
+
+def timed(number, refusals, kl, attn, mlp, layer=None, judged=3, seconds=10.0, thinking=0.0, forced=0):
+    """A finished trial as the search records it, with these strengths, seconds and thinking."""
+    params = {"attn.strength": attn, "mlp.strength": mlp} | (
+        {} if layer is None else {"direction_layer": layer}
+    )
+    distributions: dict[str, BaseDistribution] = {
+        k: IntDistribution(0, 30) if k == "direction_layer" else FloatDistribution(0, 5) for k in params
+    }
+    attrs = made(number, refusals, kl, judged=judged).user_attrs
+    attrs |= {"seconds": seconds, "thinking": thinking, "forced": forced}
+    return optuna.trial.create_trial(params=params, distributions=distributions, value=kl, user_attrs=attrs)
+
+
+def test_a_progress_report_names_each_kinds_best_its_edges_and_the_trials_since_it_improved():
+    trials = [
+        timed(1, 3, 0.01, 1.0, 1.0, layer=5),
+        timed(2, 50, 0.01, 2.9, 1.0),
+        timed(3, 2, 0.20, 1.0, 1.0, layer=5),
+        timed(4, 10, 0.40, 2.95, 1.0),  # the fewest refused per layer, at its widened ceiling
+        timed(5, 1, 0.10, 0.82, 1.2, layer=5),  # the least KL within the cap, at the floor
+        timed(6, 10, 0.50, 1.0, 1.0),
+        timed(7, 0, 0.30, 1.0, 1.0, layer=5, thinking=100.0, forced=1),
+        timed(8, 4, 0.10, 1.0, 1.0, judged=1, seconds=20.0, thinking=200.0),  # stopped early
+        timed(9, 3, 0.05, 1.0, 1.0, layer=5, judged=1, seconds=30.0, thinking=300.0, forced=1),
+        timed(10, 30, 0.20, 1.0, 1.0, seconds=40.0, thinking=50.0, forced=2),
+    ]
+    found = search.Found({t.user_attrs["number"]: t for t in trials}, 99, {search.PER_LAYER: (0.8, 3.0)})
+    space = config.Search(report_every=4)
+    report = search.progress(found, space, 10, 20, 3600.0, thinks=True)
+    assert report == {
+        "finished": 10,
+        "of": 20,
+        "seconds": 3600.0,
+        "over the last": 4,
+        "seconds a trial": 25.0,
+        "seconds left": 250.0,
+        search.ONE_LAYER: {
+            "trials": 5,
+            "stopped early": 1,
+            "strength": [0.8, 1.5],
+            "widened": False,
+            "best": {
+                "trial": 5,
+                "refused": 1,
+                "KL": 0.10,
+                "within the cap": True,
+                "strengths": {"attn.strength": 0.82, "mlp.strength": 1.2},
+                "at its floor": ["attn.strength"],
+                "at its ceiling": [],
+                "trials since it improved": 2,
+            },
+        },
+        search.PER_LAYER: {
+            "trials": 5,
+            "stopped early": 1,
+            "strength": [0.8, 3.0],
+            "widened": True,
+            "best": {
+                "trial": 4,
+                "refused": 10,
+                "KL": 0.40,
+                "within the cap": False,
+                "strengths": {"attn.strength": 2.95, "mlp.strength": 1.0},
+                "at its floor": [],
+                "at its ceiling": ["attn.strength"],
+                "trials since it improved": 3,
+            },
+        },
+        "thinking": {"tokens per answer": 118.75, "answers": 8, "reached the budget": 4},
+    }
+    assert search.progress_lines(report) == [
+        "After 10 of 20 trials, 1 h 0 min into this session: 25 s a trial over the last 4, so about 4 min "
+        "left",
+        "  one layer: 5 trials, 1 stopped early; best trial 5, 1 refused, KL 0.1000; strength attn 0.82 at "
+        "its floor, mlp 1.2, range 0.8-1.5; 2 trials since it improved",
+        "  per layer: 5 trials, 1 stopped early; none within the cap, fewest refused trial 4, 10 refused, KL "
+        "0.4000; strength attn 2.95 at its ceiling, mlp 1, range 0.8-3 (widened); 3 trials since it improved",
+        "  thinking over the last 4: 119 tokens per answer, 4 of 8 answers reached the budget",
+    ]
+    assert "thinking" not in search.progress(found, space, 10, 20, 3600.0, thinks=False)
+
+
+def test_a_search_reports_its_progress_every_report_every_trials_and_never_at_0(tiny, monkeypatch):
+    small(tiny)
+    refusing(monkeypatch, refusals=1)
+    said = []
+    tiny.report = said.append
+    path = tiny.path("search", "progress.json")
+
+    def reports():
+        return [line for line in said if "into this session" in line]
+
+    tiny.settings.search.report_every = 1
+    Search(tiny).search(1)
+    first = json.loads(path.read_text())
+    assert reports() == [said[-3]] and said[-3].startswith("After 1 of 1 trials, 1 min into this session: ")
+    assert (
+        said[-1] == "  per layer: 0 trials, 0 stopped early; none scored in full yet; strength range 0.8-1.5"
+    )
+    assert (first["finished"], first["of"], first["over the last"]) == (1, 1, 1)
+    assert first[search.ONE_LAYER]["best"]["trial"] == 1
+    assert first[search.PER_LAYER] == {
+        "trials": 0,
+        "stopped early": 0,
+        "strength": [0.8, 1.5],
+        "widened": False,
+    }
+    tiny.settings.search.report_every = 0
+    Search(tiny).search(2)
+    assert len(reports()) == 1 and json.loads(path.read_text()) == first
+    tiny.settings.search.report_every = 2
+    Search(tiny).search(4)
+    assert [line.split(",")[0] for line in reports()] == ["After 1 of 1 trials", "After 4 of 4 trials"]
+    last = json.loads(path.read_text())
+    assert (last["finished"], last["over the last"]) == (4, 2)
+    assert [last[scope]["trials"] for scope in search.SCOPES] == [2, 2]
+    assert not list(tiny.path("search").glob("*.building"))
+
+
+def test_a_search_made_before_report_every_carries_on_after_an_upgrade_at_any_report_every(tiny):
+    folder = cli_run(tiny)
+    runner = CliRunner(env={"COLUMNS": "200"})
+    assert runner.invoke(app, ["search", str(folder), "--trials", "1"]).exit_code == 0
+    assert (
+        "report_every" not in json.loads((folder / "search" / "inputs.json").read_text())["search settings"]
+    )
+    path = folder / config.FILE
+    path.write_text(path.read_text().replace("report_every = 25\n", ""))
+    refused = runner.invoke(app, ["search", str(folder)])
+    assert refused.exit_code == cli.COULD_NOT_INSPECT and "candor upgrade adds them" in flat(refused.output)
+    upgraded = runner.invoke(app, ["upgrade", str(folder)])
+    assert upgraded.exit_code == 0 and "search.report_every = 25" in upgraded.output
+    path.write_text(path.read_text().replace("report_every = 25\n", "report_every = 1\n"))
+    resumed = runner.invoke(app, ["search", str(folder), "--trials", "2"])
+    assert resumed.exit_code == 0, resumed.output
+    assert "After 2 of 2 trials" in resumed.output
+    found = search.load(run.Run.open(folder))
+    assert found is not None and list(found.trials) == [1, 2]
+
+
+def test_reporting_leaves_every_trial_the_search_draws_as_it_was(tiny, monkeypatch):
+    widening_soon(monkeypatch)
+    small(tiny, trials=6)
+    drawn = {}
+    for every in (0, 1):
+        refusing(monkeypatch)
+        tiny.settings.search.report_every = every
+        found, _ = Search(tiny).search(12)
+        drawn[every] = [(t.params, t.user_attrs["kl"]) for t in found.trials.values()]
+        tiny.path("search").rename(tiny.path(f"search-{every}"))
+    assert len(drawn[1]) == 12 and drawn[0] == drawn[1]
+    assert tiny.path("search-1", "progress.json").exists()
+    assert not tiny.path("search-0", "progress.json").exists()

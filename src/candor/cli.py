@@ -37,7 +37,7 @@ from transformers.utils import logging as transformers_logging
 from . import checks, config, export, measure, proxy, search, serve, source, targets
 from .convert import ConversionError
 from .engine import LLAMA_CPP_RELEASE, ServerError
-from .run import PROMPT_SETS, Run, RunError, every_tenth
+from .run import PROMPT_SETS, Run, RunError, duration, every_tenth
 from .toolchain import ToolchainError
 
 app = typer.Typer(
@@ -549,11 +549,6 @@ def _measurement_name(
     return name + (f"-first-{limit}" if limit else "")
 
 
-def _duration(seconds: float) -> str:
-    minutes = round(seconds / 60)
-    return f"{minutes // 60} h {minutes % 60} min" if minutes >= 60 else f"{max(minutes, 1)} min"
-
-
 @app.command("measure")
 def measure_command(
     folder: Annotated[Path, typer.Argument(help="A run folder made by candor init.")],
@@ -692,12 +687,12 @@ def measure_command(
         if limit < 4 * slots:
             # Too few prompts to keep every slot busy, so this speed undersells a full run.
             console.print(
-                f"Measuring every prompt would take at most about {_duration(seconds)}: {limit} prompts "
+                f"Measuring every prompt would take at most about {duration(seconds)}: {limit} prompts "
                 f"can't keep all {slots} slots busy, so a full run goes faster."
             )
         else:
             console.print(
-                f"Measuring every prompt would take about {_duration(seconds)} at this speed. Edits "
+                f"Measuring every prompt would take about {duration(seconds)} at this speed. Edits "
                 "that refuse less give longer answers, so allow more for them."
             )
 
@@ -1088,7 +1083,7 @@ def search_command(
     if len(found.trials) < total:
         console.print(
             f"Trials took about {seconds:.0f} s each, so all {total} would take about "
-            f"{_duration(seconds * total)}. Trials that refuse almost nothing take longest, and later "
+            f"{duration(seconds * total)}. Trials that refuse almost nothing take longest, and later "
             "trials aim at them, so allow more. Run candor search again to carry on."
         )
     elif picks:

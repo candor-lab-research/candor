@@ -151,7 +151,12 @@ uv run candor serve runs/rude --trial 37                       # chat with it in
   kind, any strength it widened to, and the least-KL trial at each count within the cap unless one
   refusing fewer has less (or, failing that, the one that refused fewest), each flagged if it
   presses on the edge of a range; and the commands to measure each on the held-out prompts, since
-  100 test prompts can't tell 0 refused from 2. The results files explain the design:
+  100 test prompts can't tell 0 refused from 2. Every `search.report_every` trials (25; 0 for never) it
+  shows its pace and the time left, and for each kind its trials, how many stopped early, its best so
+  far as the end picks it (least KL within the cap, or else fewest refused) with that trial's strengths
+  against the kind's range, and the trials since that best improved, keeping the latest report in
+  `search/progress.json`. The setting is left out of the search's record, so changing it never stops a
+  search carrying on. The results files explain the design:
   `results/phase-2-rude-llama.md` and, for widening and the two places, `results/phase-3-qwen3.5-9b.md`.
   `candor upgrade` keeps a run whose search was made before strength could widen from widening it.
 - `score` scores one edit exactly as the search scores its trials, without adding it to the search.
