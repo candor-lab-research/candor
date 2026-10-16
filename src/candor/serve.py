@@ -24,13 +24,15 @@ def chat_settings(run: Run) -> dict[str, Any]:
     return {key: value for key, value in run.template_kwargs().items() if key != "date_string"}
 
 
-def arguments(run: Run, model: Path, port: int, context: int) -> list[str]:
+def arguments(run: Run, model: Path, port: int, context: int, mcp: Path | None = None) -> list[str]:
     args = [
         str(toolchain.binaries() / "llama-server"), "-m", str(model), "--host", "127.0.0.1",
         "--port", str(port), "-ngl", "999", "-np", "1", "-c", str(context), *run.cache_flags(),
     ]  # fmt: skip
     if settings := chat_settings(run):
         args += ["--chat-template-kwargs", json.dumps(settings)]
+    if mcp is not None:
+        args += ["--mcp-servers-config", str(mcp)]
     return args + sampling_flags(run) + thinking_flags(run)
 
 
@@ -99,6 +101,13 @@ def stop(process: subprocess.Popen, timeout: float = 30) -> None:
     except subprocess.TimeoutExpired:
         process.kill()
         process.wait()
+
+
+def mcp_tools(port: int) -> list[str]:
+    """The tools the server's MCP servers listed when it started, by the names the model sees."""
+    reply = httpx.get(f"http://127.0.0.1:{port}/tools", timeout=30)
+    reply.raise_for_status()
+    return [tool["tool"] for tool in reply.json() if tool["type"] == "mcp"]
 
 
 def sample(run: Run, port: int) -> str:

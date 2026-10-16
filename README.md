@@ -173,6 +173,11 @@ uv run candor serve runs/rude --trial 37                       # chat with it in
   Default (its Low, Medium and High are token budgets for thinking, not the model's effort levels), and
   its sampling settings empty, so the server's apply. It serves llama-server's
   chat page (`--port`, 8080) until Ctrl-C; the server's log goes to `private/`.
+  `--mcp FILE` gives the model the tools of the MCP servers in FILE (llama-server's
+  `--mcp-servers-config`, in Cursor's format), such as a sandbox or web search: serve lists the tools
+  that started and says to keep them on, and the page asks before each call. Their descriptions reach
+  the model too, so it then no longer runs exactly as measured; a long chat with tools wants a larger
+  `--context`.
 - Reading residuals needs the model in 16 bits on the GPU. `run` checks this before downloading or
   converting anything: rude-llama fits on an 18 GB Mac; Qwen3.5-9B and K2-Horizon need a pod.
 

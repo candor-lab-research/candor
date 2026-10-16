@@ -820,6 +820,14 @@ def serve_command(
     context: Annotated[
         int, typer.Option(min=256, help="Tokens of context, at most the model's own limit.")
     ] = 16384,
+    mcp: Annotated[
+        Path | None,
+        typer.Option(
+            help="A file of MCP servers in Cursor's format (llama-server's --mcp-servers-config) whose "
+            "tools, such as a sandbox or web search, the model can call from the chat page. Their "
+            "descriptions then reach the model too, so it no longer runs exactly as measured."
+        ),
+    ] = None,
 ) -> None:
     """Run the unedited model or a trial's export in llama-server as candor measures it: the run's KV
     cache type and chat template settings, with today's date. It first shows the command, the
@@ -829,6 +837,10 @@ def serve_command(
     folder = folder.expanduser()
     if heretic is not None and trial is None:
         raise typer.BadParameter("say which of the study's trials with --trial", param_hint="--heretic")
+    if mcp is not None:
+        mcp = mcp.expanduser().resolve()
+        if not mcp.is_file():
+            raise typer.BadParameter(f"{mcp} is not a file", param_hint="--mcp")
 
     def report(message: str) -> None:
         console.print(f"[dim]{escape(message)}[/]")
@@ -855,7 +867,7 @@ def serve_command(
                     model, _ = export.exported(run, edit)
             limit = run.context_limit
             context = min(context, limit) if limit else context
-            args = serve.arguments(run, model, port, context)
+            args = serve.arguments(run, model, port, context, mcp)
             settings = serve.chat_settings(run)
             system = run.settings.deployment.system_prompt
             console.print(f"Serving {escape(name)}: {escape(str(model))}")
@@ -873,6 +885,9 @@ def serve_command(
             try:
                 console.print("A first message of Hello reaches the model as:")
                 console.print(serve.sample(run, port), markup=False, highlight=False)
+                tools = serve.mcp_tools(port) if mcp else []
+                if mcp and not tools:
+                    raise serve.ServeError(f"no MCP server in {mcp} listed a tool; see {log}")
                 console.print(
                     "In the chat page's Settings, then in a new chat (a chat keeps the settings it began "
                     "with):"
@@ -882,11 +897,20 @@ def serve_command(
                     console.print("---", system, "---", sep="\n", markup=False, highlight=False)
                 else:
                     console.print("  leave the system message empty, as measured")
-                console.print(
-                    "  turn off every tool under Chat > Tools: the page offers its own (such as the time and "
-                    "get_info), and chat templates such as Llama 3's turn any tool into a request for a "
-                    "function call"
-                )
+                if tools:
+                    listed = escape(", ".join(tools))
+                    console.print(
+                        f"  under Tools, keep Server on ({listed}, from {escape(str(mcp))}; a server "
+                        f"missing there failed to start, see {escape(str(log))}) and turn Browser off: the "
+                        "page's own tools, such as get_info. Each call asks first: the menu beside Allow "
+                        "once can always allow every tool from Server"
+                    )
+                else:
+                    console.print(
+                        "  turn off every tool under Tools: the page offers its own (such as the time and "
+                        "get_info), and chat templates such as Llama 3's turn any tool into a request for a "
+                        "function call"
+                    )
                 console.print(
                     "  keep the reasoning menu on Default: its other choices replace the template settings "
                     "and the thinking budget (its Low, Medium and High are budgets of 512, 2048 and 8192 "

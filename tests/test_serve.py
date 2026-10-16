@@ -3,6 +3,7 @@ import os
 import shlex
 import signal
 import socket
+import sys
 import time
 from datetime import date
 
@@ -92,7 +93,7 @@ def test_serve_shows_the_mode_then_serves_until_ctrl_c(tiny, stopped_by_ctrl_c):
     assert "KV cache f16, 256 tokens of context, chat template settings: none" in shown  # the model's limit
     assert "set the system message to the one measured, between the lines:\n---\nBe brief.\n---" in shown
     assert "keep the reasoning menu on Default" in shown and "sampled as measured, greedily." in shown
-    assert "turn off every tool under Chat > Tools" in shown and "leave the sampling settings empty" in shown
+    assert "turn off every tool under Tools" in shown and "leave the sampling settings empty" in shown
     command = shlex.split(next(line for line in shown.splitlines() if "--cache-type-v f16" in line))
     assert command[1:3] == ["-m", str(folder / "gguf" / "model-Q4_K_M.gguf")]
     assert f"Today: {date.today().strftime('%d %b %Y')}\nsystem: Be brief.\nuser: Hello\nassistant:" in shown
@@ -128,6 +129,40 @@ def test_the_sample_shows_the_servers_own_template_settings(tiny, tmp_path, monk
     assert 'chat template settings: {"mode": "deep"}' in result.output
     # TEMPLATE opens with {%- , which trims the newline before it.
     assert f"mode=deep<s>Today: {date.today().strftime('%d %b %Y')}\nuser: Hello" in result.output
+
+
+ONE_TOOL_SERVER = """
+import json, sys
+for line in sys.stdin:
+    request = json.loads(line)
+    if "id" not in request:
+        continue
+    result = {"tools": [{"name": "say", "description": "Says it.", "inputSchema": {"type": "object"}}]}
+    if request["method"] == "initialize":
+        result = {"protocolVersion": "2024-11-05", "capabilities": {"tools": {}}}
+    print(json.dumps({"jsonrpc": "2.0", "id": request["id"], "result": result}), flush=True)
+"""
+
+
+def test_serve_offers_the_tools_of_mcp_servers_and_stops_if_none_start(tiny, tmp_path, stopped_by_ctrl_c):
+    (tmp_path / "one.py").write_text(ONE_TOOL_SERVER)
+    one = {"command": sys.executable, "args": [str(tmp_path / "one.py")]}
+    broken = {"command": "false"}
+    (tmp_path / "mcp.json").write_text(json.dumps({"mcpServers": {"one": one, "broken": broken}}))
+    (tmp_path / "broken.json").write_text(json.dumps({"mcpServers": {"broken": broken}}))
+    folder = cli_folder(tiny)
+    runner = CliRunner(env={"COLUMNS": "250"})
+    serving = ["serve", str(folder), "--port", str(free_port()), "--mcp"]
+    result = runner.invoke(app, [*serving, str(tmp_path / "mcp.json")])
+    assert result.exit_code == 0, result.output
+    assert f"--mcp-servers-config {tmp_path / 'mcp.json'}" in result.output
+    assert f"under Tools, keep Server on (one_say, from {tmp_path / 'mcp.json'};" in result.output
+    assert "turn off every tool" not in result.output
+    failed = runner.invoke(app, [*serving, str(tmp_path / "broken.json")])
+    assert failed.exit_code == 1 and f"no MCP server in {tmp_path / 'broken.json'}" in failed.output
+    assert stopped_by_ctrl_c[1].poll() is not None
+    missing = runner.invoke(app, [*serving, str(tmp_path / "missing.json")])
+    assert missing.exit_code == 2 and "is not a file" in missing.output
 
 
 def test_the_server_renders_with_the_runs_chat_template_settings(tiny, tmp_path, stopped_by_ctrl_c):
