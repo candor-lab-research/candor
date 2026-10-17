@@ -53,8 +53,8 @@ thinking on (next, e.g. Qwen3.8-27B). A 9B model must not take days.
    the unedited model measured in full at 28 slots, then the search straight after (quote from its
    first trials). Meanwhile, the decision rule drafted from the unedited model's numbers, for the
    user to sign off before finalists are measured. Later: low effort's two closes; Uno not now.
-   The budget limit (`search.max_budget_hits`, on K2 from trial 138) owes a miss-rate check with
-   budget hits in the simulator (`findings.md`).
+   The budget limit (`search.max_budget_hits`, on K2 from trial 138) costs no measurable hits on
+   the simulator and stays on (results file, step 5).
 3. Not blocking, each when there is a reason:
    - speed: 64 slots (15% faster than 32), weights cached on the GPU for "full" trials, the proxy's
      adapters loaded into one server;

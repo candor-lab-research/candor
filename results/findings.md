@@ -167,8 +167,14 @@ entry is corrected rather than deleted when later evidence changes it.
   (KL 0.117) out of the cap. With hits spread evenly through the prompts, the stops would have cut
   the time 17%, nearly all from trials far over the caps; near-misses (9-14 hits) stop late. Unlike
   the refusal stop it can change later draws, in a kind with fewer edits within the caps than the
-  sampler learns from (K2's one layer: 2). Owed: its pace on K2 against this estimate; a miss-rate
-  check with budget hits in the simulator; whether the fixed prompt order biases it. Related:
+  sampler learns from (K2's one layer: 2). [Measured: the miss-rate simulator, budget hits fitted
+  on K2, 45,360 searches] It costs no measurable share of picks within 10% of the best, pooled
+  (at 600 trials -0.2 to -1.1 points on, -0.5 to -1.5 switched on at 137; intervals within -3.2 to
+  +1.1), even with failing edits beside the best, and saves 6-26% of K2's pod time in K2-like
+  landscapes; but it helps some landscapes and costs others up to 6.5 points, beyond chance.
+  So: on from trial 1 for a thinking model whose pilot shows budget hits common (K2: 15% of trials
+  over 8), off where they are rare and the saving small. Owed: its pace on K2 against the 17%
+  estimate; whether the fixed prompt order biases it. (`phase-4-k2-horizon-7b.md`, step 5) Related:
   thinking length as a criterion, above.
 - **ARA, heretic's new default edit.** [Published: others' judged tests] It kept models intact best
   but never removed the most refusals; on Qwen3.8-27B 57.5% complied against 82.2% for a careful

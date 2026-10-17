@@ -184,3 +184,45 @@ the 40-trial rule at 285 (per layer 8%). On K2 at 125 trials, neither kind has s
 - A stall stop picks no better than a fixed count of the same length, and worse for every window
   tried: gains come in jumps after flat stretches, so a stall doesn't show the search is done.
 - Stopping at 300 rather than 600 roughly halves the chance of a pick within 10% of the best.
+
+## Step 5: the budget limit on the miss-rate simulator (2026-10-17)
+
+`search.max_budget_hits = 8` measured on the phase 3 simulator, driving candor's own search at
+8dfc0f5 (the scorer swapped for a landscape; the switch-over code unchanged). Budget hits drawn per
+prompt from a model fitted on K2's trials (logit = -4.4 + 1.58 log(KL / best KL) - 3.03 x refusal
+rate + a smooth random field of sd 1.3 over the settings): 11-14% of trials over 8 in the K2-like
+groups (D3grow), 17% in the median scenario, against K2's 15%. Three arms paired by scenario and seed: off (the pick filtered at 8 after the search), on
+from trial 1, and switched on after trial 137 as K2 was. Truth: the least KL at true refusals <= 2
+and expected hits <= 8. 45,360 searches of 600 trials (200, 120 and 100 seeds per scenario, design
+and arm in the base, stress and cliffs landscapes), 5.9 h on 10 Mac cores. Checks: with the limit at
+100 "on" draws exactly as "off"; "switch" matches "off" for its first 137 trials.
+
+Picks within 10% of the true best at 600 trials, the difference against off with its paired 95%
+interval:
+
+| Landscape | Every group, on | Every group, switch | Position groups, on | Position groups, switch |
+| --- | --- | --- | --- | --- |
+| Base | -0.2 (-1.4, +1.1) | -0.5 (-1.8, +0.7) | +1.5 (-0.3, +3.3) | -0.1 (-1.9, +1.6) |
+| Stress (a bump beside the best) | -0.6 (-2.3, +1.0) | -0.8 (-2.4, +0.7) | +1.2 (-1.2, +3.6) | +0.2 (-2.1, +2.5) |
+| Cliffs (a bump beside every basin near the best) | -1.1 (-3.0, +0.7) | -1.5 (-3.2, +0.2) | -0.1 (-2.8, +2.6) | -2.1 (-4.6, +0.5) |
+
+Off hits 47-48% of the time over every group. K2 hours per 600 trials (from K2's seconds per trial: 261 + 2.78 a
+prompt judged + 27.1 a budget hit - 3.85 a refusal, R² 0.83), off / on / switch:
+
+| Group | Hours | Saved by on / switch |
+| --- | --- | --- |
+| Positions, penalised (D3grow) | 101 / 75 / 77 | 26% / 24% |
+| Positions, free (D3grow) | 79 / 73 / 74 | 8% / 6% |
+| Positions, penalised (D3, wide) | 171 / 83 / 122 | 51% / 29% |
+| Positions, free (D3, wide) | 87 / 77 / 81 | 11% / 7% |
+| Strength, all (grow) | 110 / 79 / 84 | 28% / 24% |
+
+- Pooled, the limit costs no measurable share of hits at 300, 400 or 600 trials, in any landscape.
+- Its effect differs between landscapes beyond chance (Cochran's Q p < 0.01 for on; sd 4-8 points):
+  at 600, positions free (D3grow) lost 2.8-5.8 points on from trial 1 in all three landscapes and
+  6.5 (-11.8 to -1.0) switched on at 137 under cliffs; positions penalised wide gained 4.4-6.7 on. At equal pod time the K2-like groups gained or
+  held (switch +3.0 to +7.0 penalised, -1.4 to -2.7 free, not significant).
+- On from trial 1 matched or beat the mid-search switch and saved more time.
+- Limits: the budget model rests on one model's trials, its field length weakly identified; which
+  landscape K2 resembles is unknown; only a limit of 8 and the search's pick were tested. Code,
+  tables and runs: `.claude/search-design-backup/misscheck/` (`budget-report.txt`).

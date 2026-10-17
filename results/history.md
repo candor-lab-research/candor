@@ -745,3 +745,12 @@ cap; neither kind's best changes. From trial 138 trials stop on the budget, and 
 refusal stop moved from 27 to 29 refusals (per layer 2 to 3) to keep its guarantee once the sampler
 ranks by both caps, and was back to 27 and 2 by trial 143. Code older than 8dfc0f5 must not run on `runs/k2` again: it would carry on in
 the old studies.
+
+### Phase 4, step 5: the budget limit checked on the miss-rate simulator (2026-10-17)
+
+The check owed when the limit went on: a developer agent ran candor's own search at 8dfc0f5 on the
+phase 3 simulator, budget hits fitted on K2's trials, 45,360 searches in 5.9 h on the Mac. Pooled,
+the limit costs no measurable share of picks near the best, on from trial 1 or switched on at 137
+as K2's was, and saves 6-26% of pod time in K2-like landscapes; it helps some landscapes and costs
+others beyond chance (results file, step 5). So it stays on for K2. For later models, on from trial
+1 where a pilot shows budget hits common, off where rare: for the phase-end discussion.
