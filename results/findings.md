@@ -159,17 +159,17 @@ entry is corrected rather than deleted when later evidence changes it.
   that lengthened maths thinking (Trial 161) lost maths through budget hits; candor's two finalists
   didn't lengthen it and kept maths, so it didn't decide between them. Test: on the next model,
   whether maths thinking length on the test prompts predicts held-out maths.
-- **Thinking that runs to the budget as a search constraint, with an early stop.** [Hypothesis,
-  from K2-Horizon-7B's search, 72 trials; to investigate and build once K2 is done, the user
-  2026-10-16] The search ranks by refusals, then KL, so it can't see an edit whose thinking runs
-  to the 8,192 cap: trial 66 refused 0 at KL 0.117 with 9 of 100 answers at the cap, and the 6
-  trials with 9-39 such answers took 38% of the time over trials 43-72. Unedited K2 hit the cap on
-  0 of 288 harmful held-out prompts; edits that comply hit it 0-5 times in 100, except at summed
-  strength 8 or more. Nothing stopped those trials: the refusal stop's line was still 95-97, and KL
-  is read after the answers. Proposal: an edit with more than about 8 answers of 100 at the cap
-  fails, as one refusing more than 2 does; a trial stops once it passes; KL read first as a cheap
-  second guard. Test: replay on this search's journal (time saved, whether the best edit is cut),
-  then a miss-rate check as the refusal stop had. Related: thinking length as a criterion, above.
+- **Thinking that runs to the budget, as a search constraint with an early stop.** [Measured: a
+  replay on K2-Horizon-7B's journal, 126 trials; built as `search.max_budget_hits`, on K2 from
+  trial 138, 2026-10-17] Edits that comply hit the 8,192 cap 0-5 times in 100 and the unedited
+  model 0 of 288; 17 of 126 trials hit it more than 8 times (the 11 among the first 100 took 33% of
+  the time), none ever its kind's best, and judging them again at 8 takes only trials 66 and 102
+  (KL 0.117) out of the cap. With hits spread evenly through the prompts, the stops would have cut
+  the time 17%, nearly all from trials far over the caps; near-misses (9-14 hits) stop late. Unlike
+  the refusal stop it can change later draws, in a kind with fewer edits within the caps than the
+  sampler learns from (K2's one layer: 2). Owed: its pace on K2 against this estimate; a miss-rate
+  check with budget hits in the simulator; whether the fixed prompt order biases it. Related:
+  thinking length as a criterion, above.
 - **ARA, heretic's new default edit.** [Published: others' judged tests] It kept models intact best
   but never removed the most refusals; on Qwen3.8-27B 57.5% complied against 82.2% for a careful
   directional edit. Parked until after Qwen, or if keeping maths and thinking intact decides

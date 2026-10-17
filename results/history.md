@@ -729,3 +729,19 @@ layer had just nearly halved its KL.
 The user reviewed trial 175's thinking in `candor serve` and called the review done; no counts were
 reported. The unedited model and trial 205, also listed for it, were dropped with it. Phase 3 now
 waits only on the phase-end discussion.
+
+### Phase 4, step 5: the budget limit switched on mid-search (the user, 2026-10-17)
+
+The stall stop is dropped: replayed on the miss-rate simulator, it picked no better than a fixed
+count of the same length, and 300 trials rather than 600 roughly halve the hits (results file, step
+5). So this morning's stop at 300 has no evidence behind it; how far the search runs (300, 400 or
+600) waits for the user, once the new pace is seen. The user chose instead to make trials cheaper,
+reversing the 2026-10-16 entry's "not changed mid-search": `search.max_budget_hits` was built (a
+developer agent; review passed, 2 minor points fixed and re-reviewed; 785 tests) and switched on at
+8. The search stopped between trials after trial 137 (07:44 UTC), its journal, settings, log and
+code backed up on the pod (`/root/backup-20261017T0744`), and resumed with the 137 trials judged
+again from their recorded counts: 20 over 8, of which only trials 66 and 102 had been within the
+cap; neither kind's best changes. From trial 138 trials stop on the budget, and one layer's
+refusal stop moves from 29 to 50 refusals (per layer 2 to 3) to keep its guarantee once the sampler
+ranks by both caps. Code older than 8dfc0f5 must not run on `runs/k2` again: it would carry on in
+the old studies.
