@@ -151,8 +151,9 @@ entry is corrected rather than deleted when later evidence changes it.
   length decides. [Published, on unedited models only]
 - **A shorter search on larger models: at most 300 trials, sooner on a stall.** [Hypothesis, from
   one search] K2 stops once both kinds' best KL within the cap gains under 10% in 50 of their own
-  trials (`history.md`, 2026-10-17). Test: replay the rule on Qwen's and K2's journals, where it
-  stops and what it misses.
+  trials (`history.md`, 2026-10-17). Replayed on Qwen's search: it stops at trial 370 of 545 with
+  both finalists found (175 and 205), the one-layer best within 0.2% of its final KL and the
+  per-layer best within 5%; a 40-trial window stops at 285, per layer 8% off. Test: K2's journal.
 - **Thinking length as a criterion between candidates.** [Hypothesis; 3 edits agree] The one edit
   that lengthened maths thinking (Trial 161) lost maths through budget hits; candor's two finalists
   didn't lengthen it and kept maths, so it didn't decide between them. Test: on the next model,
