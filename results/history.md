@@ -742,6 +742,6 @@ developer agent; review passed, 2 minor points fixed and re-reviewed; 785 tests)
 code backed up on the pod (`/root/backup-20261017T0744`), and resumed with the 137 trials judged
 again from their recorded counts: 20 over 8, of which only trials 66 and 102 had been within the
 cap; neither kind's best changes. From trial 138 trials stop on the budget, and one layer's
-refusal stop moves from 29 to 50 refusals (per layer 2 to 3) to keep its guarantee once the sampler
-ranks by both caps. Code older than 8dfc0f5 must not run on `runs/k2` again: it would carry on in
+refusal stop moved from 27 to 29 refusals (per layer 2 to 3) to keep its guarantee once the sampler
+ranks by both caps, and was back to 27 and 2 by trial 143. Code older than 8dfc0f5 must not run on `runs/k2` again: it would carry on in
 the old studies.
