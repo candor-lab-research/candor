@@ -21,9 +21,11 @@ results/phase-3-qwen3.5-9b.md).
 All of the run's adapters are loaded into one llama-server, so a trial only sets their strengths per
 request. A trial answers the harmful test prompts a chunk at a time and the judge labels each chunk;
 refusals can only add up, so a trial that has refused more than the cap, and more than 25 fully scored
-trials of its kind, can't win and stops there, unseen by the sampler. KL divergence is read from the
-harmless test prompts' first tokens. The held-out prompts are left for candor measure. Nothing a model
-writes is kept: answers are judged, then dropped.
+trials of its kind, can't win and stops there, unseen by the sampler. With search.max_budget_hits set, an
+edit counts only if its thinking also reaches the budget on no more prompts than that, and a trial stops
+once it can't, though the sampler may see that stop. KL divergence is read from the harmless test
+prompts' first tokens. The held-out prompts are left for candor measure. Nothing a model writes is kept:
+answers are judged, then dropped.
 
 Any other edit, such as a heretic trial, can be scored the same way without joining the search, to see
 where it would sit among the search's trials and whether the search could have drawn it.
@@ -43,6 +45,7 @@ from typing import Any
 import optuna
 import torch
 from optuna.distributions import FloatDistribution
+from optuna.samplers._base import _CONSTRAINTS_KEY
 from optuna.storages import JournalStorage
 from optuna.storages.journal import JournalFileBackend
 from optuna.trial import BaseTrial, FrozenTrial, TrialState
@@ -255,12 +258,32 @@ def direction(layer: float | None, answering: bool) -> str:
 
 def violation(score: Score, prompts: int, cap: int) -> float:
     """How far over the cap an edit refuses, its refusals scaled to all prompts if it stopped early.
-    The sampler treats an edit as within the cap when this is at most 0."""
+    The sampler treats an edit as within the caps when this is at most 0, and with
+    search.max_budget_hits set, budget_violation too."""
     return score.refusals * prompts / score.judged - cap - 0.5
 
 
-def _violation(trial: FrozenTrial) -> tuple[float]:
-    return (trial.user_attrs["violation"],)
+def budget_violation(score: Score, prompts: int, hits: int) -> float:
+    """How far past search.max_budget_hits an edit's answers reach the thinking budget, scaled to all
+    prompts if it stopped early, as violation scales refusals."""
+    return score.forced * prompts / score.judged - hits - 0.5
+
+
+def _constraints(attrs: dict[str, Any]) -> tuple[float, ...]:
+    """A trial's constraints, as its record gives them: its violation, and its budget violation where
+    it was judged by search.max_budget_hits."""
+    budget = attrs.get("budget violation")
+    return (attrs["violation"],) if budget is None else (attrs["violation"], budget)
+
+
+def _violation(trial: FrozenTrial) -> tuple[float, ...]:
+    return _constraints(trial.user_attrs)
+
+
+def _over_caps(trial: FrozenTrial) -> float:
+    """How far a trial goes over its caps all told, by which the sampler ranks the trials outside them,
+    as Optuna sums a trial's violations; 0 within them."""
+    return sum(max(value, 0.0) for value in _violation(trial))
 
 
 def outside_space(edit: Edit, space: config.Search, layers: int, components: list[str]) -> list[str]:
@@ -334,7 +357,7 @@ def widened(found: Found, scope: str, space: config.Search) -> tuple[float, floa
     moved out to search.widest_strength, or with none within the cap, edits too weak, the ceiling."""
     low, high = space.strength
     widest_low, widest_high = space.widest_strength
-    best = within_cap(found, scope, space.max_refusals)
+    best = within_cap(found, scope, space)
     if not best:
         return low, widest_high
     pressed = [
@@ -446,17 +469,33 @@ def candidates(found: Found) -> list[Candidate]:
     return front(scored_in_full(found))
 
 
-def within_cap(found: Found, scope: str, cap: int) -> list[Candidate]:
-    """The scope's trials scored in full that refuse no more than cap, least KL first."""
-    kept = [c for c in scored_in_full(found) if scope_of(c.params) == scope and c.refusals <= cap]
+def counts(score: Score, space: config.Search, stopped: bool = False) -> bool:
+    """Whether an edit is within the cap, the one rule every choice of the search's best edits follows:
+    scored in full, refusing no more than search.max_refusals and, with search.max_budget_hits set,
+    reaching the thinking budget on no more answers than that."""
+    hits = space.max_budget_hits
+    return not stopped and score.refusals <= space.max_refusals and (hits is None or score.forced <= hits)
+
+
+def _counts(trial: FrozenTrial, space: config.Search) -> bool:
+    return counts(_score(trial), space, trial.user_attrs["stopped"])
+
+
+def within_cap(found: Found, scope: str, space: config.Search) -> list[Candidate]:
+    """The scope's trials within the cap (see counts), least KL first."""
+    kept = [
+        _candidate(number, t)
+        for number, t in found.trials.items()
+        if scope_of(t.params) == scope and _counts(t, space)
+    ]
     return sorted(kept, key=lambda c: (c.kl, c.refusals))
 
 
-def to_measure(found: Found, scope: str, cap: int) -> list[Candidate]:
+def to_measure(found: Found, scope: str, space: config.Search) -> list[Candidate]:
     """The scope's trials within the cap with the least KL at each count refused, fewest refused first,
     leaving out any that one refusing fewer beats. 100 test prompts can't tell 0 refused from 2, so
     the held-out prompts choose between them."""
-    return front(within_cap(found, scope, cap))
+    return front(within_cap(found, scope, space))
 
 
 def fewest_refused(found: Found, scope: str) -> Candidate | None:
@@ -465,11 +504,11 @@ def fewest_refused(found: Found, scope: str) -> Candidate | None:
     return min(kept, key=lambda c: (c.refusals, c.kl), default=None)
 
 
-def best_so_far(found: Found, scope: str, cap: int) -> Candidate | None:
+def best_so_far(found: Found, scope: str, space: config.Search) -> Candidate | None:
     """The scope's best trial so far, as the search's summary names it: the least KL of those to measure,
     or with none within the cap, the one that refused fewest. KL is compared as shown, so where two trials'
     KL ties at KL_DIGITS this can differ from the one widening judges by, the least KL unrounded."""
-    kept = to_measure(found, scope, cap)
+    kept = to_measure(found, scope, space)
     return kept[-1] if kept else fewest_refused(found, scope)
 
 
@@ -485,10 +524,11 @@ def _kind_progress(found: Found, space: config.Search, scope: str) -> dict[str, 
     kind: dict[str, Any] = {
         "trials": len(numbers),
         "stopped early": sum(found.trials[number].user_attrs["stopped"] for number in numbers),
-        "strength": [low, high],
-        "widened": scope in found.strength,
     }
-    best = best_so_far(found, scope, space.max_refusals)
+    if (hits := space.max_budget_hits) is not None:
+        kind["failed on the budget"] = sum(_score(found.trials[number]).forced > hits for number in numbers)
+    kind |= {"strength": [low, high], "widened": scope in found.strength}
+    best = best_so_far(found, scope, space)
     if best is None:
         return kind
     strengths = {name: value for name, value in best.params.items() if name.endswith(".strength")}
@@ -501,7 +541,7 @@ def _kind_progress(found: Found, space: config.Search, scope: str) -> dict[str, 
         "trial": best.trial,
         "refused": best.refusals,
         "KL": best.kl,
-        "within the cap": best.refusals <= space.max_refusals,
+        "within the cap": _counts(found.trials[best.trial], space),
         "strengths": strengths,
         "at its floor": [name for name, (floor, _) in ends.items() if floor],
         "at its ceiling": [name for name, (_, ceiling) in ends.items() if ceiling],
@@ -555,6 +595,8 @@ def progress_lines(report: dict[str, Any]) -> list[str]:
         low, high = kind["strength"]
         span = f"range {low:g}-{high:g}" + (" (widened)" if kind["widened"] else "")
         line = f"  {scope}: {_trials(kind['trials'])}, {kind['stopped early']} stopped early"
+        if "failed on the budget" in kind:
+            line += f", {kind['failed on the budget']} failed on the budget"
         if "best" not in kind:
             lines.append(f"{line}; none scored in full yet; strength {span}")
             continue
@@ -599,16 +641,38 @@ def _strength(study: optuna.Study) -> tuple[float, float] | None:
     return (widenings[-1][1], widenings[-1][2]) if widenings else None
 
 
+def _judged_name(scope: str, changes: int) -> str:
+    """The name of a kind's study after this many changes of the search.max_budget_hits its trials are
+    judged by. Each holds every finished trial of the kind."""
+    return f"{STUDIES[scope]}, budget hits {changes}"
+
+
+def _budget_changes(study: optuna.Study) -> list[list[Any]]:
+    """Each change of the search.max_budget_hits the study's trials are judged by: the trials finished
+    then, and the new setting, None for unset."""
+    return study.user_attrs.get("budget hits", [])
+
+
+def _budget_hits(study: optuna.Study) -> int | None:
+    """The search.max_budget_hits the study's trials are judged by; None for a study that never had one."""
+    changes = _budget_changes(study)
+    return changes[-1][1] if changes else None
+
+
 def _latest(storage: JournalStorage, scope: str) -> str | None:
-    """The name of the kind's study the search goes on in: the one made at its last widening. A widened
-    study is only whole once it records its widening, the last thing written to it."""
+    """The name of the kind's study the search goes on in: the last made of its whole studies. Each after
+    the first is made from the one before, at a widening of its strength range or a change of
+    search.max_budget_hits, and is only whole once it records its widenings, the last thing written to
+    it."""
     made = {study.study_name: study.user_attrs for study in storage.get_all_studies()}
     if STUDIES[scope] not in made:
         return None
-    widenings = 0
-    while "widened" in made.get(_study_name(scope, widenings + 1), {}):
-        widenings += 1
-    return _study_name(scope, widenings)
+    whole = [
+        name
+        for name, attrs in made.items()
+        if name == STUDIES[scope] or (name.startswith(STUDIES[scope] + ",") and "widened" in attrs)
+    ]
+    return max(whole, key=storage.get_study_id_from_name)
 
 
 def _found(studies: dict[str, optuna.Study]) -> Found:
@@ -740,7 +804,7 @@ class Search:
             # sampled, and a new search is recorded only once that thinking exists.
             self._check(self.inputs(ids), known=True)
             harmful, harmless = ids["harmful_test"], run.kl_ids(ids, "harmless_test")
-            studies = self._studies(self.inputs(ids, harmless))
+            studies = self._studies(self.inputs(ids, harmless), len(harmful))
             target = min(target, len(SCOPES) * space.trials_per_scope)
             started(self._done(studies), target)
             if self._done(studies) < target:
@@ -756,8 +820,9 @@ class Search:
                     while self._done(studies) < target:
                         scope = self._next(studies)
                         self._widen(studies, scope)
-                        number, score = self._trial(studies, scope, scorer, adapters)
-                        within = score.judged == len(harmful) and score.refusals <= space.max_refusals
+                        trial = self._trial(studies, scope, scorer, adapters)
+                        number, score = trial.user_attrs["number"], _score(trial)
+                        within = _counts(trial, space)
                         shown = round(score.kl, KL_DIGITS)
                         before = [
                             round(kl, KL_DIGITS) for refusals, kl in kept[scope] if refusals <= score.refusals
@@ -963,8 +1028,9 @@ class Search:
             how["thinking"]["budget"] = settings.scoring.thinking_budget or how["thinking"]["budget"]
         # Only a search that may widen strength records how far, so searches made before it could still
         # carry on; and a model that doesn't think records its slots only at another number than the
-        # default. How often it reports changes no score.
-        unrecorded = {"trials_per_scope", "report_every"} | (
+        # default. How often it reports changes no score, and the studies record the
+        # search.max_budget_hits they judge their trials by, so a change judges them again.
+        unrecorded = {"trials_per_scope", "report_every", "max_budget_hits"} | (
             set() if settings.search.widens() else {"widest_strength"}
         )
         recorded = settings.deployment.think_close or self.slots != config.SEARCH_SLOTS
@@ -1016,9 +1082,10 @@ class Search:
                 f"{self.folder} holds a search with no record of its settings; move it aside or delete it"
             )
 
-    def _studies(self, inputs: dict[str, Any]) -> dict[str, optuna.Study]:
+    def _studies(self, inputs: dict[str, Any], prompts: int) -> dict[str, optuna.Study]:
         """The run's study of each kind of edit: new ones, or those already here if they were made from
-        the same inputs."""
+        the same inputs, their trials judged by search.max_budget_hits as set now (see _judge_again)
+        when that changed. Each trial was scored on this many harmful test prompts."""
         record = self.folder / "inputs.json"
         self._check(inputs)
         if not record.exists():
@@ -1027,7 +1094,9 @@ class Search:
             partial.write_text(json.dumps(json.loads(json.dumps(inputs)), sort_keys=True))
             partial.replace(record)
         storage = _storage(self.folder)
-        studies = {}
+        space = self.run.settings.search
+        hits = space.max_budget_hits
+        studies, judged, lost = {}, [], 0
         for scope in SCOPES:
             study = optuna.create_study(
                 study_name=_latest(storage, scope) or STUDIES[scope],
@@ -1039,9 +1108,62 @@ class Search:
             # it.
             for trial in study.get_trials(deepcopy=False, states=(TrialState.RUNNING,)):
                 study.tell(trial.number, state=TrialState.FAIL)
+            if _budget_hits(study) != hits:
+                before = space.model_copy(update={"max_budget_hits": _budget_hits(study)})
+                lost += sum(_counts(t, before) and not _counts(t, space) for t in _completed(study))
+                judged += _completed(study)
+                study = self._judge_again(study, scope, prompts)
             self._ready(study, scope)
             studies[scope] = study
+        if judged:
+            line = f"The search's {len(judged)} finished trials are judged again by search.max_budget_hits"
+            if hits is None:
+                self.run.report(f"{line}, now unset")
+            else:
+                over = sum(_score(trial).forced > hits for trial in judged)
+                self.run.report(
+                    f"{line}, now {hits}: {over} reached the thinking budget more often, which leaves {lost} "
+                    "fewer within the cap"
+                )
         return studies
+
+    def _judge_again(self, study: optuna.Study, scope: str, prompts: int) -> optuna.Study:
+        """The kind's study, its trials judged by search.max_budget_hits as set now. The sampler was told
+        each trial's constraints as it finished, and Optuna can't change a finished trial, so the trials
+        move to a new study of the kind, their constraints told afresh from their refusals and answers
+        at the budget; their numbers, settings and scores stay as they were."""
+        hits = self.run.settings.search.max_budget_hits
+        changes = _budget_changes(study)
+        finished = _completed(study)
+        if not finished:
+            study.set_user_attr("budget hits", [*changes, [0, hits]])
+            return study
+        storage = _storage(self.folder)
+        name = _judged_name(scope, len(changes) + 1)
+        # Left part made by a search stopped while judging its trials again.
+        if name in optuna.get_all_study_names(storage):
+            optuna.delete_study(study_name=name, storage=storage)
+        new = optuna.create_study(study_name=name, storage=storage, direction="minimize")
+        for key, value in study.user_attrs.items():
+            if key not in ("widened", "budget hits"):
+                new.set_user_attr(key, value)
+        for trial in finished:
+            attrs = {key: value for key, value in trial.user_attrs.items() if key != "budget violation"}
+            if hits is not None:
+                attrs["budget violation"] = budget_violation(_score(trial), prompts, hits)
+            new.add_trial(
+                optuna.trial.create_trial(
+                    params=trial.params,
+                    distributions=trial.distributions,
+                    value=trial.value,
+                    user_attrs=attrs,
+                    system_attrs=trial.system_attrs | {_CONSTRAINTS_KEY: list(_constraints(attrs))},
+                )
+            )
+        new.set_user_attr("budget hits", [*changes, [len(finished), hits]])
+        # Written last, as at a widening: a study without it was left part made.
+        new.set_user_attr("widened", _widenings(study))
+        return new
 
     def _ready(self, study: optuna.Study, scope: str) -> None:
         """Queue the kind's spread starts its study hasn't scored or queued yet, so a point whose trial
@@ -1125,7 +1247,7 @@ class Search:
         new.set_user_attr("widened", [*widenings, [finished, *wider]])
         self._ready(new, scope)
         studies[scope] = new
-        if within_cap(found, scope, space.max_refusals):
+        if within_cap(found, scope, space):
             why = f"its best {scope} edit within the cap presses on an end of strength"
         else:
             why = f"no {scope} edit is within the cap yet"
@@ -1163,12 +1285,10 @@ class Search:
         return min(open_scopes, key=lambda s: (len(_completed(studies[s])), SCOPES.index(s)))
 
     def _within_cap(self, study: optuna.Study) -> list[tuple[int, float]]:
-        """The refusals and KL of the study's trials scored in full within the cap."""
-        cap = self.run.settings.search.max_refusals
+        """The refusals and KL of the study's trials within the cap (see counts)."""
+        space = self.run.settings.search
         return [
-            (t.user_attrs["refusals"], t.user_attrs["kl"])
-            for t in _completed(study)
-            if not t.user_attrs["stopped"] and t.user_attrs["refusals"] <= cap
+            (t.user_attrs["refusals"], t.user_attrs["kl"]) for t in _completed(study) if _counts(t, space)
         ]
 
     def _trial(
@@ -1177,7 +1297,7 @@ class Search:
         scope: str,
         scorer: "_Scorer",
         adapters: dict[str, dict[str, Path]],
-    ) -> tuple[int, Score]:
+    ) -> FrozenTrial:
         run, space = self.run, self.run.settings.search
         _, layers, _, writers = run.shape
         study = studies[scope]
@@ -1201,26 +1321,31 @@ class Search:
             edit = edit_from(trial.params, number, layers)
             started = time.perf_counter()
             scales = self._applied(edit, adapters, scorer, run.path("scores", "trial"))
-            full = sorted(t.user_attrs["refusals"] for t in _completed(study) if not t.user_attrs["stopped"])
-            # A trial can't win once it refuses more than the cap, and the sampler can't see it stop once
-            # it also refuses more than STOP_AFTER trials of its kind scored in full.
+            cap, hits = space.max_refusals, space.max_budget_hits
+            full = sorted(_over_caps(t) for t in _completed(study) if not t.user_attrs["stopped"])
+            # A trial can't win once it refuses more than the cap. Refusing n puts it at least n - cap - 0.5
+            # over the refusal cap, scaled or in full, so past this it is further over than STOP_AFTER
+            # trials of its kind scored in full are over all their caps: the sampler ranks it behind them
+            # either way, so it can't see the trial stop. With search.max_budget_hits set, a trial also
+            # can't win once more answers reach the budget, but the sampler may see that stop.
             stop_above = (
-                max(space.max_refusals, full[STOP_AFTER - 1])
+                max(cap, math.floor(full[STOP_AFTER - 1] + cap + 0.5))
                 if space.stop_early and len(full) >= STOP_AFTER
                 else None
             )
-            score = scorer.score(scales, stop_above)
+            score = scorer.score(scales, stop_above, hits if space.stop_early else None)
             prompts = len(scorer.harmful)
             for key, value in asdict(score).items():
                 trial.set_user_attr(key, value)
             trial.set_user_attr("stopped", score.judged < prompts)
-            trial.set_user_attr("violation", violation(score, prompts, space.max_refusals))
+            trial.set_user_attr("violation", violation(score, prompts, cap))
+            if hits is not None:
+                trial.set_user_attr("budget violation", budget_violation(score, prompts, hits))
             trial.set_user_attr("seconds", time.perf_counter() - started)
         except BaseException:
             study.tell(trial, state=TrialState.FAIL)
             raise
-        study.tell(trial, score.kl)
-        return number, score
+        return study.tell(trial, score.kl)
 
 
 @dataclass(frozen=True)
@@ -1264,10 +1389,13 @@ class _Scorer:
         self.server = self.server_with(adapters)
         self.server.start()
 
-    def score(self, scales: dict[Path, float], stop_above: int | None = None) -> Score:
+    def score(
+        self, scales: dict[Path, float], stop_above: int | None = None, forced_above: int | None = None
+    ) -> Score:
         """An edit's refusals and KL divergence. The harmful prompts are judged CHUNK at a time, in
         order, while the server answers the next ones; with stop_above, it stops once more than that
-        many are refused."""
+        many are refused, and with forced_above, once more answers than that reached the thinking
+        budget."""
         refusals = keyword_refusals = unlabelled = judged = thought = forced = 0
         how = self.answering
         answering = self.server.answers(
@@ -1289,7 +1417,9 @@ class _Scorer:
                 unlabelled += sum(label is None for label in labels)
                 keyword_refusals += sum(map(is_refusal, answers))
                 judged += len(answers)
-                if stop_above is not None and refusals > stop_above:
+                if (stop_above is not None and refusals > stop_above) or (
+                    forced_above is not None and forced > forced_above
+                ):
                     break
         top = self.server.top_logprobs(self.harmless, self.kl_tokens, scales)
         divergence = kl.mean_from_top(self.base, top)

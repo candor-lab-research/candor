@@ -1043,14 +1043,15 @@ def search_command(
         )
     console.print(table)
     _, layers, _, _ = run.shape
-    cap = space.max_refusals
+    cap, hits = space.max_refusals, space.max_budget_hits
+    caps = f"{cap} refused" + ("" if hits is None else f", {hits} at the thinking budget")
     console.print(
-        f"The least KL of each kind at each count within the cap ({cap} refused), unless a trial "
+        f"The least KL of each kind at each count within the cap ({caps}), unless a trial "
         "refusing fewer has less:"
     )
     picks = []
     for scope in search.SCOPES:
-        best = search.to_measure(found, scope, cap)
+        best = search.to_measure(found, scope, space)
         fewest = search.fewest_refused(found, scope)
         if fewest is None:
             console.print(f"  {scope}: no trial scored in full yet")
@@ -1068,7 +1069,8 @@ def search_command(
             if best:
                 console.print(f"  {scope}: {described}")
             else:
-                console.print(f"  {scope}: none refused {cap} or fewer; the fewest refused: {described}")
+                none = f"none refused {cap} or fewer" if hits is None else "none within the cap"
+                console.print(f"  {scope}: {none}; the fewest refused: {described}")
             if aimed and (edges := search.at_edges(candidate.params, drawn_from, layers)):
                 console.print(
                     f"    It presses on the edge of the search's ranges ({escape('; '.join(edges))}), "
@@ -1321,9 +1323,12 @@ def proxy_command(
         f"{checked.edits[checked.repeated].name} refused {first.refusals} thinking, and {again.refusals} "
         "with another seed."
     )
-    cap = run.settings.search.max_refusals
+    space = run.settings.search
+    cap = str(space.max_refusals)
+    if space.max_budget_hits is not None:
+        cap += f" refused, {space.max_budget_hits} at the thinking budget,"
     within = {
-        mode: [e.name for e, s in zip(checked.edits, scores, strict=True) if s.refusals <= cap]
+        mode: [e.name for e, s in zip(checked.edits, scores, strict=True) if search.counts(s, space)]
         for mode, scores in (("off", checked.off), ("on", checked.on))
     }
     for mode, names in within.items():

@@ -140,8 +140,11 @@ uv run candor serve runs/rude --trial 37                       # chat with it in
   strengths: it answers the test prompts `slots.search` at a time and the judge counts refusals,
   stopping once the trial has refused more than the cap and more than 25 fully scored trials of its
   kind, which leaves every trial the sampler draws unchanged; KL is read from the 100 harmless test
-  prompts. Nothing a model writes is kept. Strength starts at heretic's 0.8-1.5. From a kind's
-  60th trial, and every 30th after, if its best edit within the cap presses an end of that range
+  prompts. For a thinking model `search.max_budget_hits` (unset) can also cap the test prompts whose
+  thinking reaches the budget: an edit over it doesn't count, and its trial stops there, which unlike
+  the refusal stop can change later draws. Changing it carries a search on, its finished trials judged
+  again by the new number. Nothing a model writes is kept. Strength starts at heretic's 0.8-1.5. From
+  a kind's 60th trial, and every 30th after, if its best edit within the cap presses an end of that range
   (or none is within the cap yet: the ceiling), that end moves out to `search.widest_strength`
   (0.5-3.0), once; the kind's trials carry on and 10 evenly spread trials start the wider range.
   For a thinking model the 20 start points are split evenly between the two places directions are

@@ -46,7 +46,7 @@ def test_every_setting_and_section_has_an_explanation():
         if (
             line.startswith("[")
             or (is_setting and not line.startswith("# "))
-            or line in ("# date =", "# revision =", "# judge_revision =", "# search =")
+            or line in ("# date =", "# revision =", "# judge_revision =", "# search =", "# max_budget_hits =")
         ):
             assert lines[i - 1].startswith("# ") and not lines[i - 1].endswith(" ="), (
                 f"{line!r} has no comment above it"
@@ -97,6 +97,8 @@ def test_a_missing_setting_is_an_error_not_a_default(tmp_path, line, name):
         ("trials_per_scope = 300", "trials_per_scope = true", "valid integer"),
         ("trials_per_scope = 300", 'trials_per_scope = "300"', "valid integer"),
         ("max_refusals = 2", "max_refusals = -1", "greater than or equal to 0"),
+        ("# max_budget_hits =", "max_budget_hits = -1", "greater than or equal to 0"),
+        ("# max_budget_hits =", "max_budget_hits = 2.5", "valid integer"),
         ("stop_early = true", 'stop_early = "yes"', "valid boolean"),
         ("seed = 0", "seed = -1", "greater than or equal to 0"),
         ("seed = 0", "seed = 4294967296", "less than"),
@@ -309,3 +311,19 @@ def test_scoring_with_thinking_off_needs_a_model_that_thinks():
     thinks = config.Deployment(think_close="</think>", thinking_budget=8)
     off = config.Scoring(thinking="off")
     assert config.RunConfig(model=config.Model(source="x"), deployment=thinks, scoring=off).scoring == off
+
+
+def test_max_budget_hits_needs_a_search_whose_trials_think(tmp_path):
+    model, hits = config.Model(source="x"), config.Search(max_budget_hits=8)
+    with pytest.raises(
+        ValidationError, match=r"search\.max_budget_hits is set for a model that doesn't think"
+    ):
+        config.RunConfig(model=model, search=hits)
+    thinks = config.Deployment(think_close="</think>", thinking_budget=8)
+    off = config.Scoring(thinking="off")
+    with pytest.raises(
+        ValidationError, match=r"with scoring\.thinking \"off\" the search's trials don't think"
+    ):
+        config.RunConfig(model=model, deployment=thinks, scoring=off, search=hits)
+    written = config.RunConfig(model=model, deployment=thinks, search=hits)
+    assert config.load(config.write(tmp_path, "run", written, "made by a test").parent) == written

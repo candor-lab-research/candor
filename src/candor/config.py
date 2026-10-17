@@ -367,11 +367,22 @@ class Search(Section):
         description="The most test prompts an edit may refuse and still count. The search looks for the "
         "least KL among edits that refuse no more than this.",
     )
+    max_budget_hits: StrictInt | None = Field(
+        default=None,
+        ge=0,
+        description="The most test prompts whose thinking may reach the budget, so the model is made to "
+        "stop and answer, for an edit still to count beside max_refusals; only for a search whose trials "
+        "think. Unset, thinking to the budget never stops an edit counting. Changing it carries a search "
+        "on, its finished trials judged again by the new number.",
+    )
     stop_early: StrictBool = Field(
         default=True,
-        description="Stop scoring a trial once it has refused more test prompts than max_refusals and "
-        "than 25 fully scored trials of its kind, since it can't win; the search then draws exactly "
-        "the trials it would have drawn had it scored the trial in full, in less time.",
+        description="Stop scoring a trial once it can't win, to save time. On refusals, it stops once it "
+        "has refused more test prompts than max_refusals and than 25 fully scored trials of its kind "
+        "(with max_budget_hits set, once it is further past both caps together than 25 of them), so "
+        "every trial the search draws after it is as it would have been. With max_budget_hits set, it "
+        "also stops once more of its answers than that reach the thinking budget, which can change the "
+        "trials drawn after it.",
     )
     seed: StrictInt = Field(
         default=0, ge=0, lt=2**32, description="Fixes the search's randomness, so a run can be repeated."
@@ -386,9 +397,10 @@ class Search(Section):
     widest_strength: Range = Field(
         default=(0.5, 3.0),
         description="How far the search may widen strength for a kind of edit. From a kind's 60th trial, "
-        "and every 30th after, if its best edit within max_refusals presses an end of strength, or none "
-        "is within it yet (then the ceiling), that end moves out to this one, once. Its trials so far "
-        "carry on and a few evenly spread trials start the wider range. Set it to strength to never widen.",
+        "and every 30th after, if its best edit within the cap (max_refusals and any max_budget_hits) "
+        "presses an end of strength, or none is within it yet (then the ceiling), that end moves out to "
+        "this one, once. Its trials so far carry on and a few evenly spread trials start the wider range. "
+        "Set it to strength to never widen.",
     )
     peak_layer: Range = Field(
         default=(0.6, 1.0), description="Where the edit is strongest, as a fraction of the model's depth."
@@ -514,6 +526,14 @@ class RunConfig(Section):
             raise ValueError("scoring.thinking_budget is set for a model that doesn't think")
         if self.scoring.thinking == "off" and self.deployment.think_close is None:
             raise ValueError('scoring.thinking is "off" for a model that doesn\'t think')
+        if self.search.max_budget_hits is not None:
+            if self.deployment.think_close is None:
+                raise ValueError("search.max_budget_hits is set for a model that doesn't think")
+            if self.scoring.thinking == "off":
+                raise ValueError(
+                    'search.max_budget_hits is set, but with scoring.thinking "off" the search\'s trials '
+                    "don't think"
+                )
         return self
 
 

@@ -113,10 +113,15 @@ def fixed(monkeypatch, count: int = 24) -> int:
     return count
 
 
-def faked(monkeypatch, refusals: dict[bool, list[int]], die_after: int | None = None) -> list[tuple]:
-    """Search.score_locked scoring each edit with the refusals given for its mode, by edit name, stopped
-    once as if killed before edit die_after of its first call; records each call's edit names, thinks,
-    seed and base."""
+def faked(
+    monkeypatch,
+    refusals: dict[bool, list[int]],
+    die_after: int | None = None,
+    forced: dict[bool, list[int]] | None = None,
+) -> list[tuple]:
+    """Search.score_locked scoring each edit with the refusals, and any answers at the thinking budget,
+    given for its mode, by edit name, stopped once as if killed before edit die_after of its first call;
+    records each call's edit names, thinks, seed and base."""
     calls = []
     dying = [die_after]
 
@@ -131,7 +136,16 @@ def faked(monkeypatch, refusals: dict[bool, list[int]], die_after: int | None = 
                 dying[0] = None
                 raise KeyboardInterrupt
             number = int(edit.name.split("-")[1])
-            score = Score(refusals[bool(thinks)][number - 1], 0, 0, 0.01 * number, 3, 5.0, 0)
+            hits = (forced or {}).get(bool(thinks))
+            score = Score(
+                refusals[bool(thinks)][number - 1],
+                0,
+                0,
+                0.01 * number,
+                3,
+                5.0,
+                hits[number - 1] if hits else 0,
+            )
             scored(i, score)
             scores.append(score)
         return Scores(3, (7 if thinks else 6) if base else None, scores)
@@ -248,6 +262,20 @@ def test_proxy_shows_both_counts_and_whether_the_cheap_score_may_be_used(tiny, m
         "Where thinking off refuses at most 25% of the prompts, thinking refuses a median of 2 more." in shown
     )
     assert "the edits the search suggests must also be scored thinking at more strength" in shown
+
+
+def test_proxy_judges_which_edits_are_within_the_cap_as_the_search_does(tiny, monkeypatch):
+    thinks_through(monkeypatch)
+    thinking(tiny).settings.search.max_budget_hits = 0
+    count = fixed(monkeypatch)
+    faked(monkeypatch, {False: [0] * count, True: [0] * count}, forced={True: [n % 2 for n in range(count)]})
+    folder = config.write(tiny.folder.parent, "cli", tiny.settings, "made by a test").parent
+    result = CliRunner(env={"COLUMNS": "200"}).invoke(app, ["proxy", str(folder)])
+    assert result.exit_code == 0, result.output
+    shown = flat(result.output)
+    within = ", ".join(f"edit-{n}" for n in range(1, count + 1, 2))
+    assert f"Within the cap of 2 refused, 0 at the thinking budget, with thinking on: {within}." in shown
+    assert f"edit-{count}" in shown.split("with thinking off: ")[1].split(".")[0]
 
 
 def test_proxy_of_named_trials_leaves_whether_the_search_may_think_off_to_the_default_check(

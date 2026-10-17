@@ -1,3 +1,4 @@
+import dataclasses
 import filecmp
 import itertools
 import json
@@ -129,11 +130,11 @@ def test_a_trial_stopped_part_way_is_marked_failed_and_the_search_carries_on(tin
     real = search._Scorer.score
     calls = []
 
-    def stopping(self, scales, stop_above=None):
+    def stopping(self, scales, stop_above=None, forced_above=None):
         calls.append(scales)
         if len(calls) == 3:
             raise KeyboardInterrupt
-        return real(self, scales, stop_above)
+        return real(self, scales, stop_above, forced_above)
 
     monkeypatch.setattr(search._Scorer, "score", stopping)
     with pytest.raises(KeyboardInterrupt):
@@ -272,9 +273,9 @@ def test_each_trial_is_scored_with_its_own_directions_adapters(tiny, monkeypatch
     scored = []
     real = search._Scorer.score
 
-    def recording(self, scales, stop_above=None):
+    def recording(self, scales, stop_above=None, forced_above=None):
         scored.append({path.parent.name for path in scales})
-        return real(self, scales, stop_above)
+        return real(self, scales, stop_above, forced_above)
 
     monkeypatch.setattr(search._Scorer, "score", recording)
     Search(tiny).search(6)
@@ -347,7 +348,7 @@ def test_search_and_measure_a_trial_from_the_command_line(tiny):
     commands = [line.split() for line in finished_search.output.splitlines() if "candor measure" in line]
     found = search.load(run.Run.open(folder))
     assert found is not None
-    expected = [c.trial for scope in search.SCOPES for c in search.to_measure(found, scope, 2)]
+    expected = [c.trial for scope in search.SCOPES for c in search.to_measure(found, scope, config.Search())]
     assert [int(words[-1]) for words in commands] == expected and len(expected) >= 2
     measured = runner.invoke(app, ["measure", str(folder), "--trial", "1", "--limit", "1"])
     assert measured.exit_code == 0, measured.output
@@ -492,13 +493,16 @@ def test_the_sampler_is_told_each_trials_kl_and_how_far_it_goes_over_the_cap(tin
         assert list(trial.system_attrs["constraints"]) == [0.5]
 
 
-def scripted(monkeypatch, scores: list[Score]):
-    """The scorer gives these scores in turn, the unedited model's first, and records each stop_above."""
+def scripted(monkeypatch, scores: list[Score], budget: list | None = None):
+    """The scorer gives these scores in turn, the unedited model's first, and records each stop_above,
+    and in budget each forced_above."""
     asked = []
     queue = iter(scores)
 
-    def score(self, scales, stop_above=None):
+    def score(self, scales, stop_above=None, forced_above=None):
         asked.append(stop_above)
+        if budget is not None:
+            budget.append(forced_above)
         return next(queue)
 
     monkeypatch.setattr(search._Scorer, "score", score)
@@ -562,8 +566,8 @@ def test_a_trial_stops_once_it_refuses_more_than_the_cap_and_enough_trials_of_it
     found = search.load(tiny)
     assert found is not None
     assert 3 not in [c.trial for c in search.candidates(found)]
-    assert [c.trial for c in search.within_cap(found, search.ONE_LAYER, 2)] == [5, 1]
-    assert [c.trial for c in search.within_cap(found, search.PER_LAYER, 2)] == [4]
+    assert [c.trial for c in search.within_cap(found, search.ONE_LAYER, tiny.settings.search)] == [5, 1]
+    assert [c.trial for c in search.within_cap(found, search.PER_LAYER, tiny.settings.search)] == [4]
     tiny.settings.search.stop_early = False
     tiny.path("search").rename(tiny.path("search-before"))
     asked = scripted(monkeypatch, [Score(3, 0, 0, 0.0, 3)] + [Score(1, 0, 0, 0.5, 3)] * 4)
@@ -1108,7 +1112,7 @@ def made(number, refusals, kl, layer=None, judged=3):
 def test_within_cap_keeps_the_cap_and_puts_the_least_kl_first():
     trials = [made(1, 0, 0.3, 5), made(2, 2, 0.1, 5), made(3, 3, 0.05, 5), made(4, 0, 0.01)]
     found = search.Found({t.user_attrs["number"]: t for t in trials}, 1)
-    assert [c.trial for c in search.within_cap(found, search.ONE_LAYER, 2)] == [2, 1]
+    assert [c.trial for c in search.within_cap(found, search.ONE_LAYER, config.Search())] == [2, 1]
     fewest = search.fewest_refused(found, search.ONE_LAYER)
     assert fewest is not None and fewest.trial == 1
     assert search.fewest_refused(search.Found({}, 1), search.PER_LAYER) is None
@@ -1127,12 +1131,14 @@ def test_to_measure_keeps_the_least_kl_at_each_count_unless_one_refusing_fewer_h
         made(324, 0, 0.0914),
     ]
     found = search.Found({t.user_attrs["number"]: t for t in trials}, 99)
-    assert [c.trial for c in search.to_measure(found, search.ONE_LAYER, 2)] == [535, 305]
-    assert [c.trial for c in search.to_measure(found, search.PER_LAYER, 2)] == [324, 462, 448]
-    assert [c.trial for c in search.to_measure(found, search.ONE_LAYER, 0)] == [535]
-    assert search.to_measure(found, search.PER_LAYER, -1) == []
+    space = config.Search()
+    assert [c.trial for c in search.to_measure(found, search.ONE_LAYER, space)] == [535, 305]
+    assert [c.trial for c in search.to_measure(found, search.PER_LAYER, space)] == [324, 462, 448]
+    none = config.Search(max_refusals=0)
+    assert [c.trial for c in search.to_measure(found, search.ONE_LAYER, none)] == [535]
+    assert search.to_measure(search.Found({1: made(1, 1, 0.1)}, 99), search.PER_LAYER, none) == []
     close = search.Found({1: made(1, 0, 0.07604, 12), 2: made(2, 2, 0.07601, 12)}, 99)
-    assert [c.trial for c in search.to_measure(close, search.ONE_LAYER, 2)] == [1]  # the same KL as shown
+    assert [c.trial for c in search.to_measure(close, search.ONE_LAYER, space)] == [1]  # the same KL as shown
 
 
 def test_a_stopped_trial_is_never_a_candidate():
@@ -1178,11 +1184,11 @@ def test_a_spread_trial_that_failed_is_queued_again(tiny, monkeypatch):
     real = search._Scorer.score
     calls = []
 
-    def stopping(self, scales, stop_above=None):
+    def stopping(self, scales, stop_above=None, forced_above=None):
         calls.append(scales)
         if len(calls) == 3:
             raise KeyboardInterrupt
-        return real(self, scales, stop_above)
+        return real(self, scales, stop_above, forced_above)
 
     monkeypatch.setattr(search._Scorer, "score", stopping)
     with pytest.raises(KeyboardInterrupt):
@@ -1264,7 +1270,7 @@ def test_the_report_names_each_kinds_best_at_each_count_its_edges_and_what_to_me
     for c in search.candidates(found):
         row = rf"^ *{c.trial} +{c.direction} +{c.refusals} +{c.keyword_refusals} +{c.kl:.4f} *$"
         assert re.search(row, result.output, re.M)
-    picks = {scope: search.to_measure(found, scope, 2) for scope in search.SCOPES}
+    picks = {scope: search.to_measure(found, scope, config.Search()) for scope in search.SCOPES}
     assert {scope: [c.trial for c in kept] for scope, kept in picks.items()} == {
         search.ONE_LAYER: [1, 3],
         search.PER_LAYER: [2],
@@ -1591,7 +1597,7 @@ def refusing(monkeypatch, refusals=3, stop_at=None):
     call, counting the unedited model's, is stopped part way."""
     calls = []
 
-    def score(self, scales, stop_above=None):
+    def score(self, scales, stop_above=None, forced_above=None):
         calls.append(scales)
         if len(calls) == stop_at:
             raise KeyboardInterrupt
@@ -2184,3 +2190,395 @@ def test_reporting_leaves_every_trial_the_search_draws_as_it_was(tiny, monkeypat
     assert len(drawn[1]) == 12 and drawn[0] == drawn[1]
     assert tiny.path("search-1", "progress.json").exists()
     assert not tiny.path("search-0", "progress.json").exists()
+
+
+def varied(monkeypatch) -> list[list[int | None]]:
+    """Scores that differ trial by trial, the same in every run, a trial refusing more than stop_above
+    stopped after one prompt; records each call's stop_above and forced_above."""
+    asked = []
+
+    def score(self, scales, stop_above=None, forced_above=None):
+        asked.append([stop_above, forced_above])
+        n = len(asked)
+        refusals = n * 5 % 4
+        judged = 1 if stop_above is not None and refusals > stop_above else 3
+        return Score(refusals, 0, 0, 0.01 * (n * 7 % 11) + 0.001 * n, judged, 10.0 * n, min(n % 4, judged))
+
+    monkeypatch.setattr(search._Scorer, "score", score)
+    return asked
+
+
+def test_with_max_budget_hits_unset_a_seeded_search_draws_records_and_tells_the_sampler_as_before(
+    tiny, monkeypatch
+):
+    # Pinned as candor drew and recorded them before max_budget_hits existed: a thinking model's search
+    # whose trials stop early and whose strength widens.
+    thinks_through(monkeypatch)
+    widening_soon(monkeypatch)
+    monkeypatch.setattr(search, "STOP_AFTER", 1)
+    small(thinking(tiny), trials=6)
+    tiny.settings.search.seed = 3
+    asked = varied(monkeypatch)
+    found, _ = Search(tiny).search(12)
+    record = {
+        "asked": asked,
+        "studies": {
+            scope: [latest(tiny, scope).study_name, latest(tiny, scope).user_attrs] for scope in search.SCOPES
+        },
+        "trials": [
+            [
+                t.params,
+                {key: value for key, value in t.user_attrs.items() if key != "seconds"},
+                t.system_attrs["constraints"],
+            ]
+            for t in found.trials.values()
+        ],
+        "recorded": json.loads(tiny.path("search", "inputs.json").read_text())["search settings"],
+        "names": sorted(optuna.get_all_study_names(search._storage(tiny.path("search")))),
+    }
+    assert sum(t.user_attrs["stopped"] for t in found.trials.values()) == 2 and found.strength
+    assert run.digest(record) == "8b011795c1be9ae0"
+
+
+def thinking_search(tiny, monkeypatch, hits, trials=3):
+    """The tiny run with a model that thinks, its search judging edits by search.max_budget_hits hits."""
+    thinks_through(monkeypatch)
+    small(thinking(tiny), trials=trials)
+    tiny.settings.search.max_budget_hits = hits
+    return tiny
+
+
+def test_an_edit_counts_only_in_full_within_the_refusal_cap_and_once_set_the_budget_hits():
+    def score(refusals, forced, judged=100):
+        return Score(refusals, 0, 0, 0.1, judged, 50.0, forced)
+
+    space, budget = config.Search(), config.Search(max_budget_hits=8)
+    assert search.counts(score(2, 30), space) and not search.counts(score(3, 0), space)
+    assert search.counts(score(2, 8), budget)
+    assert not search.counts(score(2, 9), budget) and not search.counts(score(3, 0), budget)
+    assert not search.counts(score(0, 0, judged=8), budget, stopped=True)
+
+
+def test_answers_at_the_budget_go_over_max_budget_hits_scaled_to_every_prompt_as_refusals_do():
+    assert search.budget_violation(Score(0, 0, 0, 0.1, 100, 0.0, 8), 100, 8) == -0.5
+    assert search.budget_violation(Score(0, 0, 0, 0.1, 100, 0.0, 9), 100, 8) == 0.5
+    assert search.budget_violation(Score(3, 0, 0, 0.1, 16, 0.0, 9), 100, 8) == pytest.approx(
+        9 * 100 / 16 - 8.5
+    )
+
+
+def test_with_max_budget_hits_set_an_edit_thinking_to_the_budget_more_often_is_never_the_best(
+    tiny, monkeypatch
+):
+    thinking_search(tiny, monkeypatch, hits=1)
+    budget = []
+    scripted(
+        monkeypatch,
+        [
+            Score(3, 0, 0, 0.0, 3),  # the unedited model
+            Score(0, 0, 0, 0.1, 3, 9.0, 2),  # 1, one layer: refuses none, but thinks to the budget twice
+            Score(1, 0, 0, 0.5, 3, 9.0, 1),  # 2, per layer: within both caps
+            Score(1, 0, 0, 0.3, 3, 9.0, 0),  # 3, one layer: within both, with more KL than trial 1
+            Score(0, 0, 0, 0.2, 2, 9.0, 2),  # 4, per layer: stopped at the budget
+            Score(1, 0, 0, 0.25, 3, 9.0, 1),  # 5, one layer, in a new session: less KL than trial 3
+        ],
+        budget,
+    )
+    said = []
+    Search(tiny).search(4, finished=said.append)
+    Search(tiny).search(5, finished=said.append)
+    assert [line and line.split(":")[0] for line in said] == [
+        None,
+        "Trial 2, per layer",
+        "Trial 3, one layer",
+        None,
+        "Trial 5, one layer",
+    ]
+    # Every trial stops once more answers than the setting reach the budget.
+    assert budget == [None, 1, 1, 1, 1, 1]
+    trials = finished(tiny)
+    assert [t.user_attrs["stopped"] for t in trials] == [False, False, False, True, False]
+    assert [list(t.system_attrs["constraints"]) for t in trials] == [
+        [-2.5, 0.5],
+        [-1.5, -0.5],
+        [-1.5, -1.5],
+        [-2.5, 1.5],
+        [-1.5, -0.5],
+    ]
+    found = search.load(tiny)
+    assert found is not None
+    space = tiny.settings.search
+    assert [c.trial for c in search.within_cap(found, search.ONE_LAYER, space)] == [5, 3]
+    assert [c.trial for c in search.to_measure(found, search.ONE_LAYER, space)] == [5]
+    assert [c.trial for c in search.within_cap(found, search.PER_LAYER, space)] == [2]
+    report = search.progress(found, space, 5, 6, 60.0, thinks=True)
+    assert [report[scope]["failed on the budget"] for scope in search.SCOPES] == [1, 1]
+    assert (
+        report[search.ONE_LAYER]["best"]["trial"] == 5 and report[search.ONE_LAYER]["best"]["within the cap"]
+    )
+
+
+def test_strength_widens_by_the_best_edit_within_both_caps():
+    pressing = timed(1, 0, 0.1, 1.49, 1.0, forced=3)  # the least KL, at the ceiling, but thinking too often
+    inside = timed(2, 0, 0.2, 1.0, 1.2, forced=1)
+    found = search.Found({1: pressing, 2: inside}, 99)
+    assert search.widened(found, search.PER_LAYER, config.Search()) == (0.8, 3.0)
+    assert search.widened(found, search.PER_LAYER, config.Search(max_budget_hits=1)) == (0.8, 1.5)
+
+
+def test_with_every_edit_over_the_budget_hits_none_is_within_the_cap_to_widen_by(tiny, monkeypatch):
+    widening_soon(monkeypatch)
+    thinking_search(tiny, monkeypatch, hits=0)
+    scores = [Score(0, 0, 0, 0.1 * n, 3, 9.0, 1) for n in range(1, 6)]
+    scripted(monkeypatch, [Score(3, 0, 0, 0.0, 3), *scores])
+    said = []
+    tiny.report = said.append
+    Search(tiny).search(5)
+    assert (
+        "After 2 one layer trials no one layer edit is within the cap yet, so its strength widens from "
+        "0.8-1.5 to 0.8-3"
+    ) in said
+
+
+def test_scoring_stops_at_the_end_of_the_chunk_whose_answers_go_over_the_budget_hits(tiny, monkeypatch):
+    monkeypatch.setattr(search, "CHUNK", 2)
+    made_to_stop = []
+    real = LlamaServer.answers
+
+    def answers(self, *args, **kwargs):
+        for answer, forced in zip(real(self, *args, **kwargs), made_to_stop, strict=True):
+            yield dataclasses.replace(answer, thinking=4, forced=forced)
+
+    monkeypatch.setattr(LlamaServer, "answers", answers)
+    with Search(tiny)._scorer(*scorer_inputs(tiny)) as scorer:
+        made_to_stop[:] = [True, True, False]
+        stopped = scorer.score({}, forced_above=1)
+        assert (stopped.forced, stopped.judged, stopped.thinking) == (2, 2, 4)
+        made_to_stop[:] = [True, False, True]
+        whole = scorer.score({}, forced_above=1)
+        assert (whole.forced, whole.judged) == (2, 3)
+        made_to_stop[:] = [True, True, True]
+        assert scorer.score({}).judged == 3
+
+
+def test_with_max_budget_hits_set_a_trial_stops_on_refusals_only_behind_stop_after_trials_over_every_cap(
+    tiny, monkeypatch
+):
+    thinking_search(tiny, monkeypatch, hits=0)
+    monkeypatch.setattr(search, "STOP_AFTER", 1)
+    budget = []
+    asked = scripted(
+        monkeypatch,
+        [
+            Score(3, 0, 0, 0.0, 3),
+            Score(1, 0, 0, 0.5, 3, 9.0, 3),  # 1, one layer: within the refusal cap, 2.5 over the budget's
+            Score(3, 0, 0, 0.1, 3),  # 2, per layer: 0.5 over the refusal cap
+            Score(3, 0, 0, 0.1, 3),  # 3, one layer
+            Score(3, 0, 0, 0.1, 3),  # 4, per layer
+        ],
+        budget,
+    )
+    Search(tiny).search(4)
+    # Refusing 3 of 3 puts a trial 0.5 over, ahead of trial 1, so a one layer trial never stops on refusals
+    # here; per layer, it stops above 3 refused, as with the budget hits unset.
+    assert asked == [None, None, None, 5, 3]
+    assert budget == [None, 0, 0, 0, 0]
+    tiny.settings.search.stop_early = False
+    tiny.path("search").rename(tiny.path("search-before"))
+    budget.clear()
+    scripted(monkeypatch, [Score(3, 0, 0, 0.0, 3), Score(1, 0, 0, 0.5, 3), Score(1, 0, 0, 0.5, 3)], budget)
+    Search(tiny).search(2)
+    assert budget == [None] * 3
+
+
+def test_a_progress_report_counts_each_kinds_trials_over_the_budget_hits_only_once_set():
+    trials = [
+        timed(1, 0, 0.1, 1.0, 1.0, layer=5, forced=3),
+        timed(2, 1, 0.2, 1.0, 1.0, forced=2),
+        timed(3, 1, 0.3, 1.0, 1.0, layer=5, forced=1),
+        timed(4, 2, 0.1, 1.0, 1.0, judged=1, forced=2),  # stopped at the budget
+    ]
+    found = search.Found({t.user_attrs["number"]: t for t in trials}, 99)
+    report = search.progress(found, config.Search(report_every=4, max_budget_hits=1), 4, 8, 60.0, True)
+    assert [report[scope]["failed on the budget"] for scope in search.SCOPES] == [1, 2]
+    assert not report[search.PER_LAYER]["best"]["within the cap"]
+    lines = search.progress_lines(report)
+    assert lines[1].startswith(
+        "  one layer: 2 trials, 0 stopped early, 1 failed on the budget; best trial 3,"
+    )
+    assert lines[2].startswith(
+        "  per layer: 2 trials, 1 stopped early, 2 failed on the budget; none within the cap, fewest refused "
+        "trial 2,"
+    )
+    unset = search.progress(found, config.Search(report_every=4), 4, 8, 60.0, True)
+    assert "failed on the budget" not in unset[search.ONE_LAYER]
+    assert "failed on the budget" not in " ".join(search.progress_lines(unset))
+
+
+def test_a_search_made_before_max_budget_hits_carries_on_and_once_it_is_set_judges_its_trials_again(
+    tiny, monkeypatch
+):
+    thinks_through(monkeypatch)
+    folder = cli_run(thinking(tiny), trials=3)
+    path = folder / config.FILE
+    # As candor.toml was written before the setting, which candor upgrade needn't add.
+    text = path.read_text()
+    start, end = text.index("# The most test prompts whose thinking"), text.index("# max_budget_hits =\n")
+    path.write_text(text[:start] + text[end + len("# max_budget_hits =\n") :])
+    runner = CliRunner(env={"COLUMNS": "200"})
+    upgraded = runner.invoke(app, ["upgrade", str(folder)])
+    assert upgraded.exit_code == 0 and "already has every setting" in upgraded.output
+    scripted(
+        monkeypatch,
+        [
+            Score(3, 0, 0, 0.0, 3),
+            Score(0, 0, 0, 0.1, 3, 9.0, 2),  # 1, one layer: thinks to the budget twice
+            Score(3, 0, 0, 0.2, 3, 9.0, 2),  # 2, per layer: over both caps, so it never counted
+            Score(1, 0, 0, 0.3, 3, 9.0, 1),  # 3, one layer
+            Score(1, 0, 0, 0.4, 3, 9.0, 0),  # 4, per layer
+        ],
+    )
+    assert runner.invoke(app, ["search", str(folder), "--trials", "2"]).exit_code == 0
+    recorded = json.loads((folder / "search" / "inputs.json").read_text())["search settings"]
+    assert "max_budget_hits" not in recorded
+    path.write_text(path.read_text().replace("[search]\n", "[search]\nmax_budget_hits = 1\n"))
+    resumed = runner.invoke(app, ["search", str(folder), "--trials", "4"])
+    assert resumed.exit_code == 0, resumed.output
+    shown = flat(resumed.output)
+    assert (
+        "The search's 2 finished trials are judged again by search.max_budget_hits, now 1: 2 reached the "
+        "thinking budget more often, which leaves 1 fewer within the cap"
+    ) in shown
+    assert "within the cap (2 refused, 1 at the thinking budget)" in shown
+    assert "one layer: trial 3," in shown and "one layer: trial 1," not in shown
+    assert "one layer: 2 trials, 0 stopped early, 1 failed on the budget;" in shown
+    assert json.loads((folder / "search" / "inputs.json").read_text())["search settings"] == recorded
+    found = search.load(run.Run.open(folder))
+    assert found is not None and list(found.trials) == [1, 2, 3, 4]
+
+
+def test_setting_max_budget_hits_moves_each_kinds_finished_trials_to_a_new_study_told_afresh(
+    tiny, monkeypatch
+):
+    thinking_search(tiny, monkeypatch, hits=None, trials=4)
+    scores = [Score(1, 0, 0, 0.1 * n, 3, 9.0, n % 3) for n in range(1, 7)]
+    scripted(monkeypatch, [Score(3, 0, 0, 0.0, 3), *scores])
+    Search(tiny).search(4)
+    before = {t.user_attrs["number"]: t for t in finished(tiny)}
+    said = []
+    tiny.report = said.append
+    tiny.settings.search.max_budget_hits = 1
+    Search(tiny).search(6)
+    for scope in search.SCOPES:
+        study = latest(tiny, scope)
+        assert study.study_name == search._judged_name(scope, 1)
+        assert study.user_attrs["budget hits"] == [[2, 1]] and study.user_attrs["widened"] == []
+    assert latest(tiny, search.ONE_LAYER).user_attrs["base_refusals"] == 3
+    after = {t.user_attrs["number"]: t for t in finished(tiny)}
+    assert sorted(after) == list(range(1, 7))
+    for number, trial in before.items():
+        moved = after[number]
+        assert (moved.params, moved.distributions, moved.value) == (
+            trial.params,
+            trial.distributions,
+            trial.value,
+        )
+        budget = search.budget_violation(search._score(trial), 3, 1)
+        assert moved.user_attrs == trial.user_attrs | {"budget violation": budget}
+        assert list(moved.system_attrs["constraints"]) == [trial.user_attrs["violation"], budget]
+    found = search.load(tiny)
+    assert found is not None
+    within = [
+        c.trial for scope in search.SCOPES for c in search.within_cap(found, scope, tiny.settings.search)
+    ]
+    assert sorted(within) == [1, 3, 4, 6]  # trials 2 and 5 reach the budget twice
+    # Unset again, the trials are told the refusal cap alone, in a third study of each kind.
+    tiny.settings.search.max_budget_hits = None
+    Search(tiny).search(6)
+    for scope in search.SCOPES:
+        study = latest(tiny, scope)
+        assert study.study_name == search._judged_name(scope, 2)
+        assert study.user_attrs["budget hits"] == [[2, 1], [3, None]]
+    for trial in finished(tiny):
+        assert "budget violation" not in trial.user_attrs
+        assert list(trial.system_attrs["constraints"]) == [trial.user_attrs["violation"]]
+    assert [line for line in said if "judged again" in line] == [
+        "The search's 4 finished trials are judged again by search.max_budget_hits, now 1: 1 reached the "
+        "thinking budget more often, which leaves 1 fewer within the cap",
+        "The search's 6 finished trials are judged again by search.max_budget_hits, now unset",
+    ]
+
+
+def test_a_trial_recorded_before_answers_at_the_budget_were_counted_reached_it_on_none(tiny, monkeypatch):
+    thinking_search(tiny, monkeypatch, hits=0)
+    folder = tiny.path("search")
+    folder.mkdir()
+    study = optuna.create_study(study_name=search.STUDIES[search.PER_LAYER], storage=search._storage(folder))
+    old = made(1, 1, 0.2)
+    study.add_trial(
+        optuna.trial.create_trial(
+            params=old.params,
+            distributions=old.distributions,
+            value=old.value,
+            user_attrs=old.user_attrs | {"violation": -1.5},
+        )
+    )
+    [trial] = Search(tiny)._judge_again(study, search.PER_LAYER, 3).get_trials()
+    assert "forced" not in trial.user_attrs and trial.user_attrs["budget violation"] == -0.5
+    assert search._counts(trial, tiny.settings.search)
+
+
+def test_a_search_killed_while_judging_its_trials_again_loses_and_repeats_no_trial(tiny, monkeypatch):
+    thinking_search(tiny, monkeypatch, hits=None, trials=4)
+    refusing(monkeypatch, refusals=1)
+    Search(tiny).search(4)
+    tiny.settings.search.max_budget_hits = 0
+    real = optuna.Study.add_trial
+    copied = []
+
+    def dying(self, trial):
+        if self.study_name.endswith("budget hits 1") and trial.state == TrialState.COMPLETE:
+            copied.append(trial)
+            if len(copied) == 2:
+                raise KeyboardInterrupt
+        real(self, trial)
+
+    monkeypatch.setattr(optuna.Study, "add_trial", dying)
+    with pytest.raises(KeyboardInterrupt):
+        Search(tiny).search(8)
+    # The study left part made is passed over, so the search is as it was.
+    found = search.load(tiny)
+    assert found is not None and sorted(found.trials) == [1, 2, 3, 4]
+    assert all("budget violation" not in t.user_attrs for t in found.trials.values())
+    monkeypatch.setattr(optuna.Study, "add_trial", real)
+    Search(tiny).search(8)
+    found = search.load(tiny)
+    assert found is not None and sorted(found.trials) == list(range(1, 9))
+    for scope in search.SCOPES:
+        study = latest(tiny, scope)
+        assert study.study_name == search._judged_name(scope, 1) and study.user_attrs["budget hits"] == [
+            [2, 0]
+        ]
+        done = study.get_trials(states=(TrialState.COMPLETE,))
+        assert len({search._key(t.params) for t in done}) == len(done) == 4
+        assert all(len(t.system_attrs["constraints"]) == 2 for t in done)
+
+
+def test_a_widened_search_judged_again_goes_on_in_its_new_study(tiny, monkeypatch):
+    widening_soon(monkeypatch)
+    thinking_search(tiny, monkeypatch, hits=None, trials=6)
+    refusing(monkeypatch)
+    Search(tiny).search(6)
+    assert [latest(tiny, scope).study_name for scope in search.SCOPES] == [
+        search._study_name(scope, 1) for scope in search.SCOPES
+    ]
+    tiny.settings.search.max_budget_hits = 0
+    Search(tiny).search(12)
+    for scope in search.SCOPES:
+        study = latest(tiny, scope)
+        assert study.study_name == search._judged_name(scope, 1)
+        assert study.user_attrs["budget hits"] == [[3, 0]] and study.user_attrs["widened"] == [[2, 0.8, 3.0]]
+        assert len(study.get_trials(states=(TrialState.COMPLETE,))) == 6
+    found = search.load(tiny)
+    assert found is not None and sorted(found.trials) == list(range(1, 13))
+    assert found.strength == {scope: (0.8, 3.0) for scope in search.SCOPES}
