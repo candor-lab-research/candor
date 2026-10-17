@@ -723,3 +723,9 @@ search stops at 300 trials, or sooner once both kinds have stalled: a kind stall
 edit within the cap has a KL less than 10% below its best 50 of its own trials before. Checked at
 each progress report; the search is then stopped by hand and the finalists measured. Not now: per
 layer had just nearly halved its KL.
+
+### Phase 3, step 7: the thinking review done (the user, 2026-10-17)
+
+The user reviewed trial 175's thinking in `candor serve` and called the review done; no counts were
+reported. The unedited model and trial 205, also listed for it, were dropped with it. Phase 3 now
+waits only on the phase-end discussion.

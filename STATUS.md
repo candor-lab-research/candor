@@ -16,7 +16,7 @@ anything else. Every model is scored and shipped as a GGUF in llama-server, and 
 | 0 | Score edits as per-layer LoRA adapters in llama.cpp | Done |
 | 1 | Core maths and `candor inspect` | Done |
 | 2 | rude-llama end to end: search, export, measure against heretic's Trial 170 | Done 2026-10-13: trial 535 passes and ships (`results/milestone-rude-llama-vs-heretic.md`) |
-| 3 | Qwen3.5-9B, a thinking model, scored as used against heretic's Trial 161 | Measured 2026-10-15: trial 175 beats Trial 161 (`results/milestone-qwen3.5-9b-vs-heretic.md`); the user's thinking review and the phase-end discussion remain |
+| 3 | Qwen3.5-9B, a thinking model, scored as used against heretic's Trial 161 | Measured 2026-10-15: trial 175 beats Trial 161 (`results/milestone-qwen3.5-9b-vs-heretic.md`); the phase-end discussion remains |
 | 4 | K2-Horizon-7B at your real settings: llama-server, reasoning effort high | Steps 1-2 (code, pilot) done 2026-10-16; the user's choices next (below) |
 
 Qwen3.5-9B is a testbed: the process must work, affordably, for larger thinking models used with
@@ -39,7 +39,7 @@ thinking on (next, e.g. Qwen3.8-27B). A 9B model must not take days.
 ## Now: between phases, waiting for the user
 
 - Phase 3: trial 175 beats Trial 161 (0/288 refused, maths at the unedited model's level);
-  `results/phase-3-qwen3.5-9b.md`. The thinking review and the phase-end discussion remain.
+  `results/phase-3-qwen3.5-9b.md`. The phase-end discussion remains.
 - Phase 4 step 5: the search runs on an A40 (`45usef3qip28bb`; the watchdog deletes it at 19:53
   CEST 2026-10-18), reported to the user every 25 trials; numbers go in the results file when it
   ends (`results/phase-4-k2-horizon-7b.md`).
@@ -47,18 +47,16 @@ thinking on (next, e.g. Qwen3.8-27B). A 9B model must not take days.
 
 ## Next
 
-1. The user's thinking review, on the Mac (`candor serve`): the unedited model, trial 175 and
-   trial 205 (Trial 161 left out, the user 2026-10-15), counts only. Optional now.
-2. The phase-end discussion: where to go next, from `results/findings.md` and
+1. The phase-end discussion: where to go next, from `results/findings.md` and
    `results/new-features.md` (chiefly the search's cost for 27B); no changes until agreed.
-3. Phase 4 on one A40 (`45usef3qip28bb`, from 10:44 UTC): K2's run rebuilt at the user's settings,
+2. Phase 4 on one A40 (`45usef3qip28bb`, from 10:44 UTC): K2's run rebuilt at the user's settings,
    the unedited model measured in full at 28 slots, then the search straight after (quote from its
    first trials). Meanwhile, the decision rule drafted from the unedited model's numbers, for the
    user to sign off before finalists are measured. Later: low effort's two closes; Uno not now.
    Started during the search, on the Mac (the user, 2026-10-16 and 17): thinking at the budget as
    a search constraint with an early stop, and a stall stop, each replayed first on Qwen's and
    K2's journals, then built as settings off by default (`findings.md`).
-4. Not blocking, each when there is a reason:
+3. Not blocking, each when there is a reason:
    - speed: 64 slots (15% faster than 32), weights cached on the GPU for "full" trials, the proxy's
      adapters loaded into one server;
    - measurements before 2026-10-14 pair with later ones by prompt, not by draw (sampling moved to
@@ -96,8 +94,7 @@ thinking on (next, e.g. Qwen3.8-27B). A 9B model must not take days.
 
 | Step | What | State |
 | --- | --- | --- |
-| 1-7 | Settings, pods, Qwen3.5-9B and Trial 161 measured as used, the decision rule; the "full" edit, a thinking-off search to 545 trials, `candor proxy` ("offset"); the search's best 6 scored as used; trials 205 and 175 exported, measured in full and copied to the Mac | Done 2026-10-15 (history, results file, milestone) |
-| 7, review | The user reads the thinking of the unedited model, trial 175 and trial 205 in `candor serve` on about 5 requests and 5 maths problems each, and reports counts only (working, weighing whether to answer, circling, garbled; changed its mind; finished; maths right) for `findings.md` | |
+| 1-7 | Settings, pods, Qwen3.5-9B and Trial 161 measured as used, the decision rule; the "full" edit, a thinking-off search to 545 trials, `candor proxy` ("offset"); the search's best 6 scored as used; trials 205 and 175 exported, measured in full and copied to the Mac; the user's thinking review of trial 175 | Done 2026-10-15, review 2026-10-17 (history, results file, milestone) |
 
 ## Phase 4: K2-Horizon-7B
 
