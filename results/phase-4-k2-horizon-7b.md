@@ -158,3 +158,29 @@ minutes. Avicennasis's edit wasn't measured (the user: too weak a bar).
   (92.6% against 89.7%), so an edit has more refusals to remove and more maths to keep.
 - A whole measurement takes 41 minutes at these settings, against about 6 h for Qwen's unedited
   model; 28 slots of the search's sizing take 8,460 tokens each where the pilot's took 15,616.
+
+## Step 5: when to stop the search, replayed (2026-10-17)
+
+A stall stop (stop once both kinds' best KL within the cap gained under 10% in their last 50 own
+trials) replayed on the phase 3 miss-rate simulator's saved runs (`phase-3-qwen3.5-9b.md`, step 3;
+its fixed-count numbers reproduce exactly). Share of runs whose pick is within 10% of the true best,
+with the mean trials run:
+
+| Rule | Positions, D3grow, penalised / free | Positions, D3 (wide), penalised / free | Strength, grow |
+| --- | --- | --- | --- |
+| Fixed 300 | 36% / 34% | 16% / 18% | 29% |
+| Fixed 400 | 48% / 48% | 25% / 25% | 40% |
+| Fixed 600 | 65% / 66% | 38% / 37% | 52% |
+| Stall 50, 10% | 32% / 35% (268 / 269) | 15% / 17% (305 / 262) | 28% (281) |
+| Stall 50, 10%, at most 300 | 28% / 27% (240 / 238) | 13% / 16% (270 / 247) | 25% (253) |
+| Stall 40, 10% | 29% / 32% (237 / 241) | 12% / 15% (260 / 224) | 25% (245) |
+| Stall 75, 10% | 42% / 45% (353 / 352) | 24% / 22% (417 / 345) | 36% (367) |
+| Stall 50, 5% | 34% / 38% (294 / 299) | 17% / 20% (330 / 292) | 31% (311) |
+
+Runs: 240 / 240, 400 / 400 and 1,200. On Qwen3.5-9B's real search the 50-trial rule stops at 370 of
+545 (the one-layer best 0.2% above its final KL, per layer 5%; both finalists found by trial 205),
+the 40-trial rule at 285 (per layer 8%). On K2 at 125 trials, neither kind has stalled.
+
+- A stall stop picks no better than a fixed count of the same length, and worse for every window
+  tried: gains come in jumps after flat stretches, so a stall doesn't show the search is done.
+- Stopping at 300 rather than 600 roughly halves the chance of a pick within 10% of the best.

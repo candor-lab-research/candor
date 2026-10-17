@@ -149,11 +149,12 @@ entry is corrected rather than deleted when later evidence changes it.
   [Hypothesis; counts only, no new runs]
 - **A separate edit just for thinking length** (Halt Vector, ThinkEdit, SEAL: 12-50% shorter) if
   length decides. [Published, on unedited models only]
-- **A shorter search on larger models: at most 300 trials, sooner on a stall.** [Hypothesis, from
-  one search] K2 stops once both kinds' best KL within the cap gains under 10% in 50 of their own
-  trials (`history.md`, 2026-10-17). Replayed on Qwen's search: it stops at trial 370 of 545 with
-  both finalists found (175 and 205), the one-layer best within 0.2% of its final KL and the
-  per-layer best within 5%; a 40-trial window stops at 285, per layer 8% off. Test: K2's journal.
+- **A stall stop can't tell when the search is done.** [Measured: the phase 3 miss-rate simulator,
+  240-1,200 runs a group; Qwen3.5-9B's search] Stopping once both kinds' best KL within the cap
+  gains under 10% in 50 of their trials picks within 10% of the best no more often than a fixed
+  count of the same length (about 270 trials: 15-35% of runs, against 37-66% at 600); every
+  window tried did worse. Stopping at 300 rather than 600 roughly halves the hits.
+  (`phase-4-k2-horizon-7b.md`, step 5)
 - **Thinking length as a criterion between candidates.** [Hypothesis; 3 edits agree] The one edit
   that lengthened maths thinking (Trial 161) lost maths through budget hits; candor's two finalists
   didn't lengthen it and kept maths, so it didn't decide between them. Test: on the next model,
