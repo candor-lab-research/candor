@@ -711,3 +711,15 @@ The search's score can't see this and nothing stopped them (`findings.md`, Ideas
 for it to be logged as a feature to investigate and then build once K2 is done: thinking at the cap
 as a constraint beside refusals, with an early stop, tested first on this search's journal. Not
 changed mid-search, as it would restart the search; finalists are measured as used either way.
+
+### Phase 4, step 5: the search stops by 300 trials, sooner on a stall (the user, 2026-10-17)
+
+At 123 trials the per-layer best was trial 114 (2 refused, KL 0.047), down from 0.084 twenty of its
+trials before, and the pace 662 s a trial: 600 trials would take 3.7 more days and about $52, where
+a 9B model must not take days. On Qwen, by trial 300 the one-layer best was within 1% of its final
+KL and the per-layer best 7-11% above it, and KL gaps larger than that on the 100 test prompts
+didn't hold on held-out ones (trials 205 and 175: 0.037 and 0.057, then 0.058 and 0.059). So the
+search stops at 300 trials, or sooner once both kinds have stalled: a kind stalls when its best
+edit within the cap has a KL less than 10% below its best 50 of its own trials before. Checked at
+each progress report; the search is then stopped by hand and the finalists measured. Not now: per
+layer had just nearly halved its KL.

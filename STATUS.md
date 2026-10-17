@@ -40,7 +40,7 @@ thinking on (next, e.g. Qwen3.8-27B). A 9B model must not take days.
 
 - Phase 3: trial 175 beats Trial 161 (0/288 refused, maths at the unedited model's level);
   `results/phase-3-qwen3.5-9b.md`. The thinking review and the phase-end discussion remain.
-- Phase 4 step 5: the search runs on an A40 (`45usef3qip28bb`; the watchdog deletes it at 10:05
+- Phase 4 step 5: the search runs on an A40 (`45usef3qip28bb`; the watchdog deletes it at 19:53
   CEST 2026-10-18), reported to the user every 25 trials; numbers go in the results file when it
   ends (`results/phase-4-k2-horizon-7b.md`).
 - 20 ideas from arXiv are ranked in `results/new-features.md`.
@@ -55,8 +55,9 @@ thinking on (next, e.g. Qwen3.8-27B). A 9B model must not take days.
    the unedited model measured in full at 28 slots, then the search straight after (quote from its
    first trials). Meanwhile, the decision rule drafted from the unedited model's numbers, for the
    user to sign off before finalists are measured. Later: low effort's two closes; Uno not now.
-   Once K2 is done (the user, 2026-10-16): investigate, then build, thinking at the budget as a
-   search constraint with an early stop, tested first on this search's journal (`findings.md`).
+   Started during the search, on the Mac (the user, 2026-10-16 and 17): thinking at the budget as
+   a search constraint with an early stop, and a stall stop, each replayed first on Qwen's and
+   K2's journals, then built as settings off by default (`findings.md`).
 4. Not blocking, each when there is a reason:
    - speed: 64 slots (15% faster than 32), weights cached on the GPU for "full" trials, the proxy's
      adapters loaded into one server;
@@ -113,7 +114,7 @@ the unedited model (the user, 2026-10-16). Strength 0.8-5.0 from the start (the 
 | 1-2 | Code: K2's thinking, `deployment.chat_template_kwargs`, the `--lora` list limit, `--outside` GGUF files, IFM's remote code read (no network, file or process access); the timed pilot: the run built, the unedited model and Avicennasis on 64 prompts a set, 4 search trials, low effort; the speed test; slots as run settings (`[slots]`), each search slot sized to its requests; the search's progress report every 25 trials | Done 2026-10-16 (history, results file) |
 | 3 | The unedited model measured as used (Avicennasis dropped, the user) | Done 2026-10-16: 287/288 refused, maths 1,222/1,319, 41 min (results file) |
 | 4 | Decision rule from step 3, signed off by the user before finalists are measured | Drafted during the search |
-| 5 | Search, the best scored as used, finalists exported and measured in full | Running from 12:52 UTC 2026-10-16 at 0.8-5.0; checkpoint at 300 trials |
+| 5 | Search, the best scored as used, finalists exported and measured in full | Running from 12:52 UTC 2026-10-16 at 0.8-5.0; stops at 300 trials, sooner once both kinds stall (history, 2026-10-17) |
 | 6 | The user's test in llama-server, then a release decision | |
 
 ## Not in this plan
