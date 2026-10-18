@@ -7,6 +7,7 @@ import shutil
 import signal
 import statistics
 import subprocess
+import sys
 import traceback
 from collections.abc import Callable, Iterable, Iterator
 from contextlib import contextmanager
@@ -42,9 +43,9 @@ from .run import PROMPT_SETS, Run, RunError, duration, every_tenth
 from .toolchain import ToolchainError
 
 app = typer.Typer(
-    no_args_is_help=True,
     add_completion=False,
-    help="Remove a model's refusal direction, scored the way you actually run the model.",
+    help="Remove a model's refusal direction, scored the way you actually run the model. With no "
+    "command, in a terminal, menus show each run in runs/ and run these commands for you.",
 )
 MARKS = {
     "ok": "[green]ok[/]",
@@ -67,14 +68,26 @@ class CannotInspect(Exception):
     pass
 
 
-@app.callback()
-def main() -> None:
+@app.callback(invoke_without_command=True)
+def main(context: typer.Context) -> None:
     # The Hub's and transformers' progress bars and warnings would only clutter candor's own tables
     # and messages.
     disable_progress_bars()
     hub_logging.set_verbosity_error()
     transformers_logging.disable_progress_bar()
     optuna.logging.set_verbosity(optuna.logging.WARNING)
+    if context.invoked_subcommand is not None:
+        return
+    if not _in_a_terminal():
+        typer.echo(context.get_help())
+        raise typer.Exit(2)
+    from . import menu
+
+    menu.start()
+
+
+def _in_a_terminal() -> bool:
+    return sys.stdin.isatty() and sys.stdout.isatty()
 
 
 @contextmanager
@@ -280,7 +293,7 @@ def _print_table(console: Console, title: str, rows: list[Row]) -> None:
     console.print(table)
 
 
-@app.command()
+@app.command(short_help="Check a model before spending anything on it.")
 def inspect(model: Annotated[str, typer.Argument(help="A Hugging Face model id or a local folder.")]) -> None:
     """Check a model before spending anything on it. Reads the config, tokenizer and file headers only.
 
@@ -324,7 +337,7 @@ def _pinned(prompts: config.Prompts, names: Iterable[str]) -> config.Prompts:
     )
 
 
-@app.command()
+@app.command(short_help="Start a run: check the model and write its settings.")
 def init(
     name: Annotated[
         str, typer.Argument(help="A name for the run. Its settings go in RUNS/NAME/candor.toml.")
@@ -421,7 +434,7 @@ def init(
         )
 
 
-@app.command()
+@app.command(short_help="Bring a run's candor.toml up to this version's settings.")
 def upgrade(folder: Annotated[Path, typer.Argument(help="A run folder made by candor init.")]) -> None:
     """Add the settings this version of candor has and a run's candor.toml lacks, at their defaults,
     and remove those it no longer uses.
@@ -497,7 +510,7 @@ def _stopped_by_signals() -> Iterator[None]:
             signal.signal(number, handler)
 
 
-@app.command()
+@app.command(short_help="Build every stage the search needs, reusing what is built.")
 def run(folder: Annotated[Path, typer.Argument(help="A run folder made by candor init.")]) -> None:
     """Carry a run through every stage built so far. Finished stages are reused, so it can resume."""
     console = Console()
@@ -566,7 +579,7 @@ def _measurement_name(
     return name + (f"-first-{limit}" if limit else "")
 
 
-@app.command("measure")
+@app.command("measure", short_help="Measure the unedited model or a trial, on prompts and maths.")
 def measure_command(
     folder: Annotated[Path, typer.Argument(help="A run folder made by candor init.")],
     heretic: Annotated[
@@ -718,7 +731,7 @@ def measure_command(
             )
 
 
-@app.command()
+@app.command(short_help="Compare two measurements prompt by prompt.")
 def compare(
     folder: Annotated[Path, typer.Argument(help="A run folder made by candor init.")],
     first: Annotated[str, typer.Argument(help="A measurement's name, such as base.")],
@@ -757,7 +770,7 @@ def compare(
     )
 
 
-@app.command("export")
+@app.command("export", short_help="Write a trial's edit into the GGUF you run.")
 def export_command(
     folder: Annotated[Path, typer.Argument(help="A run folder made by candor init.")],
     trial: Annotated[
@@ -849,7 +862,7 @@ def export_command(
         console.print(escape(f"  {command}"), soft_wrap=True)
 
 
-@app.command("serve")
+@app.command("serve", short_help="Chat with the unedited model or a trial's export, as measured.")
 def serve_command(
     folder: Annotated[Path, typer.Argument(help="A run folder made by candor init.")],
     trial: Annotated[
@@ -997,7 +1010,7 @@ def serve_command(
         raise typer.Exit(COULD_NOT_INSPECT) from None
 
 
-@app.command("search")
+@app.command("search", short_help="Find the smallest edit that leaves almost no refusals.")
 def search_command(
     folder: Annotated[Path, typer.Argument(help="A run folder made by candor init.")],
     trials: Annotated[
@@ -1164,7 +1177,7 @@ def _trials(numbers: list[int]) -> str:
     return ("trial " if len(numbers) == 1 else "trials ") + ", ".join(map(str, numbers))
 
 
-@app.command("score")
+@app.command("score", short_help="Score one edit as the search scores its trials.")
 def score_command(
     folder: Annotated[Path, typer.Argument(help="A run folder made by candor init.")],
     trial: Annotated[
@@ -1289,7 +1302,7 @@ def score_command(
             console.print("  The search could have drawn it.")
 
 
-@app.command("proxy")
+@app.command("proxy", short_help="Check if a thinking model may be searched with thinking off.")
 def proxy_command(
     folder: Annotated[Path, typer.Argument(help="A run folder made by candor init.")],
     trial: Annotated[

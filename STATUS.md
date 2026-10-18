@@ -49,6 +49,7 @@ thinking on (next, e.g. Qwen3.8-27B). A 9B model must not take days.
   (the thinking check, measurements that can't pair stale labels, intervals in `compare`, findings
   corrected) and 3 (27B cost and safety: packages 6-10, 14 and 17) done; step 4, the one
   measurements change before any 27B reference, next.
+- `candor` alone opens menus over the runs and their commands (the user, 2026-10-18; README, Use).
 
 ## Next
 

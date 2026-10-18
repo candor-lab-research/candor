@@ -884,3 +884,10 @@ without them.
   so an interrupted measurement, search or thinking run waited 60 s and then killed it. Every batch
   of requests now closes its own when stopped.
 
+### candor menus (the user, 2026-10-18)
+
+The user asked for arrow-key menus, nicer than heretic's. `candor` alone, in a terminal, lists the
+runs with how far each has got, shows a run's panel (model, stages built, the search's best trials,
+measurements, exports) and its actions, starting on the step it is ready for, and runs the same
+commands, each shown first. Jobs that can take hours can instead be shown as `scripts/pod.sh`
+commands. Built on questionary, which heretic also uses. Reviewed twice; 853 tests pass.

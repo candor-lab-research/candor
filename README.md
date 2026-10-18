@@ -42,8 +42,15 @@ uv run candor measure runs/rude --seed 1                       # sampled again w
 uv run candor export runs/rude --outside ~/heretic-save --name heretic-saved   # another tool's edit
 uv run candor measure runs/rude --outside heretic-saved        # measured like candor's own
 uv run candor serve runs/rude --trial 37                       # chat with it in llama-server
+uv run candor                                                  # or all of it from menus
 ```
 
+- `candor` with no command, in a terminal, opens menus: each run in `runs/` with how far it has got,
+  then a run's panel (its model, the stages built, the search's best trials, its measurements and
+  exports) and what it can do next, starting on the step it is ready for. Trials lists those worth
+  measuring, fewest refused first, and any already measured or exported. Each choice runs the same
+  command you could type, shown first; one that can take hours can show instead the `scripts/pod.sh`
+  commands that run it on a pod. Arrows or j/k move, enter chooses, Ctrl-C goes back.
 - `inspect` reads only the config, tokenizer and file headers, so it is quick and needs no GPU. For an
   architecture whose KV cache candor knows, such as Llama's, Qwen3.5's and K2-Horizon's, it shows how
   much a token of context takes at f16, how many tokens fit in a GiB, and for a hybrid such as
