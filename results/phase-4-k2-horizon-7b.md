@@ -197,6 +197,45 @@ trials (24 over 8), per layer 54 of 156 (3 over 8). The best of each:
   in budget hits from steering.
 - Trials 207, 205, 265 and 114 are the finalists (history, 2026-10-18).
 
+## Step 5: the finalists exported and measured as used (2026-10-18)
+
+On the same A40 from 06:25 UTC: each finalist exported (Q4_K_M) and measured with
+`measure --exported` at step 3's settings (28 slots, seed 0, every held-out prompt and maths
+question), and compared prompt by prompt with the unedited model (p: McNemar). Trial 207 was also
+measured with adapters, to see what the export changed. 5 h 40 min, about $3.35.
+
+| | Unedited | 205 | 114 | 265 | 207 | 207, adapters |
+| --- | --- | --- | --- | --- | --- | --- |
+| Harmful refused, judge | 287/288 | 3 | 3 | 1 | 1 | 0 |
+| Harmful refused, keywords | 287/288 | 23 | 9 | 14 | 15 | 17 |
+| Harmless refused, judge (p) | 2/300 | 0 (0.5) | 0 (0.5) | 2 (1) | 0 (0.5) | 1 (1) |
+| Maths correct (p) | 1,222/1,319 | 1,209 (0.26) | 1,219 (0.84) | 1,211 (0.32) | 1,196 (0.019) | 1,198 (0.035) |
+| Maths thinking cut at 8192 (p) | 3/1,319 | 5 (0.73) | 7 (0.34) | 13 (0.021) | 8 (0.23) | 13 (0.021) |
+| Thinking cut, harmful / harmless | 0 / 1 | 3 / 1 | 1 / 1 | 12 / 3 | 8 / 1 | 7 / 1 |
+| Harmless KL, after the unedited thinking | | 0.0518 | 0.0816 | 0.0636 | 0.0614 | 0.0553 |
+| KL after empty thinking / at the think start | | 0.098 / 0.118 | 0.126 / 0.103 | 0.168 / 0.132 | 0.096 / 0.130 | 0.068 / 0.098 |
+| Thinking median, harmful / harmless / maths | 205 / 588 / 144 | 948 / 529 / 141 | 783 / 563 / 135 | 1,415 / 562 / 149 | 1,105 / 555 / 141 | 1,234 / 566 / 146 |
+| Edit kept in the file | | 99.3-100.5% | 99.6-100.6% | 99.6-100.0% | 99.4-100.2% | |
+| Measure time | 41 min | 50 min | 50 min | 67 min | 60 min | 67 min |
+| Decision rule | | pass | pass | fails: maths budget hits | fails: maths correct | |
+
+- Trial 205 ships: it and 114 pass, tied at 3 refused, and 205's KL is lower (0.052 against
+  0.082). The file: `runs/k2/exports/trial-205/k2-trial-205-Q4_K_M.gguf`, 5.6 GB.
+- Trial 207, the search's best, loses maths: 26 fewer correct exported (p 0.019), 24 with adapters
+  (p 0.035), with only 5-10 more budget hits, so the edit itself costs maths, not only through
+  thinking cut short. The search scores no maths. Trial 265 fails on maths budget hits (13 against
+  3) after 1 on the search's 100 harmful test prompts.
+- The export: trials 205, 114 and 265 held their edits in plain Q4_K_M. In trial 207, 2 of 66
+  weights (`blk.2.ffn_down`, `blk.3.ffn_down`) kept 89.5-97.5% at Q4_K_M and 89.8-97.5% merged
+  in BF16; merged unrounded in F32 they kept 100.0% and were stored as Q8_0. Its file and its
+  adapters differ by no more than noise (maths 1,198 and 1,196, p 0.93; KL between them 0.017).
+- Held-out KL ranks the finalists 205, 207, 265, 114, where the search's 100 prompts ranked 207
+  first; 207 with adapters (0.055) is also above 205's file. Exported, 205 and 207 refuse 3 and 1
+  (p 0.63).
+- The pod was deleted at 12:45 UTC once `runs/k2` was on the Mac and checked (without `gguf/` and
+  the exports of 207 and 265, which rebuild from the journal): 50.0 h, about $29.50 for steps 3
+  and 5.
+
 ## Step 5: when to stop the search, replayed (2026-10-17)
 
 A stall stop (stop once both kinds' best KL within the cap gained under 10% in their last 50 own

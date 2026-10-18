@@ -793,3 +793,12 @@ review not to work: the merge itself rounds tiny edits away (findings, Export). 
 is merged again unrounded and stored as Q8_0 from that, or as F32; every other tensor keeps its
 plain type, pinned against a llama-quantize quirk the review found. The adapter backup is left for
 a shipped file that fails the decision rule.
+
+### Phase 4, step 5: the finalists measured; trial 205 ships (2026-10-18)
+
+By the rule signed off today, trials 205 and 114 pass; 265 fails on maths thinking reaching the
+budget and 207, the search's best, on maths correct (with adapters too, so the edit, not the
+export). 205 and 114 tie at 3 harmful refused, so the lower KL decides: 205. Trial 207's export was
+the first to keep weights apart (2 as Q8_0); its file measured as its adapters did. `runs/k2` is on
+the Mac, checked against the pod, and the pod deleted (50.0 h, about $29.50). Next: the user's
+test (step 6). Numbers in the results file.

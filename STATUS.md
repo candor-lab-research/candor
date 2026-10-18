@@ -17,7 +17,7 @@ anything else. Every model is scored and shipped as a GGUF in llama-server, and 
 | 1 | Core maths and `candor inspect` | Done |
 | 2 | rude-llama end to end: search, export, measure against heretic's Trial 170 | Done 2026-10-13: trial 535 passes and ships (`results/milestone-rude-llama-vs-heretic.md`) |
 | 3 | Qwen3.5-9B, a thinking model, scored as used against heretic's Trial 161 | Measured 2026-10-15: trial 175 beats Trial 161 (`results/milestone-qwen3.5-9b-vs-heretic.md`); the phase-end discussion remains |
-| 4 | K2-Horizon-7B at your real settings: llama-server, reasoning effort high | Search stopped at 313 trials 2026-10-18 (the user); finalists being measured (below) |
+| 4 | K2-Horizon-7B at your real settings: llama-server, reasoning effort high | Measured 2026-10-18: trial 205 passes the decision rule and ships (`results/phase-4-k2-horizon-7b.md`); the user's test next |
 
 Qwen3.5-9B is a testbed: the process must work, affordably, for larger thinking models used with
 thinking on (next, e.g. Qwen3.8-27B). A 9B model must not take days.
@@ -40,19 +40,18 @@ thinking on (next, e.g. Qwen3.8-27B). A 9B model must not take days.
 
 - Phase 3: trial 175 beats Trial 161 (0/288 refused, maths at the unedited model's level);
   `results/phase-3-qwen3.5-9b.md`. The phase-end discussion remains.
-- Phase 4 step 5: the search stopped after 313 trials (the user); its four finalists are exported
-  and measured as used on the same A40 (`45usef3qip28bb`; the watchdog deletes it at 19:53 CEST
-  2026-10-18). Numbers in `results/phase-4-k2-horizon-7b.md`.
+- Phase 4 step 5 done: of four finalists measured as used, trials 205 and 114 pass the decision
+  rule and 205 ships; its file is on the Mac (`runs/k2/exports/trial-205/`). Numbers in
+  `results/phase-4-k2-horizon-7b.md`.
 - 20 ideas from arXiv are ranked in `results/new-features.md`.
 
 ## Next
 
 1. The phase-end discussion: where to go next, from `results/findings.md` and
    `results/new-features.md` (chiefly the search's cost for 27B); no changes until agreed.
-2. Phase 4: the finalists judged by the decision rule (history, 2026-10-18), `runs/k2` pulled to
-   the Mac, the pod deleted; then the user's test (step 6). Later: low effort's two closes; Uno
-   not now. The budget limit (`search.max_budget_hits`, on K2 from trial 138) costs no measurable hits on
-   the simulator and stays on (results file, step 5).
+2. Phase 4 step 6: the user's test of trial 205 in llama-server, then a release decision. Later:
+   low effort's two closes; Uno not now. The budget limit (`search.max_budget_hits`, on K2 from
+   trial 138) costs no measurable hits on the simulator and stays on (results file, step 5).
 3. Not blocking, each when there is a reason:
    - speed: 64 slots (15% faster than 32), weights cached on the GPU for "full" trials, the proxy's
      adapters loaded into one server;
@@ -105,10 +104,7 @@ the unedited model (the user, 2026-10-16). Strength 0.8-5.0 from the start (the 
 
 | Step | What | State |
 | --- | --- | --- |
-| 1-2 | Code: K2's thinking, `deployment.chat_template_kwargs`, the `--lora` list limit, `--outside` GGUF files, IFM's remote code read (no network, file or process access); the timed pilot: the run built, the unedited model and Avicennasis on 64 prompts a set, 4 search trials, low effort; the speed test; slots as run settings (`[slots]`), each search slot sized to its requests; the search's progress report every 25 trials | Done 2026-10-16 (history, results file) |
-| 3 | The unedited model measured as used (Avicennasis dropped, the user) | Done 2026-10-16: 287/288 refused, maths 1,222/1,319, 41 min (results file) |
-| 4 | Decision rule from step 3, signed off by the user before finalists are measured | Done 2026-10-18 (history) |
-| 5 | Search, the best scored as used, finalists exported and measured in full | Search done 2026-10-18: stopped by the user after 313 trials, budget limit 8 from trial 138; best trial 207 (one layer, 0 refused, KL 0.024); finalists 207, 205, 265 and 114 being measured (results file) |
+| 1-5 | Code for K2 and the timed pilot; the unedited model as used (287/288 refused, maths 1,222/1,319); the decision rule; the search, stopped by the user after 313 trials (budget limit 8 from trial 138); finalists 207, 205, 265 and 114 measured: 205 and 114 pass, 205 ships | Done 2026-10-18 (history, results file) |
 | 6 | The user's test in llama-server, then a release decision | |
 
 ## Not in this plan

@@ -52,7 +52,9 @@ entry is corrected rather than deleted when later evidence changes it.
   (Gemma-4-12B: accuracy on answered problems within 3 points; Trial 161: 95.6% correct where its
   thinking ended by itself, against the unedited 94.8%). candor's two finalists lengthen harmful
   thinking but not maths. Nobody has measured how length depends on strength or layer.
-  (`evidence-2026-10-15/thinking-length.md`; step 7)
+  (`evidence-2026-10-15/thinking-length.md`; step 7) [Measured: K2-Horizon-7B trial 207] Not
+  always: it lost 24-26 maths correct with only 5-10 more budget hits. (`phase-4-k2-horizon-7b.md`,
+  step 5)
 - **Time follows the longest thinking, not the median.** [Measured: Qwen3.5-9B] A 32-prompt pilot's
   medians put the unedited maths set at 4.3 h; it took 4.9 h. (step 4)
 - **KL where the thinking starts does tell edits apart.** [Measured: Trial 161, 0.064 against the
@@ -102,7 +104,14 @@ entry is corrected rather than deleted when later evidence changes it.
   [Measured: Qwen3.5-9B] On the 100 test prompts as used, trial 205 (layer 12) refused 1 at KL 0.037
   and 175 (layer 15) 0 at 0.057; on the 288 and 300 held-out, 205 refused 16 and the two KLs were
   level (0.058 and 0.059), both below Trial 161's 0.073. Per-layer edits within the cap sat at KL
-  0.085-0.100 on the test prompts. (steps 6 and 7)
+  0.085-0.100 on the test prompts. (steps 6 and 7) [Measured: K2-Horizon-7B, 4 finalists] Again:
+  held-out KL 0.052-0.064 one layer, 0.082 per layer.
+- **The search's best can fail the full measurement on maths, which the search doesn't score.**
+  [Measured: K2-Horizon-7B, 4 finalists, every held-out prompt and maths question] Trial 207,
+  first by the search's KL with 0 refused, lost 26 maths correct (p 0.019; 24 with adapters, so not
+  the export); trial 265 hit the budget on 13 maths questions against 3 (p 0.021). The two that
+  passed were second and fourth by the search's KL. So measuring several finalists in full is part
+  of not missing, and its cost belongs in a 27B quote. (`phase-4-k2-horizon-7b.md`, step 5)
 - **Per-layer edits press the 3.0 ceiling on attention.** [Measured: Qwen3.5-9B, one search] Every
   per-layer best puts attention at 2.9-3.0, so a better per-layer edit may lie beyond it. (step 6)
 - **Refusals fall gradually as strength rises; there is no cliff.** [Measured: 8 searches on 3
@@ -115,7 +124,9 @@ entry is corrected rather than deleted when later evidence changes it.
   [Hypothesis] Either the server's memory grew trial by trial, or the machine's GPU failed. Memory
   held at 24.4-24.6 GB over 12 edits scored as used, and at 16.1-16.6 GB through two 4-hour
   measurements, which doesn't test a 395-trial server; it is logged every minute on pods, so the
-  next long search will tell. It matters for 27B.
+  next long search will tell. It matters for 27B. [Measured: K2-Horizon-7B, A40] Through 313 trials
+  in 41 h it held at 41.0-41.9 GiB with no failure, though the server restarts between some
+  trials.
 - **Real sets run 1.4-1.8 times slower than the speed test.** [Measured: Qwen3.5-9B, A40, 2
   edits] 444-467 tokens/s on harmful and maths sets (harmless 365-377) at 32 slots, against the
   test's 662 (32 answers of exactly 1,024 tokens): while the last long answers finish, most slots
@@ -170,7 +181,10 @@ entry is corrected rather than deleted when later evidence changes it.
 - **Thinking length as a criterion between candidates.** [Hypothesis; 3 edits agree] The one edit
   that lengthened maths thinking (Trial 161) lost maths through budget hits; candor's two finalists
   didn't lengthen it and kept maths, so it didn't decide between them. Test: on the next model,
-  whether maths thinking length on the test prompts predicts held-out maths.
+  whether maths thinking length on the test prompts predicts held-out maths. [Measured: K2's 4
+  finalists] Median maths thinking stayed at 135-149 tokens (unedited 144) in all four, yet two
+  failed on maths; the search's own budget hits were 3 and 1 for those two, 0 for the two that
+  passed. Test: the search's budget hits against held-out maths on the next model's finalists.
 - **Thinking that runs to the budget, as a search constraint with an early stop.** [Measured: a
   replay on K2-Horizon-7B's journal, 126 trials; built as `search.max_budget_hits`, on K2 from
   trial 138, 2026-10-17] Edits that comply hit the 8,192 cap 0-5 times in 100 and the unedited
