@@ -5,6 +5,7 @@ import os
 import shlex
 import shutil
 import signal
+import statistics
 import subprocess
 import traceback
 from collections.abc import Callable, Iterable, Iterator
@@ -36,7 +37,7 @@ from transformers.utils import logging as transformers_logging
 
 from . import checks, config, export, measure, proxy, search, serve, source, targets
 from .convert import ConversionError
-from .engine import LLAMA_CPP_RELEASE, ServerError
+from .engine import LLAMA_CPP_RELEASE, ServerError, terminate
 from .run import PROMPT_SETS, Run, RunError, duration, every_tenth
 from .toolchain import ToolchainError
 
@@ -177,8 +178,20 @@ def _tokenizer_rows(model: str) -> list[Row]:
         if not checks.turns_thinking_off(tokenizer):
             detail += ", as its template can't turn thinking off"
         rows.append(("Thinking", "ok", detail))
+    elif checks.turns_thinking_off(tokenizer):
+        detail = (
+            "its template turns thinking off, but its prompts don't open the thinking, so the model opens "
+            "it itself and candor would judge its thinking as its answer"
+        )
+        rows.append(("Thinking", "fail", detail))
+    elif checks.may_write_its_own_thinking(tokenizer, template):
+        detail = (
+            "its template names a think tag, but its prompts neither open the thinking nor close it: if the "
+            "model writes its own thinking, candor would judge it as its answer"
+        )
+        rows.append(("Thinking", "warn", detail))
     else:
-        rows.append(("Thinking", "ok", "answers without thinking, or its template doesn't open the thinking"))
+        rows.append(("Thinking", "ok", "answers without thinking, as far as its template shows"))
     return rows
 
 
@@ -647,9 +660,13 @@ def measure_command(
 
             run = Run.open(folder, report)
             slots = run.settings.slots.measure if slots is None else slots
-            name = name or _measurement_name(
-                trial, heretic is not None, slots, limit, exported, seed, outside
-            )
+            default = _measurement_name(trial, heretic is not None, slots, limit, exported, seed, outside)
+            if name not in (None, default) and export.RESERVED.fullmatch(name):
+                raise RunError(
+                    f"--name {name} is how candor names a measurement of the unedited model or of a trial, "
+                    "so it could replace one; choose another"
+                )
+            name = name or default
             edit = None
             if heretic is not None and trial is not None:
                 edit = measure.heretic_trial(
@@ -704,8 +721,9 @@ def compare(
     first: Annotated[str, typer.Argument(help="A measurement's name, such as base.")],
     second: Annotated[str, typer.Argument(help="Another measurement's name, such as heretic-170.")],
 ) -> None:
-    """Compare two measurements prompt by prompt: each count, how many prompts changed each way, and how
-    likely so uneven a change would be by chance (McNemar)."""
+    """Compare two measurements prompt by prompt: each count, how many prompts changed each way, how
+    likely so uneven a change would be by chance (McNemar), and how far the change could be from what
+    was seen."""
     console = Console()
     try:
         run = Run.open(folder.expanduser())
@@ -720,16 +738,19 @@ def compare(
         console.print(f"[red]candor couldn't compare them:[/] {escape(_where(error))}")
         raise typer.Exit(COULD_NOT_INSPECT) from None
     console.print(f"candor compare\n  A: {escape(first)}\n  B: {escape(second)}")
-    table = Table(box=box.SIMPLE_HEAD)
-    for heading in ["", "A", "B", "Change", "Only A/B", "p"]:
-        table.add_column(heading, justify="left" if not heading else "right")
+    table = Table(box=box.SIMPLE_HEAD, pad_edge=False)
+    for heading in ["", "A", "B", "Change", "95% interval", "Only A/B", "p"]:
+        table.add_column(heading, justify="left" if not heading else "right", no_wrap=bool(heading))
     for row in rows:
         table.add_row(*map(escape, row))
     console.print(table)
     console.print(
         "Harmful and Harmless are the held-out sets. Only A/B counts the prompts where just one of them "
-        "says yes, and p is how likely a split that uneven would be if neither were really better. "
-        "Two measurements of the same edit with different --slots or --seed show what noise alone does."
+        "says yes, and p is how likely a split that uneven would be if neither were really better, either "
+        "way (two-sided). The 95% interval is the change's, in prompts, or the KL's: it allows for which "
+        "prompts were asked, not for what batching moves, and a KL that a few prompts carry may still lie "
+        "outside it. Two measurements of the same edit with different --slots or --seed show what noise "
+        "alone does."
     )
 
 
@@ -961,7 +982,7 @@ def serve_command(
             except KeyboardInterrupt:
                 console.print("Stopped.")
             finally:
-                serve.stop(process)
+                terminate(process)
     except config.ConfigError as error:
         console.print(f"[red]{escape(str(error))}[/]")
         raise typer.Exit(COULD_NOT_INSPECT) from None
@@ -1111,7 +1132,7 @@ def _thinking_summary(console: Console, run: Run, found: search.Found) -> None:
     budget = run.settings.scoring.thinking_budget or run.settings.deployment.thinking_budget
     console.print(
         f"Thinking: {means[0]:.0f} to {means[-1]:.0f} tokens per answer on average across trials (median "
-        f"{means[len(means) // 2]:.0f}); {sum(s.forced for s in scores)} of {judged} answers reached the "
+        f"{statistics.median(means):.0f}); {sum(s.forced for s in scores)} of {judged} answers reached the "
         f"search's budget of {budget} and were made to stop."
     )
     read = [

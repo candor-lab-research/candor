@@ -11,6 +11,11 @@ from .config import END_TAG
 
 # A prompt that ends by opening a thinking tag, such as Qwen3.5's <think> or K2-Horizon's <ifm|think>.
 OPENS_THINKING = re.compile(r"<([^<>/]*think[^<>]*)>\s*$", re.IGNORECASE)
+# A prompt that ends by closing an empty thinking block, as Qwen3.5's small models do unless asked to
+# think.
+CLOSES_THINKING = re.compile(r"</[^<>\s]*think[^<>\s]*>\s*$", re.IGNORECASE)
+# Any think tag.
+THINK_TAG = re.compile(r"</?[^<>\s]*think[^<>\s]*>", re.IGNORECASE)
 EFFORT = "reasoning_effort"
 # The reasoning_effort values a chat template may take, by the names OpenAI's API and chat templates use,
 # and one no template knows.
@@ -118,8 +123,9 @@ def turns_thinking_off(tokenizer: PreTrainedTokenizerBase, **settings: Any) -> b
 def think_close(tokenizer: PreTrainedTokenizerBase, **settings: Any) -> str | None:
     """The text that ends a thinking model's thinking, its chat template rendered with these settings.
 
-    For a template that turns thinking off, as Qwen's does: what enable_thinking=False adds to a prompt
-    ready for the answer, one end tag such as </think>. For one without that switch whose prompts end by
+    For a template that turns thinking off, as Qwen's does: what enable_thinking=False writes after the
+    tag that opens the thinking, one end tag such as </think> (Qwen3.8's also leaves out the system
+    message it adds at every reasoning effort but medium). For one without that switch whose prompts end by
     opening the thinking with a tag, as K2-Horizon's do with <ifm|think>: that tag's end tag alone, which
     is what K2-Horizon's template writes after an empty thinking block and how llama-server closes the
     thinking when a budget runs out. None for a model that doesn't think, or a template that writes
@@ -127,12 +133,23 @@ def think_close(tokenizer: PreTrainedTokenizerBase, **settings: Any) -> str | No
     """
     thinking = _ready(tokenizer, **settings)
     answering = _ready(tokenizer, **{**settings, "enable_thinking": False})
+    opened = OPENS_THINKING.search(thinking)
     if answering == thinking:
-        opened = OPENS_THINKING.search(thinking)
         close = f"</{opened[1]}>" if opened else ""
+    elif answering.startswith(thinking):
+        close = answering[len(thinking) :]
+    elif opened and opened[0] in answering:
+        close = answering[answering.rindex(opened[0]) + len(opened[0]) :]
     else:
-        close = answering[len(thinking) :] if answering.startswith(thinking) else ""
+        close = ""
     return close if END_TAG.fullmatch(close) else None
+
+
+def may_write_its_own_thinking(tokenizer: PreTrainedTokenizerBase, template: str) -> bool:
+    """Whether a model whose prompts neither open its thinking nor turn it off may still think: its
+    template names a think tag, as one for a model that writes its own thinking may, to keep it out of
+    past answers, and its prompts don't end by closing the thinking."""
+    return THINK_TAG.search(template) is not None and not CLOSES_THINKING.search(_ready(tokenizer))
 
 
 @dataclass(frozen=True)

@@ -11,6 +11,7 @@ import shutil
 import signal
 import socket
 import subprocess
+import sys
 import time
 from pathlib import Path
 
@@ -279,15 +280,36 @@ def test_a_server_that_dies_is_reported_with_its_log(files):
 
 def test_a_server_that_ignores_terminate_is_killed(tmp_path):
     binary = stub(tmp_path, "trap '' TERM\necho ready\nexec sleep 60")
-    s = LlamaServer(binary, tmp_path / "model.gguf", tmp_path / "server.log")
     with subprocess.Popen([binary], stdout=subprocess.PIPE, text=True) as process:
-        s.process = process
         try:
             assert process.stdout is not None and process.stdout.readline() == "ready\n"
-            s.stop(timeout=0.5)
+            engine.terminate(process, timeout=0.5)
             assert process.returncode == -signal.SIGKILL
         finally:
             process.kill()
+
+
+def test_a_starting_server_is_asked_often_whether_its_ready(tmp_path, monkeypatch):
+    answers = iter([False, False, True])
+    slept = []
+    monkeypatch.setattr(engine, "_healthy", lambda port: next(answers))
+    monkeypatch.setattr(engine.time, "sleep", slept.append)
+    process = engine.launch([str(stub(tmp_path, "exec sleep 60")), "--port", "1"], tmp_path / "server.log")
+    process.kill()
+    process.wait()
+    # A tiny model is ready in a few hundredths of a second, and a test suite starts hundreds.
+    assert len(slept) == 2 and max(slept) <= 0.05
+
+
+def test_a_server_whose_gpu_has_failed_says_so(tmp_path):
+    binary = stub(
+        tmp_path, "echo 'error while handling argument \"--device\": invalid device: CUDA0'\nexit 1"
+    )
+    s = LlamaServer(binary, tmp_path / "model.gguf", tmp_path / "server.log")
+    with pytest.raises(
+        ServerError, match="can't see CUDA0, the GPU it was started on, so the GPU has failed"
+    ):
+        s.start()
 
 
 # What llama.cpp logs when a KV cache doesn't fit on the GPU, as K2-Horizon's search did on an A40.
@@ -386,7 +408,9 @@ def test_a_thinking_model_of_36_layers_scored_with_adapters_of_its_own_starts_th
         path.parent.mkdir(parents=True, exist_ok=True)
         path.touch()
     report = f'pwd > "{tmp_path}/cwd"\nprintf "%s\\n" "$@" > "{tmp_path}/args"\n'
-    report += f'for f in *; do printf "%s\\t%s\\n" "$f" "$(readlink "$f")"; done > "{tmp_path}/links"\nexit 1'
+    # Read in one process: a readlink for each of the thousands of links takes seconds.
+    listing = "import os; print(*(f + chr(9) + os.readlink(f) for f in os.listdir()), sep=chr(10))"
+    report += f'"{sys.executable}" -c "{listing}" > "{tmp_path}/links"\nexit 1'
     binary = stub(tmp_path, report)
     s = LlamaServer(binary, tmp_path / "model.gguf", tmp_path / "server.log", adapters)
     with pytest.raises(ServerError, match="exited with code 1"):

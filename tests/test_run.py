@@ -564,6 +564,16 @@ def test_the_kv_cache_type_reaches_llama_server(current, monkeypatch):
     assert this.server(Path("m.gguf")).extra == ["--cache-type-k", "f16", "--cache-type-v", "f16"]
 
 
+def test_on_cuda_the_server_must_run_on_the_gpus(current, monkeypatch):
+    this, _ = current
+    monkeypatch.setattr(run.toolchain, "binaries", lambda: Path("/bin"))
+    assert "--device" not in this.server(Path("m.gguf")).extra
+    monkeypatch.setattr(run.toolchain, "on_cuda", lambda: True)
+    monkeypatch.setattr(run.toolchain, "_check_gpu", lambda folder: ("CUDA0", "CUDA1"))
+    extra = this.server(Path("m.gguf")).extra
+    assert extra[extra.index("--device") + 1] == "CUDA0,CUDA1"
+
+
 def test_a_sampled_run_samples_on_the_gpu(current, monkeypatch):
     this, _ = current
     monkeypatch.setattr(run.toolchain, "binaries", lambda: Path("/bin"))
@@ -809,14 +819,20 @@ def test_a_template_that_ignores_the_pinned_date_is_caught_even_today(tiny_run):
     assert not this.path("prompts.json").exists()
 
 
-def test_ids_that_disagree_with_the_chat_endpoint_stop_the_run(tiny_run, monkeypatch):
+@pytest.mark.parametrize(("slot", "servers"), [(run.TOKENIZING_SLOT, 1), (8, 2)])
+def test_ids_that_disagree_with_the_chat_endpoint_stop_the_run(tiny_run, monkeypatch, slot, servers):
     this, _, use, _ = tiny_run
     use(TEMPLATE)
+    started = []
+    server = Run.server
+    monkeypatch.setattr(Run, "server", lambda *args, **kwargs: started.append(1) or server(*args, **kwargs))
     real = LlamaServer.chat_prompt_length
     monkeypatch.setattr(LlamaServer, "chat_prompt_length", lambda *args: real(*args) + 1)
+    # Prompts that fit the tokenizing server's slot are checked on it; longer ones get a server of their own.
+    monkeypatch.setattr(run, "TOKENIZING_SLOT", slot)
     with pytest.raises(RunError, match="don't match its chat endpoint"):
         this.prompt_ids()
-    assert not this.path("prompts.json").exists()
+    assert not this.path("prompts.json").exists() and len(started) == servers
 
 
 def test_prompts_too_long_for_the_model_are_named(tiny_run):

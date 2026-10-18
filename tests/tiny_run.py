@@ -27,6 +27,11 @@ THINKING_TEMPLATE = TEMPLATE.replace(
     "assistant:<think>\n{% if enable_thinking is defined and not enable_thinking %}"
     "{{ '\\n</think>\\n\\n' }}{% endif %}{% endif %}",
 )
+# Qwen3.8's: thinking adds a system message, at every reasoning effort but medium, that turning it
+# off leaves out.
+MESSAGE_WHEN_THINKING_TEMPLATE = (
+    "{% if enable_thinking is not defined or enable_thinking %}Think hard.\n{% endif %}" + THINKING_TEMPLATE
+)
 # One that always opens the thinking, as K2-Horizon's does, with a tag that depends on the reasoning
 # effort: "high" when none is given, and refused unless it is one the template knows.
 ALWAYS_THINKING_TEMPLATE = TEMPLATE.replace(

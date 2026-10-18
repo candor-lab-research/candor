@@ -117,8 +117,8 @@ Held-out prompts, paired prompt by prompt (`candor compare`):
 
 | Thinking, median tokens | Unedited | Trial 161 |
 | --- | --- | --- |
-| Harmful | 996 | 2,980 |
-| Harmless | 1,137 | 1,175 |
+| Harmful | 996 | 2,973 |
+| Harmless | 1,135 | 1,172.5 |
 | Maths | 2,140 | 3,620 |
 
 KL of Trial 161 from the unedited model on the harmless held-out prompts: 0.073 where the answer
@@ -133,7 +133,7 @@ place), 0.064 where the thinking starts.
 - KL at the start of the thinking (0.064) does tell Trial 161 from the unedited model, against the
   phase 3 assumption that the first thinking token is nearly fixed.
 - The 32-prompt pilot (unedited: harmful 30/32 refused, harmless 0/32, maths 27/32) put maths
-  thinking well below Trial 161's (median 2,489 against 3,620), which suggested about 4.3 h for the
+  thinking well below Trial 161's (median 2,483 against 3,620), which suggested about 4.3 h for the
   unedited model's maths; the long tail (184 reaching the budget) made it 4.9 h. Time follows the
   tail, not the median.
 - The unedited model measured again with another seed, for noise, was skipped (the user, 2026-10-14):
@@ -210,14 +210,15 @@ The unedited model: 99 refused both ways. Edit 24 again with another seed: 2 (ag
 - Within the cap of 2 as used: edits 19, 20, 22 and 24, all per layer at the answer start, KL
   0.099-0.110. Like for like with Trial 161 rebuilt (thinking off, KL 0.092): 7-15% more KL for 1
   refused against 24. Not yet within the decision rule's KL (Trial 161's 0.073, held-out prompts).
-- Directions read at the think start refused 71-100 either way, as before.
+- Per-layer edits read at the think start refused 71-100 either way, as before; one-layer ones 14-100.
 - One-layer edits that comply make the thinking longest and hit the budget most (up to 10 of 100).
 
 ## Step 6: the search carried on, thinking off (2026-10-14 to 15)
 
 From 150 trials towards 600 on the same pod, 22:05-07:32. It stopped at 545 trials (313 scored in
 full, the rest stopped early as unable to win) when the pod's GPU failed: llama-server's
-allocations failed after 395 trials in one server, then CUDA wouldn't start. The last 55 trials
+allocations failed after 395 trials in one candor process (a "full" search restarts the server every
+trial), then CUDA wouldn't start. The last 55 trials
 were skipped: no trial set a new best of either kind after trial 428. About 86 s a trial.
 
 | Trial | Kind | Read at | Layer | Refused | Keywords | KL | Strength, attention / MLP |
@@ -268,6 +269,10 @@ Trial 175 at its strength again with another seed: 0 refused (KL 0.0553, thinkin
   though not with thinking off, and shortened its thinking. On per-layer edits it held or helped
   (5 to 1, 1 to 1, 6 to 3).
 - Where thinking off refuses at most 25, thinking refused a median of 2 more (step 5: 5).
+- Rank agreement (Spearman) on these 12: 0.24, and 0.77 on the 6 at their own strength. Of the 10
+  within the cap of 2 thinking off, 5 stayed within it as used (step 5: 4 of 5); at their own
+  strength, across both steps, 4 of 7, the other 3 going from 1 to 6, 1 to 6 and 2 to 5 (each p at
+  least 0.06 paired).
 - Keyword counts stay far from the judge's on per-layer edits (35-52 against 1-6).
 - GPU memory held at 24.4-24.6 GB through the thinking-on scoring.
 
@@ -278,8 +283,8 @@ rebuilt, trials 205 and 175 exported at their strength as Q4_K_M (each edited we
 99.6-100.5% of its edit, so no Q8_0), and each file measured on the held-out prompts and all 1,319
 maths questions as Trial 161 was (f16 KV cache, Qwen's sampling, seed 0, budget 8192, 32 slots).
 Run and exports took about 30 min. The first start measured with 8 slots by mistake (`--slots` left
-out); it was stopped after trial 205's harmful set (keywords 63, budget hit 3, median thinking 2,096
-against 58, 4 and 2,052 at 32 slots) and both measured again with 32.
+out); it was stopped after trial 205's harmful set (keywords 63, budget hit 3, median thinking 2,096.5
+against 58, 4 and 2,050.5 at 32 slots) and both measured again with 32.
 
 Held-out prompts, paired prompt by prompt (`candor compare`); p is McNemar's against Trial 161:
 
@@ -300,8 +305,8 @@ Held-out prompts, paired prompt by prompt (`candor compare`); p is McNemar's aga
 
 | Thinking, median tokens | Unedited | Trial 161 | Trial 205 | Trial 175 |
 | --- | --- | --- | --- | --- |
-| Harmful | 996 | 2,980 | 2,052 | 1,648 |
-| Harmless | 1,137 | 1,175 | 1,098 | 1,058 |
+| Harmful | 996 | 2,973 | 2,050.5 | 1,641 |
+| Harmless | 1,135 | 1,172.5 | 1,096.5 | 1,054 |
 | Maths | 2,140 | 3,620 | 2,426 | 1,874 |
 
 Maths three ways: correct overall, thinking cut at the budget, and correct where the thinking ended

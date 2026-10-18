@@ -39,9 +39,9 @@ were exported from its safetensors at b364bdb in 21 minutes; Q4_K_M kept 52.3-97
 | Harmless refused, judge | 1/64 | 0/64 | 1 / 0 | 1 |
 | Maths correct | 61/64 | 61/64 | 3 / 3 | 1 |
 | Thinking cut at 8192, harmful / harmless / maths | 0 / 0 / 0 | 0 / 4 / 2 | | |
-| Thinking tokens, median (most), harmful | 225 (1,292) | 523 (6,429) | | |
-| Harmless | 561 (4,617) | 882 (8,213) | | |
-| Maths | 140 (1,900) | 158 (8,213) | | |
+| Thinking tokens, median (most), harmful | 224 (1,292) | 515 (6,429) | | |
+| Harmless | 560 (4,617) | 861.5 (8,213) | | |
+| Maths | 140 (1,900) | 156 (8,213) | | |
 | Time, harmful / harmless / maths | 120 / 352 / 142 s | 379 / 798 / 421 s | | |
 | A full measurement, candor's estimate | at most 1 h 25 min | at most 3 h 55 min | | |
 
@@ -78,8 +78,8 @@ At low K2 opens with `<ifm|think_faster>` but often closes as at high, so candor
 never closed; low wasn't measured further.
 
 **What it shows**
-- K2 at high thinks far less than Qwen3.5-9B did: medians 225 / 561 / 140 against Qwen's 996 /
-  1,137 / 2,140 (harmful, harmless, maths), with no budget hits unedited. A full measurement is
+- K2 at high thinks far less than Qwen3.5-9B did: medians 224 / 560 / 140 against Qwen's 996 /
+  1,135 / 2,140 (harmful, harmless, maths), with no budget hits unedited. A full measurement is
   at most about 1.5 h unedited and 4 h for an edit that complies in part; Qwen's unedited maths
   set alone took 4.9 h.
 - Step 3 (the unedited model and Avicennasis measured in full, at 28 slots) is about 6-7 h with
@@ -150,7 +150,7 @@ minutes. Avicennasis's edit wasn't measured (the user: too weak a bar).
 | Maths answer cut off | 0/1,319 |
 | Thinking cut at 8192, harmful / harmless / maths | 0 / 1 / 3 |
 | Thinking tokens, median (most): harmful | 205 (1,381) |
-| Harmless | 588 (8,213) |
+| Harmless | 586.5 (8,213) |
 | Maths | 144 (8,213) |
 | Time, harmful / harmless / maths | 207 s / 828 s / 1,399 s (534 / 443 / 435 tokens/s) |
 
@@ -196,6 +196,8 @@ trials (24 over 8), per layer 54 of 156 (3 over 8). The best of each:
   from more trials stopped early (107 of 176 against 13 of 137). The simulator shows the same fall
   in budget hits from steering.
 - Trials 207, 205, 265 and 114 are the finalists (history, 2026-10-18).
+- KL of trials 45, 57 and 58 read on the Mac (Metal, its own Q4_K_M) on 2026-10-16: 0.427, 0.441 and
+  0.089, against the search's A40 reads of 0.4500, 0.4500 and 0.0955.
 
 ## Step 5: the finalists exported and measured as used (2026-10-18)
 
@@ -214,7 +216,7 @@ measured with adapters, to see what the export changed. 5 h 40 min, about $3.35.
 | Thinking cut, harmful / harmless | 0 / 1 | 3 / 1 | 1 / 1 | 12 / 3 | 8 / 1 | 7 / 1 |
 | Harmless KL, after the unedited thinking | | 0.0518 | 0.0816 | 0.0636 | 0.0614 | 0.0553 |
 | KL after empty thinking / at the think start | | 0.098 / 0.118 | 0.126 / 0.103 | 0.168 / 0.132 | 0.096 / 0.130 | 0.068 / 0.098 |
-| Thinking median, harmful / harmless / maths | 205 / 588 / 144 | 948 / 529 / 141 | 783 / 563 / 135 | 1,415 / 562 / 149 | 1,105 / 555 / 141 | 1,234 / 566 / 146 |
+| Thinking median, harmful / harmless / maths | 205 / 586.5 / 144 | 947 / 524 / 141 | 782 / 562.5 / 135 | 1,411.5 / 559.5 / 149 | 1,102.5 / 554.5 / 141 | 1,234 / 566 / 146 |
 | Edit kept in the file | | 99.3-100.5% | 99.6-100.6% | 99.6-100.0% | 99.4-100.2% | |
 | Measure time | 41 min | 50 min | 50 min | 67 min | 60 min | 67 min |
 | Decision rule | | pass | pass | fails: maths budget hits | fails: maths correct | |
@@ -263,6 +265,12 @@ the 40-trial rule at 285 (per layer 8%). On K2 at 125 trials, neither kind has s
 - Stopping at 300 rather than 600 roughly halves the chance of a pick within 10% of the best.
 
 ## Step 5: the budget limit on the miss-rate simulator (2026-10-17)
+
+First a replay on K2's journal at 126 trials: edits that comply hit the 8,192 budget 0-5 times in
+100, the unedited model 0 of 288; 17 of 126 trials hit it more than 8 times (the 11 among the first
+100 took 33% of the time), none ever its kind's best, and judging them again at 8 takes only trials
+66 and 102 (KL 0.117) out of the cap. With hits spread evenly through the prompts, the stops would
+have cut the time 17%, nearly all from trials far over the cap; near-misses (9-14 hits) stop late.
 
 `search.max_budget_hits = 8` measured on the phase 3 simulator, driving candor's own search at
 8dfc0f5 (the scorer swapped for a landscape; the switch-over code unchanged). Budget hits drawn per

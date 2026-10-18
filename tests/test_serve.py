@@ -10,11 +10,12 @@ from datetime import date
 import pytest
 from typer.testing import CliRunner
 
-from candor import config, serve
+from candor import config, engine, serve, toolchain
 from candor.cli import app
+from candor.engine import ServerError
 from candor.run import Run, RunError
 
-from .test_engine import stub
+from .test_engine import KV_FAILED, NO_ROOM, stub
 from .test_export import converting  # noqa: F401
 from .test_run import TEMPLATE
 from .test_search import small, write_journal
@@ -64,8 +65,12 @@ def test_the_server_runs_at_the_runs_settings(tiny, monkeypatch):
     tiny.settings.deployment.kv_cache = "q8_0"
     monkeypatch.setattr(Run, "template_kwargs", lambda self: {"date_string": "x", "enable_thinking": False})
     args = serve.arguments(tiny, model, 8080, 4096)
-    assert args[args.index("-fa") + 1] == "on"
+    assert args[args.index("-fa") + 1] == "on" and "--device" not in args
     assert json.loads(args[args.index("--chat-template-kwargs") + 1]) == {"enable_thinking": False}
+    monkeypatch.setattr(toolchain, "on_cuda", lambda: True)
+    monkeypatch.setattr(toolchain, "_check_gpu", lambda folder: ("CUDA0",))
+    args = serve.arguments(tiny, model, 8080, 4096)
+    assert args[args.index("--device") + 1] == "CUDA0"
 
 
 def test_the_server_samples_and_thinks_as_measured(tiny):
@@ -240,17 +245,25 @@ def test_the_server_renders_with_the_runs_chat_template_settings(tiny, tmp_path,
 
 def test_a_server_that_exits_or_hangs_while_starting_is_stopped_and_reported(tmp_path, monkeypatch):
     stopped = []
-    real = serve.stop
-    monkeypatch.setattr(serve, "stop", lambda process: (stopped.append(process), real(process)))
+    real = engine.terminate
+    monkeypatch.setattr(engine, "terminate", lambda process: (stopped.append(process), real(process)))
     (tmp_path / "exits").mkdir()
     (tmp_path / "hangs").mkdir()
     exits = [str(stub(tmp_path / "exits", "exit 3")), "--port", str(free_port())]
-    with pytest.raises(serve.ServeError, match="llama-server stopped with code 3"):
+    with pytest.raises(ServerError, match="llama-server exited with code 3"):
         serve.start(exits, tmp_path / "serve.log")
     hangs = [str(stub(tmp_path / "hangs", "exec sleep 60")), "--port", str(free_port())]
-    with pytest.raises(serve.ServeError, match="didn't start within 1 s"):
+    with pytest.raises(ServerError, match="wasn't ready after 1 s"):
         serve.start(hangs, tmp_path / "serve.log", timeout=1)
     assert len(stopped) == 2 and all(process.poll() is not None for process in stopped)
+
+
+def test_a_context_that_doesnt_fit_says_to_lower_it(tiny, tmp_path):
+    logged = "".join(f"echo '{line}'\n" for line in (NO_ROOM, KV_FAILED))
+    args = serve.arguments(tiny, tiny.folder / "model.gguf", free_port(), 32768)
+    args[0] = str(stub(tmp_path, logged + "exit 1"))
+    with pytest.raises(ServerError, match=r"KV cache for 1 slot of 32,768 tokens: .*; lower --context$"):
+        serve.start(args, tmp_path / "serve.log")
 
 
 def test_sigterm_while_serving_stops_the_server(tiny, monkeypatch):

@@ -100,8 +100,19 @@ OPENS_ITS_OWN = WITHOUT_BOS + (
 )
 
 
+# Qwen3.8's: thinking adds a system message, at every reasoning effort but medium, that turning it
+# off leaves out.
+MESSAGE_WHEN_THINKING = (
+    "{% if enable_thinking is not defined or enable_thinking %}Think hard.\n{% endif %}" + THINKING
+)
+
+
 def test_a_thinking_models_close_is_what_turning_thinking_off_adds():
     assert think_close(tokenizer(THINKING, False)) == "</think>\n\n"
+
+
+def test_a_close_is_what_turning_thinking_off_writes_after_the_tag_that_opens_it():
+    assert think_close(tokenizer(MESSAGE_WHEN_THINKING, False)) == "</think>\n\n"
 
 
 @pytest.mark.parametrize("template", [WITHOUT_BOS, OPENS_ITS_OWN])

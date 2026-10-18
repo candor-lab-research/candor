@@ -20,13 +20,15 @@ from transformers import (
     Qwen3_5TextConfig,
 )
 
-from candor import convert, source, targets, toolchain
+from candor import checks, config, convert, source, targets, toolchain
 from candor.config import Measure
-from candor.engine import LlamaServer
+from candor.engine import LlamaServer, Thinking
 from candor.judge import Guard, Verdict, read_verdict
 
 pytestmark = pytest.mark.skipif(os.environ.get("CANDOR_E2E") != "1", reason="set CANDOR_E2E=1 to run")
 MODEL = "HuggingFaceTB/SmolLM2-135M-Instruct"
+# The smallest Qwen3.5: the next model, Qwen3.8-27B, is the same architecture in llama.cpp (qwen35).
+THINKING_MODEL = "Qwen/Qwen3.5-0.8B"
 CHATS = [
     [{"role": "user", "content": "Name three primary colours."}],
     [
@@ -213,6 +215,40 @@ def test_init_and_run_prepare_every_stage_resume_and_follow_settings(tmp_path):
     merging = runner.invoke(app, ["compare", str(run_folder), "trial-1-first-2", "trial-1-exported-first-2"])
     assert merging.exit_code == 0, merging.output
     assert "Harmless KL from A" in merging.output
+
+
+def test_init_reads_the_thinking_of_the_model_planned_next(tmp_path):
+    from typer.testing import CliRunner
+
+    from candor.cli import app
+
+    created = CliRunner().invoke(
+        app, ["init", "next", "--model", "Qwen/Qwen3.8-27B", "--runs", str(tmp_path)]
+    )
+    assert created.exit_code == 0, created.output
+    deployment = config.load(tmp_path / "next").deployment
+    assert deployment.chat_template_kwargs == {"reasoning_effort": "xhigh"}
+    assert deployment.think_close == "\n</think>\n\n" and deployment.thinking_budget == config.THINKING_BUDGET
+
+
+def test_a_real_thinking_model_converts_and_its_budget_closes_its_thinking(tmp_path):
+    folder = Path(
+        snapshot_download(THINKING_MODEL, allow_patterns=["*.json", "*.safetensors", "*.jinja", "*.txt"])
+    )
+    model = tmp_path / "model-BF16.gguf"
+    convert.to_gguf(folder, model, tmp_path / "convert.log")
+    # Qwen3.5's small models think only when asked.
+    kwargs = {"enable_thinking": True}
+    close = checks.think_close(AutoTokenizer.from_pretrained(folder), **kwargs)
+    assert close == "\n</think>\n\n"
+    thinking = Thinking(
+        "<think>", "</think>", close.rstrip(), "<think>\n", 8, config.Deployment().thinking_budget_message
+    )
+    binary = toolchain.binaries() / "llama-server"
+    with LlamaServer(binary, model, tmp_path / "server.log", parallel=1, context_per_slot=512) as server:
+        [ids] = server.chat_ids(CHATS[:1], kwargs)
+        [answer] = server.generate([ids], 16, thinking=thinking)
+    assert answer.forced and answer.thinking > 8 and answer.tokens > 0
 
 
 def test_the_judge_tells_a_refusal_from_an_answer():

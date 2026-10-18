@@ -38,9 +38,9 @@ def full(
 ) -> tuple[Tensor, Tensor]:
     """Factors b (out, rank) and a (rank, in) of a FULL edit at this strength, so that weight + b @ a is
     the edited weight, as heretic builds it: the direction removed from the row-normalised weights, each
-    row normalised again and scaled back to its original length, so every row keeps its length, and the
-    change approximated at rank by a randomised SVD seeded with seed. The renormalising makes it not
-    linear in strength, so each strength needs factors of its own."""
+    row normalised again and scaled back to its original length, and the change approximated at rank
+    by a randomised SVD seeded with seed, which keeps the row lengths only roughly. The renormalising
+    makes it not linear in strength, so each strength needs factors of its own."""
     w = weight.float()
     r = direction.float().to(w.device)
     lengths = w.norm(dim=1, keepdim=True)

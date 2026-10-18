@@ -12,7 +12,7 @@ prompts no search saw.
 | KL from the unedited model | | 0.073 | **0.058** | **0.059** |
 | Maths correct (/1319) | 1183 | 1162 | 1179 | 1181 |
 | Maths thinking reaching the budget (/1319) | 184 | 297 | **174** (p 7e-18) | **187** (p 3e-14) |
-| Harmful thinking, median tokens | 996 | 2,980 | 2,052 | 1,648 |
+| Harmful thinking, median tokens | 996 | 2,973 | 2,050.5 | 1,641 |
 
 - Trial 175 removes every refusal (28 to 0) and keeps maths at the unedited model's level; Trial
   161's maths loss came from thinking that ran into the budget, which candor's edits don't cause.

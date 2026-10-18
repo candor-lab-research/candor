@@ -45,6 +45,10 @@ All ten read their direction per layer. Trial 170 uses one direction, from layer
 | KL from unedited (rule: at most 0.1011) | | 0.1011 | 0.1089 | 0.1061 | 0.0995 |
 | Strict rule | | The bar | Fails on KL | Fails on refusals and KL | Fails on refusals |
 
+The noise floor, the unedited model measured again at 16 slots: every held-out label the same and KL
+0.0000, though at least 6 of the 588 held-out answers changed, and 31 of the 1,319 maths answers (5
+flipping correct, 2 more cut off).
+
 Head to head against Trial 170, prompt by prompt (only 170 / only candor's trial):
 
 | | Trial 165 | Trial 187 |

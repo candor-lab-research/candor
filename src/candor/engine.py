@@ -31,6 +31,8 @@ NO_ROOM = re.compile(
     r"|error: failed to allocate buffer, size = +([\d.]+) MiB"
 )
 CACHE_FAILED = re.compile(r"failed to allocate buffer for (kv|rs) cache")
+# How llama.cpp refuses a --device it can't see, as on a pod whose GPU has failed.
+NO_DEVICE = re.compile(r"invalid device: (\S+)")
 
 
 class ServerError(RuntimeError):
@@ -117,8 +119,6 @@ class LlamaServer:
 
     def start(self, timeout: float = 600) -> None:
         """Start llama-server and wait until it serves the model. Paths in extra must be absolute."""
-        if port_in_use(self.port):
-            raise ServerError(f"port {self.port} is already in use, so another server would answer instead")
         # Every request starts from position 0 (see _complete), so the RAM prompt cache and context
         # checkpoints are never used. Turning them off saves copying slot states to and from up to
         # 8 GiB of RAM, and on recurrent models such as Qwen3.5 an extra decode for every prompt.
@@ -127,16 +127,12 @@ class LlamaServer:
             "-np", str(self.parallel), "-c", str(self.context), "-ngl", "999", "--no-webui",
             "--cache-ram", "0", "--ctx-checkpoints", "0", *self.extra,
         ]  # fmt: skip
-        started = time.perf_counter()
         try:
             if self.adapters:
                 if len(self._lora_list().encode()) >= MAX_ARGUMENT:
                     self._link()
                 args += ["--lora", self._lora_list(), "--lora-init-without-apply"]
-            with self.log.open("ab") as log:
-                logged = log.tell()
-                self.process = subprocess.Popen(args, cwd=self.workdir, stdout=log, stderr=subprocess.STDOUT)
-            self._wait_until_ready(started, timeout, logged)
+            self.process = launch(args, self.log, timeout, self.workdir, self.slots_setting)
             self._check_model()
             self._zero_default_scales()
         except BaseException:
@@ -165,42 +161,6 @@ class LlamaServer:
         for name, path in zip(names, self.adapters, strict=True):
             (self.workdir / name).symlink_to(path)
 
-    def _wait_until_ready(self, started: float, timeout: float, logged: int) -> None:
-        assert self.process is not None
-        while True:
-            if self.process.poll() is not None:
-                raise self._exited(logged)
-            if self._healthy():
-                return
-            if time.perf_counter() - started > timeout:
-                raise ServerError(f"llama-server wasn't ready after {timeout:.0f} s, see {self.log}")
-            time.sleep(0.5)
-
-    def _exited(self, logged: int) -> ServerError:
-        """Why the server exited as it started: that its KV cache or recurrent state didn't fit, when what
-        it logged from byte logged on says so, or else its exit code. Nothing else of the log is shown."""
-        assert self.process is not None
-        with self.log.open("rb") as log:
-            log.seek(logged)
-            text = log.read().decode(errors="replace")
-        failed = CACHE_FAILED.search(text)
-        # The buffer that failed is the last one logged before the cache's failure.
-        found = NO_ROOM.findall(text, 0, failed.start()) if failed else []
-        if failed and found:
-            asked = float(found[-1][0] or found[-1][1])
-            fewer = f"; lower {self.slots_setting}" if self.slots_setting else ""
-            cache = (
-                f"KV cache for {self.parallel} slots of {self.context // self.parallel:,} tokens"
-                if failed[1] == "kv"
-                else f"recurrent state for {self.parallel} slots"
-            )
-            # CUDA asks for the whole cache at once, Metal for it in parts.
-            return ServerError(
-                f"llama-server couldn't allocate its {cache}: it asked for a buffer of {asked:,.0f} MiB, "
-                f"more GPU memory than it could get{fewer}"
-            )
-        return ServerError(f"llama-server exited with code {self.process.returncode}, see {self.log}")
-
     def _check_model(self) -> None:
         served = self._call("GET", "/props").get("model_path", "")
         if Path(served).resolve() != self.model.resolve():
@@ -217,24 +177,13 @@ class LlamaServer:
             if any(adapter["scale"] for adapter in self._call("GET", "/lora-adapters")):
                 raise ServerError("couldn't set the adapters' default scale to 0")
 
-    def stop(self, timeout: float = 60) -> None:
-        if self.process and self.process.poll() is None:
-            self.process.terminate()
-            try:
-                self.process.wait(timeout=timeout)
-            except subprocess.TimeoutExpired:
-                self.process.kill()
-                self.process.wait()
+    def stop(self) -> None:
+        if self.process:
+            terminate(self.process)
         self.client.close()
         if self.links is not None:
             self.links.cleanup()
             self.links = None
-
-    def _healthy(self) -> bool:
-        try:
-            return self.client.get("/health", timeout=2).status_code == 200
-        except httpx.TransportError:
-            return False
 
     def _call(self, method: str, endpoint: str, timeout: httpx.Timeout = QUICK, **request: Any) -> Any:
         """The JSON the server answers with. A failure names the endpoint and points at the log."""
@@ -578,3 +527,82 @@ def _free_port() -> int:
 def port_in_use(port: int) -> bool:
     with socket.socket() as s:
         return s.connect_ex(("127.0.0.1", port)) == 0
+
+
+def launch(
+    args: list[str], log: Path, timeout: float = 600, cwd: Path | None = None, lower: str | None = None
+) -> subprocess.Popen:
+    """llama-server run with args, once it answers, its output added to log. If it exits first, the
+    error says why (see _exited), naming lower, the setting that sizes its KV cache."""
+    port = int(args[args.index("--port") + 1])
+    if port_in_use(port):
+        raise ServerError(f"port {port} is already in use, so another server would answer instead")
+    log.parent.mkdir(parents=True, exist_ok=True)
+    with log.open("ab") as out:
+        logged = out.tell()
+        process = subprocess.Popen(args, cwd=cwd, stdout=out, stderr=subprocess.STDOUT)
+    started = time.monotonic()
+    try:
+        while True:
+            if process.poll() is not None:
+                raise _exited(process, args, log, logged, lower)
+            if _healthy(port):
+                return process
+            if time.monotonic() - started > timeout:
+                raise ServerError(f"llama-server wasn't ready after {timeout:.0f} s, see {log}")
+            # A small model is ready in a few hundredths of a second.
+            time.sleep(0.05)
+    except BaseException:
+        terminate(process)
+        raise
+
+
+def _healthy(port: int) -> bool:
+    try:
+        return httpx.get(f"http://127.0.0.1:{port}/health", timeout=2).status_code == 200
+    except httpx.TransportError:
+        return False
+
+
+def _exited(
+    process: subprocess.Popen, args: list[str], log: Path, logged: int, lower: str | None
+) -> ServerError:
+    """Why the server exited as it started: that its GPU has failed or its KV cache or recurrent state
+    didn't fit, when what it logged from byte logged on says so, or else its exit code. Nothing else of
+    the log is shown."""
+    with log.open("rb") as out:
+        out.seek(logged)
+        text = out.read().decode(errors="replace")
+    if gone := NO_DEVICE.search(text):
+        return ServerError(
+            f"llama-server can't see {gone[1]}, the GPU it was started on, so the GPU has failed: pull "
+            "the results, then replace the pod"
+        )
+    failed = CACHE_FAILED.search(text)
+    # The buffer that failed is the last one logged before the cache's failure.
+    found = NO_ROOM.findall(text, 0, failed.start()) if failed else []
+    if failed and found:
+        asked = float(found[-1][0] or found[-1][1])
+        slots, context = (int(args[args.index(flag) + 1]) for flag in ("-np", "-c"))
+        slots_of = f"{slots} slot" + ("s" if slots != 1 else "")
+        cache = (
+            f"KV cache for {slots_of} of {context // slots:,} tokens"
+            if failed[1] == "kv"
+            else f"recurrent state for {slots_of}"
+        )
+        # CUDA asks for the whole cache at once, Metal for it in parts.
+        return ServerError(
+            f"llama-server couldn't allocate its {cache}: it asked for a buffer of {asked:,.0f} MiB, "
+            f"more GPU memory than it could get" + (f"; lower {lower}" if lower else "")
+        )
+    return ServerError(f"llama-server exited with code {process.returncode}, see {log}")
+
+
+def terminate(process: subprocess.Popen, timeout: float = 60) -> None:
+    if process.poll() is None:
+        process.terminate()
+        try:
+            process.wait(timeout)
+        except subprocess.TimeoutExpired:
+            process.kill()
+            process.wait()

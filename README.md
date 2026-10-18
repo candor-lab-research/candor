@@ -62,6 +62,9 @@ uv run candor serve runs/rude --trial 37                       # chat with it in
   number. The search can score at a shorter budget (`scoring.thinking_budget`) and the edits it
   suggests are measured at the deployment's. A template that can't turn thinking off, as
   K2-Horizon's can't, is closed by the end tag of the tag its prompts open with (`</ifm|think>`).
+  `inspect` fails a model whose template turns thinking off but whose prompts don't open it, as
+  Qwen3's hybrid models' don't, since candor would judge the thinking the model opens itself as its
+  answer; and warns where a template names a think tag but its prompts neither open nor close one.
 - `deployment.chat_template_kwargs` holds settings the chat template is rendered with, such as
   `{ reasoning_effort = "high" }`: every prompt candor builds is rendered with them, and `serve` passes
   them to llama-server. `init` sets a template's reasoning effort at its own default and lists the
@@ -79,15 +82,18 @@ uv run candor serve runs/rude --trial 37                       # chat with it in
   suggestions must then also be scored thinking at more strength), or can't be trusted. Set
   `scoring.thinking = "off"` only when it holds; edits are chosen on numbers measured thinking
   either way. A model whose chat template can't turn thinking off is never used answering after an
-  empty block, so candor refuses to score it that way, which `proxy` needs. Its scores are kept in
+  empty block, so candor refuses to score it that way, which `proxy` needs; so too where turning it
+  off changes more than the end of the prompt, as Qwen3.8's does at every reasoning effort but
+  medium. Its scores are kept in
   `proxy/`, so a stopped check carries on. `--trial`, repeated,
   scores the trials named instead (the search's best, once it may score thinking off), each also at
   1.4 times its strength, kept apart in `proxy/trials.json`, with counts but no verdict; naming other
   trials starts that afresh.
-- `edit.row_norm = "full"` makes heretic's "full" edit: each edited weight row keeps its own length, at
-  heretic's rank of 3, built as heretic builds it (checked against its code; its randomised SVD's seed
-  moves the result by about 1e-5). On Qwen3.5-9B
-  heretic's Trial 161 used it and candor's "pre" edits stalled near 70 of 100 refusals. A "full"
+- `edit.row_norm = "full"` makes heretic's "full" edit: each edited weight row is scaled back to its
+  own length, then the change is kept at heretic's rank of 3, so rows keep their length only roughly,
+  built as heretic builds it (checked against its code; its randomised SVD's seed moves the result
+  by about 1e-5). On Qwen3.5-9B heretic's Trial 161 used it, and a candor search with it did better
+  than one with "pre" (`findings.md`). A "full"
   edit isn't linear in strength, so it can't be one adapter per weight dialled per request: each
   trial gets an adapter built at its strengths and llama-server is restarted with it, which adds
   seconds to every trial. `measure --heretic` and `score --heretic` rebuild a heretic trial that read
@@ -128,10 +134,12 @@ uv run candor serve runs/rude --trial 37                       # chat with it in
   keyword counts beside it, and the first-token probabilities on the harmless prompts give KL
   divergence. It keeps one number per prompt in `measurements/NAME/`; answers and the judge's
   replies go only to `private/`. `--limit N` measures the first N prompts of each set and estimates
-  the full run's time; a stopped measurement resumes; the Mac is kept awake.
-- `compare A B` pairs two measurements prompt by prompt: each count, how many prompts went each
-  way, and the exact McNemar p-value. Measuring the same edit twice with different `--slots` shows
-  what batching noise alone does.
+  the full run's time; a stopped measurement resumes; the Mac is kept awake. `--name` names it, but
+  never as candor names its own (`base`, `trial-N`, `heretic-N`).
+- `compare A B` pairs two measurements prompt by prompt: each count, the change with a 95% interval
+  (Bonett and Price's for paired counts; for KL a studentised bootstrap over the prompts), how many
+  prompts went each way, and the exact McNemar p-value; and the slots and seeds where they differ.
+  Measuring the same edit twice with different `--slots` shows what batching noise alone does.
 - `search` tries edits of the shape heretic searches, in two kinds searched apart that take turns:
   every layer reading one layer's refusal direction, and each layer reading its own
   (`search.trials_per_scope`, 300 each). Each kind starts from 20 evenly spread trials, then
@@ -248,7 +256,7 @@ attention. If reading Qwen3.5's residuals turns out slow, `flash-linear-attentio
 
 ```
 uv sync
-uv run pytest
+uv run pytest -n 6
 uv run ruff check . && uv run ruff format --check . && uv run pyright
 ```
 

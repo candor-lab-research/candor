@@ -9,6 +9,7 @@ over each other.
 """
 
 import fcntl
+import functools
 import hashlib
 import os
 import platform
@@ -185,27 +186,42 @@ def binaries() -> Path:
     """
     if override := os.environ.get("CANDOR_LLAMA_BIN"):
         try:
-            return _check(Path(override).expanduser())
+            folder = _check(Path(override).expanduser())
         except ToolchainError as error:
             raise ToolchainError(f"{error}; point CANDOR_LLAMA_BIN at a {LLAMA_CPP_RELEASE} build") from None
-    name = this_platform()
-    target = cache() / name / "bin"
-    with _locked(f"bin-{name}"):
-        marker = target / INSTALLED
-        complete = marker.exists() and all((target / tool).exists() for tool in TOOLS)
-        if not complete or marker.read_text() != _installed(ASSETS[name]):
-            _install(target, ASSETS[name])
-        try:
-            folder = _check(target)
-        except ToolchainError as error:
-            raise ToolchainError(f"{error}; delete {target} to fetch it again") from None
-    if name == "linux-cuda":
+    else:
+        name = this_platform()
+        target = cache() / name / "bin"
+        with _locked(f"bin-{name}"):
+            marker = target / INSTALLED
+            complete = marker.exists() and all((target / tool).exists() for tool in TOOLS)
+            if not complete or marker.read_text() != _installed(ASSETS[name]):
+                _install(target, ASSETS[name])
+            try:
+                folder = _check(target)
+            except ToolchainError as error:
+                raise ToolchainError(f"{error}; delete {target} to fetch it again") from None
+    if on_cuda():
         _check_gpu(folder)
     return folder
 
 
-def _check_gpu(folder: Path) -> None:
-    """Refuse a llama-server that lists no CUDA device: it would silently run on the CPU."""
+def on_cuda() -> bool:
+    """Whether llama-server must run on a CUDA GPU here, as it must on Linux."""
+    return platform.system() == "Linux"
+
+
+def device_flags(folder: Path) -> list[str]:
+    """The flags that name the GPUs folder's llama-server runs on: every one it lists, as it uses by
+    default. Named, a server started after a GPU has failed refuses to start rather than run on the CPU,
+    without listing the GPUs again."""
+    return ["--device", ",".join(_check_gpu(folder))] if on_cuda() else []
+
+
+@functools.cache
+def _check_gpu(folder: Path) -> tuple[str, ...]:
+    """The CUDA devices llama-server lists, such as CUDA0, refusing one that lists none: it would
+    silently run on the CPU. Listing them starts CUDA, so it is done once."""
     try:
         devices = subprocess.run(
             [str(folder / "llama-server"), "--list-devices"], capture_output=True, text=True, timeout=120
@@ -213,11 +229,13 @@ def _check_gpu(folder: Path) -> None:
     except (OSError, subprocess.TimeoutExpired) as error:
         raise ToolchainError(f"llama-server couldn't list the GPUs: {error}") from None
     # The devices are listed on stdout. When CUDA fails to start, stderr says so, naming CUDA too.
-    if not re.search(r"^\s*CUDA\d+: ", devices.stdout, re.MULTILINE):
+    found = tuple(re.findall(r"^\s*(CUDA\d+): ", devices.stdout, re.MULTILINE))
+    if not found:
         said = devices.stderr.strip().splitlines()[-3:] or ["no CUDA device listed"]
         raise ToolchainError(
             f"llama-server can't see the GPU, so it would silently run on the CPU: {' / '.join(said)}"
         )
+    return found
 
 
 def _git(source: Path, *args: str) -> str:

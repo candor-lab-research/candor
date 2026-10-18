@@ -10,18 +10,33 @@ one per prompt, so two measurements of the same prompts can be compared prompt b
 import json
 import math
 import re
+import statistics
 import time
 from collections.abc import Callable
 from dataclasses import asdict, dataclass
 from pathlib import Path
 from typing import Any
 
+import numpy as np
+
 from . import export, heretic, kl
 from .edit import FULL_RANK
 from .engine import LlamaServer, Thinking
 from .judge import Guard, is_refusal, judged_refusal, read_verdict
 from .kernel import Kernel
-from .run import ANSWERING, HELD_OUT, Run, RunError, answering, digest, load_prompts, seeds, sync
+from .run import (
+    ANSWERING,
+    HELD_OUT,
+    Run,
+    RunError,
+    answering,
+    digest,
+    load_prompts,
+    read_record,
+    record_of,
+    seeds,
+    sync,
+)
 from .targets import Writer
 
 SETS = ("harmful_held_out", "harmless_held_out", "maths")
@@ -35,6 +50,8 @@ SHORT_LABELS = {"harmful_held_out": "Harmful", "harmless_held_out": "Harmless", 
 # How the judge's replies become labels. Bump it in any commit that changes that, so saved labels are
 # judged again (the answers aren't).
 COUNTING = 2
+# The normal quantile a two-sided 95% interval reaches.
+Z95 = statistics.NormalDist().inv_cdf(0.975)
 # "Answer: $1,234.50" and the like; failing that, an answer's last number is taken as its answer.
 STATED = re.compile(r"answer\W*?\$?\s*(-?\d[\d,]*(?:\.\d+)?)", re.IGNORECASE)
 NUMBER = re.compile(r"-?\d[\d,]*(?:\.\d+)?")
@@ -143,6 +160,33 @@ def is_correct(answer: str, gold: float, finished: bool = True) -> bool:
     return value is not None and math.isclose(value, gold, rel_tol=0, abs_tol=1e-6)
 
 
+def change_interval(only_a: int, only_b: int, pairs: int) -> tuple[float, float]:
+    """A 95% interval for how many more of pairs paired prompts B says yes to than A, from how many only
+    A and only B say yes to: Bonett and Price's adjusted Wald interval, which keeps a width when none
+    differ."""
+    a, b = (only_a + 1) / (pairs + 2), (only_b + 1) / (pairs + 2)
+    half = Z95 * math.sqrt((a + b - (b - a) ** 2) / (pairs + 2))
+    return max(b - a - half, -1) * pairs, min(b - a + half, 1) * pairs
+
+
+def mean_interval(values: list[float], draws: int = 2000) -> tuple[float, float] | None:
+    """A 95% interval for the mean of values over the prompts they were read on, within their range: a
+    studentised bootstrap, drawn the same way every time, which holds better than plain percentiles
+    where a few prompts carry much of the mean, as with KL. None for fewer than 3 values."""
+    found = np.asarray(values)
+    if len(found) < 3:
+        return None
+    mean, error = found.mean(), found.std(ddof=1) / math.sqrt(len(found))
+    if error == 0:
+        return float(mean), float(mean)
+    drawn = found[np.random.default_rng(0).integers(0, len(found), (draws, len(found)))]
+    errors = drawn.std(axis=1, ddof=1) / math.sqrt(len(found))
+    # A draw of one value over and over has no spread to scale by.
+    spread = errors > 0
+    low, high = np.percentile((drawn.mean(axis=1)[spread] - mean) / errors[spread], [2.5, 97.5])
+    return float(max(mean - high * error, found.min())), float(min(mean - low * error, found.max()))
+
+
 def mcnemar(only_a: int, only_b: int) -> float:
     """The exact two-sided McNemar p-value: how likely a split this uneven of the prompts on which two
     measurements differ would be if neither were really better."""
@@ -228,6 +272,11 @@ class Measurement:
                     todo.append((name, inputs))
                 else:
                     answered[name] = reused
+            # A stopped measurement then leaves these sets missing, never another edit's answers or
+            # labels beside its own.
+            for name, _ in todo:
+                run.discard(self.folder / f"{name}.json")
+                run.discard(self.folder / f"{name}.judged.json")
             if todo:
                 thinking_room = run.thinking_room()
                 room = max(
@@ -479,9 +528,9 @@ def summary(results: dict[str, dict[str, Any]]) -> list[tuple[str, str]]:
     for name in SETS:
         result = results[name]
         if "thinking" in result:
-            thought = sorted(result["thinking"])
-            middle = thought[len(thought) // 2]
-            rows.append((f"{SHORT_LABELS[name]}, thinking tokens", f"median {middle}, most {thought[-1]}"))
+            thought = result["thinking"]
+            middle = statistics.median(thought)
+            rows.append((f"{SHORT_LABELS[name]}, thinking tokens", f"median {middle:g}, most {max(thought)}"))
     for name in SETS:
         result = results[name]
         written = sum(result["tokens"]) + sum(result.get("thinking", []))
@@ -490,12 +539,11 @@ def summary(results: dict[str, dict[str, Any]]) -> list[tuple[str, str]]:
     return rows
 
 
-def _kl(a: list[list[list[float]]], b: list[list[list[float]]]) -> float:
-    """The mean KL divergence of b's first tokens from a's, as a measurement saves them."""
-    divergences = [
+def _kl(a: list[list[list[float]]], b: list[list[list[float]]]) -> list[float]:
+    """The KL divergence of b's first tokens from a's at each prompt, as a measurement saves them."""
+    return [
         kl.from_top({int(t): p for t, p in x}, {int(t): p for t, p in y}) for x, y in zip(a, b, strict=True)
     ]
-    return sum(divergences) / len(divergences)
 
 
 def seconds(result: dict[str, Any]) -> float:
@@ -513,14 +561,21 @@ def load(run: Run, name: str) -> dict[str, dict[str, Any]]:
         )
     results = {s: json.loads((folder / f"{s}.json").read_text()) for s in SETS}
     for s in HELD_OUT:
-        results[s] |= json.loads((folder / f"{s}.judged.json").read_text())
+        judged = folder / f"{s}.judged.json"
+        record = read_record(record_of(judged)) or {}
+        if record.get("answers") != results[s]["answers"] or record.get("counting") != COUNTING:
+            raise RunError(
+                f"the measurement {name}'s labels for the {LABELS[s]} aren't of its answers as candor "
+                "counts them now; run candor measure to finish it"
+            )
+        results[s] |= json.loads(judged.read_text())
     return results
 
 
 def compare(a: dict[str, dict[str, Any]], b: dict[str, dict[str, Any]]) -> list[tuple[str, ...]]:
     """Two measurements of the same prompts, prompt by prompt: each count for both, the change, how
-    many prompts went each way, and the McNemar p-value of that split; then the KL divergence of b's
-    first tokens from a's."""
+    many prompts went each way, the McNemar p-value of that split and a 95% interval for the change;
+    then the KL divergence of b's first tokens from a's, with a 95% interval for it."""
     for name in SETS:
         if a[name]["paired"] != b[name]["paired"]:
             raise RunError(
@@ -539,25 +594,35 @@ def compare(a: dict[str, dict[str, Any]], b: dict[str, dict[str, Any]]) -> list[
         a_yes, b_yes = sum(x for x, _ in pairs), sum(y for _, y in pairs)
         only_a = sum(x and not y for x, y in pairs)
         only_b = sum(y and not x for x, y in pairs)
+        low, high = change_interval(only_a, only_b, len(pairs))
         rows.append(
             (
                 label,
                 f"{a_yes}/{len(pairs)}",
                 f"{b_yes}/{len(pairs)}",
                 f"{b_yes - a_yes:+d}",
+                f"{round(low):+d}, {round(high):+d}",
                 f"{only_a} / {only_b}",
-                f"{mcnemar(only_a, only_b):.3g}",
+                f"{mcnemar(only_a, only_b):.2g}",
             )
         )
     harmless_a, harmless_b = a["harmless_held_out"], b["harmless_held_out"]
-    rows.append(
-        ("Harmless KL from A", "", f"{_kl(harmless_a['first_token'], harmless_b['first_token']):.4f}")
-    )
-    for key, where in (("first_token_empty", "empty thinking"), ("first_token_thinking", "thinking start")):
-        if key in harmless_a and key in harmless_b:
-            rows.append((f"Harmless KL from A, {where}", "", f"{_kl(harmless_a[key], harmless_b[key]):.4f}"))
-    rows = [(*row, *[""] * (6 - len(row))) for row in rows]
-    seed_a, seed_b = a["maths"].get("seed"), b["maths"].get("seed")
-    if seed_a != seed_b:
-        rows.append(("Sampling seed", str(seed_a), str(seed_b), "", "", ""))
+    places = [("first_token", "Harmless KL from A")]
+    places += [
+        (key, f"Harmless KL from A, {where}")
+        for key, where in (
+            ("first_token_empty", "empty thinking"),
+            ("first_token_thinking", "thinking start"),
+        )
+        if key in harmless_a and key in harmless_b
+    ]
+    for key, label in places:
+        divergences = _kl(harmless_a[key], harmless_b[key])
+        interval = mean_interval(divergences)
+        shown = f"{interval[0]:.3f}, {interval[1]:.3f}" if interval else ""
+        rows.append((label, "", f"{statistics.fmean(divergences):.4f}", "", shown))
+    rows = [(*row, *[""] * (7 - len(row))) for row in rows]
+    for label, key in (("Sampling seed", "seed"), ("Slots", "slots")):
+        if a["maths"].get(key) != b["maths"].get(key):
+            rows.append((label, str(a["maths"].get(key)), str(b["maths"].get(key)), "", "", "", ""))
     return rows

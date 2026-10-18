@@ -220,8 +220,8 @@ these hold:
    170 isn't (p 0.87).
 4. Held-out harmless prompts refused, by the judge: no more than the unedited model's 7 of 300.
 
-Measurement noise is too small to matter here (0 flips on 588 held-out prompts and KL 0.0000 between
-8 and 16 slots), so counts are compared as they are, strictly: no trading refusals for KL. Step 6
+Measurement noise is too small to matter here (no held-out label flipped and KL 0.0000 between 8
+and 16 slots), so counts are compared as they are, strictly: no trading refusals for KL. Step 6
 then repeats this on the exact file shipped, and adds running it in llama-server and the blind A/B.
 
 Also decided: the search counts each trial's refusals with the judge, not keywords (keywords
@@ -247,7 +247,7 @@ From the 2026-10-10 paper review, corrected after the full review read each pape
 | --- | --- | --- |
 | Matching targets by name silently misses most of the effect on mixture-of-experts models (2609.09793) | `inspect` lists every per-layer tensor that outputs the hidden size and fails on any it can't place or any layer without a writer | Phase 1, done |
 | Keyword judges count compliant answers with safety words as refusals (2512.13655: 72.2% vs 95.7% non-refusal on 900 abliterated answers) | Qwen3Guard-Gen-0.6B on the final answer, with its false-refusal rate measured (the vendor's refusal precision is 83-89%, 2510.14276; calibrate any judge, 2606.25487); keyword counts kept beside it | Phase 2 step 4 |
-| One count on 100 prompts can't separate close models (2609.25173 for unpaired sampled runs; heretic's transformers scoring varied by 1-2 refusals with batch size). Measured in llama-server on rude-llama: 0 of 588 held-out answers and 5 of 1,319 maths answers changed between 8 and 16 slots, KL 0.0000 | Measure the noise floor; compare paired on a held-out set; scoring is greedy, so seeds matter only for sampled checks | Phase 2 step 4 |
+| One count on 100 prompts can't separate close models (2609.25173 for unpaired sampled runs; heretic's transformers scoring varied by 1-2 refusals with batch size). Measured in llama-server on rude-llama between 8 and 16 slots: no held-out label and 5 of 1,319 maths results changed, KL 0.0000 (`phase-2-rude-llama.md`) | Measure the noise floor; compare paired on a held-out set; scoring is greedy, so seeds matter only for sampled checks | Phase 2 step 4 |
 | First-token KL misses lost ability (2512.13655: -4.5pp GSM8K at KL 0.043) | The full GSM8K test set, paired against the same quantised file; multiple-choice flips only as a warning (2407.09141) | Phase 2 step 4 |
 | Re-quantising after an edit can bring refusals back (2609.09793) | The last check runs on the exact file you ship, with your KV cache type (2606.09864; already used for all scoring). On rude-llama, whose weights were 4-bit before, Q4_K kept only 55-98% of each edited weight's change and refusals went from 5 to 161 of 288, so `export` measures every edited weight's kept share and quantises lossy ones as Q8_0 | Phase 2 step 6, done |
 | Thinking mode changes refusals (2509.00544). Whether to read a direction at the think start or the think close is split: refuse-or-comply is predictable at the first thinking token (2606.25013: AUROC 0.84-0.95, rarely changing after 20% of the thinking), 2510.06036 finds a refusal cliff at the think close but little in Qwen3-Thinking, and our K2 directions at the two places had a cosine of 0.2-0.5. (2609.18471, cited here before, never looks at the think close.) | Score in the mode and at the level(s) you run, with answers long enough to finish thinking, judged on the final answer with unfinished answers counted against the edit (2609.09793). Directions read at both places, the search choosing per trial | Phases 3-4; phase 3 step 3 |
@@ -505,8 +505,8 @@ Run by the user on the Mac, about 30 minutes per measurement. Counts only.
   Trial 170 by keywords, and candor's search scores by keywords too.
 - The judge called 7 of the unedited model's harmless answers refusals and 2 of Trial 170's, so its
   false alarms are at most about 2%.
-- Noise floor (unedited at 8 and 16 slots): identical on every held-out answer, KL 0.0000; 5 maths
-  answers changed (3 / 2), and 2 more were cut off.
+- Noise floor (unedited at 8 and 16 slots): every held-out label the same, KL 0.0000; 5 maths results
+  changed (3 / 2), and 2 more were cut off.
 - The `--limit` estimate overshot (59 minutes against about 25): ten prompts can't keep 8 slots busy.
 
 ### Full review (2026-10-10)
@@ -617,7 +617,7 @@ template check was removed at the user's request: models run only in llama-serve
 ### Phase 4, step 2: the timed pilot (2026-10-16)
 
 On one A40 (about $1.60), the K2 run built in 40 minutes and ran end to end. K2 thinks far less
-than Qwen3.5-9B at high effort (unedited median harmful thinking 225 tokens against 996), so a full
+than Qwen3.5-9B at high effort (unedited median harmful thinking 224 tokens against 996), so a full
 measurement is at most about 1.5 h unedited and 4 h for an edit that complies in part. Avicennasis's
 heretic edit refused 48 of 64 held-out harmful prompts as used, against 7/50 on its card: thinking
 brings refusals back, as on Qwen. Four search trials as used took about 210 s each at 16 slots, so
@@ -828,3 +828,29 @@ release's card template: the measured export with `general.name` set and `genera
 snapshot hash) dropped, all 327 tensors byte-identical, loaded in llama-server b11524. The card was
 reviewed against the measurements twice; the review found the "full" edit is rank 3, so the Qwen
 card's "rank-1" is wrong. K2's original weights were then deleted from the Mac.
+
+### The repository reviewed in full; steps 1 and 2 of its fixes (the user, 2026-10-18)
+
+The user asked for a full review before the next big task: everything watertight, accurate and
+efficient. 97 agents, read-only and numbers only, confirmed 161 findings, merged into 24 work
+packages and 11 method questions (`evidence-2026-10-18/repo-review.md`); nothing shows a shipped
+result wrong. The user agreed the order: faster tests first, then wrong results, then 27B cost and
+safety, then one measurements change before any 27B reference, then the rest; method questions go
+to the phase-end discussion. Each step is reviewed independently and its findings fixed with tests
+that fail without them.
+
+Step 1: one llama-server launch for measuring and `serve`, ready checks every 0.05 s, the GPU listed
+once a process and every server told the GPUs by name, so one restarted after a GPU fails refuses
+to run on the CPU; `pytest -n 6` takes the suite from about 13 minutes to about 70 s.
+
+Step 2: `inspect` now fails a model whose template turns thinking off but whose prompts don't open
+it (Qwen3, SmolLM3, GLM-4.5), and finds Qwen3.8-27B's close, which it had missed: that model was
+taken for one that doesn't think, so `candor run` would have stopped on it. Qwen3.8's thinking-off
+prompt also drops a system message at every effort but medium, so candor refuses to score it
+thinking off there (findings). Measurements discard a set's old files before answering it again, and
+`load` refuses labels counted for other answers or under another count; `compare` shows each
+change's 95% interval and the slots, and medians are now true medians (the docs' even-set medians
+moved by up to 20.5 tokens and are corrected; the released cards quote 948, 1,648 and 2,980, which wait
+for the user). `findings.md` was corrected where the review found its numbers wrong or overreaching.
+Both reviews passed after their points were fixed: 801 tests pass.
+

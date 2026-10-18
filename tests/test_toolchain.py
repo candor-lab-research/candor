@@ -150,6 +150,7 @@ def listing_devices(stdout: str, stderr: str) -> str:
 def test_a_cuda_build_must_list_a_cuda_device(release, monkeypatch, stdout, stderr, refused):
     add, _, _ = release
     monkeypatch.setattr(toolchain, "this_platform", lambda: "linux-cuda")
+    monkeypatch.setattr(toolchain, "on_cuda", lambda: True)
     server = listing_devices(stdout, stderr)
     archive = add("cuda.tar.gz", {"llama-b0/llama-server": server, "llama-b0/llama-quantize": "#!/bin/sh\n"})
     monkeypatch.setitem(toolchain.ASSETS, "linux-cuda", [archive])
@@ -158,6 +159,35 @@ def test_a_cuda_build_must_list_a_cuda_device(release, monkeypatch, stdout, stde
     else:
         with pytest.raises(ToolchainError, match=f"can't see the GPU.*{refused}"):
             toolchain.binaries()
+
+
+def test_the_gpus_are_listed_once_and_named_to_every_server(release, monkeypatch, tmp_path):
+    add, _, _ = release
+    monkeypatch.setattr(toolchain, "this_platform", lambda: "linux-cuda")
+    monkeypatch.setattr(toolchain, "on_cuda", lambda: True)
+    listed = tmp_path / "listed"
+    gpus = (
+        "  CUDA0: NVIDIA A40 (45498 MiB, 45229 MiB free)\\n  CUDA1: NVIDIA A40 (45498 MiB, 45229 MiB free)\\n"
+    )
+    server = listing_devices(gpus, "").replace("then printf", f"then echo >> '{listed}'; printf")
+    archive = add("cuda.tar.gz", {"llama-b0/llama-server": server, "llama-b0/llama-quantize": "#!/bin/sh\n"})
+    monkeypatch.setitem(toolchain.ASSETS, "linux-cuda", [archive])
+    for _ in range(3):
+        folder = toolchain.binaries()
+    # Listing them starts CUDA; a server started after a GPU fails refuses its --device instead.
+    assert toolchain.device_flags(folder) == ["--device", "CUDA0,CUDA1"]
+    assert listed.read_text() == "\n"
+
+
+def test_an_override_on_linux_must_see_the_gpu_too(tmp_path, monkeypatch):
+    monkeypatch.setattr(toolchain, "on_cuda", lambda: True)
+    server = tmp_path / "llama-server"
+    server.write_text(listing_devices("Available devices:\\n", ""))
+    server.chmod(0o755)
+    (tmp_path / "llama-quantize").touch()
+    monkeypatch.setenv("CANDOR_LLAMA_BIN", str(tmp_path))
+    with pytest.raises(ToolchainError, match="can't see the GPU"):
+        toolchain.binaries()
 
 
 @pytest.fixture

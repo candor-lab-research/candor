@@ -27,6 +27,7 @@ from .tiny_gguf import END_THINK
 from .tiny_run import (
     ALWAYS_THINKING_TEMPLATE,
     ANSWERED,
+    MESSAGE_WHEN_THINKING_TEMPLATE,
     REFUSED,
     FakeGuard,
     fake_prompts,
@@ -152,12 +153,21 @@ def test_a_trial_stopped_part_way_is_marked_failed_and_the_search_carries_on(tin
 
 
 @pytest.mark.parametrize(("change", "named"), CHANGES)
-def test_a_search_isnt_carried_on_after_anything_its_scores_depend_on_changes(
+def test_a_search_isnt_carried_on_or_scored_beside_once_anything_its_scores_depend_on_changes(
     tiny, monkeypatch, change, named
 ):
     small(tiny)
     Search(tiny).search(1)
+    records = {p: p.read_bytes() for p in tiny.path("adapters").glob("*.inputs.json")}
     change(tiny.settings, monkeypatch)
+    edits = [Edit("each", None, KERNELS)]
+    if named == "Optuna":
+        # Scoring an edit asks Optuna for nothing.
+        assert len(Search(tiny).score(edits).edits) == 1
+    else:
+        with pytest.raises(RunError, match=f"the search was made with different {named} from this run's now"):
+            Search(tiny).score(edits)
+        assert {p: p.read_bytes() for p in tiny.path("adapters").glob("*.inputs.json")} == records
     with pytest.raises(RunError, match=f"holds a search made with a different {named}; move it aside"):
         Search(tiny).search(2)
 
@@ -813,26 +823,6 @@ def test_scoring_without_a_search_starts_none(tiny):
     scored = Search(tiny).score([Edit("each", None, KERNELS)])
     assert len(scored.edits) == 1
     assert not tiny.path("search").exists()
-
-
-@pytest.mark.parametrize(
-    ("change", "named"), [(change, named) for change, named in CHANGES if named != "Optuna"]
-)
-def test_an_edit_isnt_scored_beside_a_search_made_from_other_inputs(tiny, monkeypatch, change, named):
-    small(tiny)
-    Search(tiny).search(1)
-    records = {p: p.read_bytes() for p in tiny.path("adapters").glob("*.inputs.json")}
-    change(tiny.settings, monkeypatch)
-    with pytest.raises(RunError, match=f"the search was made with different {named} from this run's now"):
-        Search(tiny).score([Edit("each", None, KERNELS)])
-    assert {p: p.read_bytes() for p in tiny.path("adapters").glob("*.inputs.json")} == records
-
-
-def test_another_optuna_doesnt_stop_scoring(tiny, monkeypatch):
-    small(tiny)
-    Search(tiny).search(1)
-    monkeypatch.setattr(optuna, "__version__", "9.9.9")
-    assert len(Search(tiny).score([Edit("each", None, KERNELS)]).edits) == 1
 
 
 def test_a_search_without_its_record_isnt_set_beside_anything(tiny):
@@ -1927,6 +1917,17 @@ def test_a_model_whose_template_cant_turn_thinking_off_is_scored_thinking_and_ne
     tiny.settings.scoring.thinking = "on"
     Search(tiny).search(2)
     assert sum(search._score(trial).thinking for trial in finished(tiny)) > 0
+
+
+def test_a_model_whose_template_changes_more_than_the_close_is_never_scored_with_thinking_off(
+    tiny, monkeypatch
+):
+    thinks_through(monkeypatch)
+    small(thinking(tiny, budget=8, template=MESSAGE_WHEN_THINKING_TEMPLATE))
+    tiny.settings.scoring.thinking = "off"
+    with pytest.raises(RunError, match="changes more than the end of a prompt when it turns thinking off"):
+        Search(tiny).search(2)
+    assert not tiny.path("search").exists()
 
 
 def test_a_search_already_scored_with_thinking_off_starts_no_server_to_check_it(tiny, monkeypatch):

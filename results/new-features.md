@@ -58,9 +58,7 @@ to check first. All are [Published] on other models and a [Hypothesis] for cando
    Would have warned that 100 prompts couldn't separate the finalists. Replay steps 6-7's verdicts.
 2. **Score the search on the prompts that tell edits apart** (item response theory: 2606.20626,
    2608.05086): the full ranking kept (Spearman above 0.90) at 80% or more less cost. Replay.
-3. **Start the longest prompts first** (Seer 2511.14617): 4-10% more throughput, tail cut 89%. Aims
-   at step 7's idle slots (busy 77-88%). Works with llama-server today; simulate from step 7's
-   lengths.
+3. Longest prompts first (Seer 2511.14617) [Dropped 2026-10-16: 3-17% of a trial's time only with lengths known in advance, none on maths]
 4. **Check the judge** (2608.03201, 2606.25487): refusal wording makes guard models, Qwen3Guard
    named, call a harmful answer safe. Re-judge stored answers with a larger Qwen3Guard, counts only.
 5. **Planned thinking length is stored at the think start** (2506.08390): if candor's direction

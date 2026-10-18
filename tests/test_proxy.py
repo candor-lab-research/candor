@@ -58,7 +58,7 @@ def test_the_edits_are_each_kind_and_places_best_of_a_thinking_off_search(tiny, 
             )
 
 
-def test_the_trials_named_are_checked_once_each_in_the_order_given(tiny, monkeypatch):
+def test_the_trials_named_are_checked_once_each_in_order_and_must_be_scored_in_full(tiny, monkeypatch):
     searched_thinking_off(tiny, monkeypatch)
     found = search.load(tiny)
     assert found is not None
@@ -68,15 +68,8 @@ def test_the_trials_named_are_checked_once_each_in_the_order_given(tiny, monkeyp
     assert [edit.name for edit in edits] == ["edit-1", "edit-2", "edit-3", "edit-4"]
     _, layers, _, _ = tiny.shape
     assert edits[0].kernels == search.edit_from(found.trials[last].params, last, layers).kernels
-
-
-def test_a_trial_named_must_be_one_the_search_scored_in_full(tiny, monkeypatch):
-    searched_thinking_off(tiny, monkeypatch)
-    found = search.load(tiny)
-    assert found is not None
-    full = [c.trial for c in search.scored_in_full(found)]
     with pytest.raises(RunError, match=r"scored in full: 9999$"):
-        proxy.edits(tiny, [full[0], 9999])
+        proxy.edits(tiny, [first, 9999])
 
 
 def test_proxy_passes_the_trials_named_to_the_check(tiny, monkeypatch):

@@ -2,6 +2,8 @@ import pytest
 import torch
 from transformers import LlamaConfig, LlamaForCausalLM
 
+from candor import toolchain
+
 from .tiny_run import tiny_run
 
 
@@ -29,3 +31,9 @@ def tiny(tmp_path, monkeypatch):
 def no_tools_from_the_shell(monkeypatch):
     """A CANDOR_MCP set where the tests run would give every serve tools."""
     monkeypatch.delenv("CANDOR_MCP", raising=False)
+
+
+@pytest.fixture(autouse=True)
+def not_on_cuda(monkeypatch):
+    """Tests run llama-server as on the Mac, where it names no GPU, wherever they run."""
+    monkeypatch.setattr(toolchain, "on_cuda", lambda: False)

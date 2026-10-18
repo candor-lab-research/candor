@@ -29,6 +29,7 @@ candor = "candor.cli:app"
 dev = [
     "pyright>=1.1.414",
     "pytest>=9",
+    "pytest-xdist>=3.8.0",
     "ruff>=0.17",
 ]
 
@@ -62,3 +63,5 @@ typeCheckingMode = "basic"
 
 [tool.pytest.ini_options]
 testpaths = ["tests"]
+# Above the slowest test (an e2e one, about 220 s): a test that hangs shows every thread's stack.
+faulthandler_timeout = 300

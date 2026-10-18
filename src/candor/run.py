@@ -57,6 +57,9 @@ ANSWER_SETS = "answer-"
 RANDOM_SEED = 2**32 - 1
 DATE_PROBE = "31 Dec 1999"
 CHECKED_PER_SET = 3
+# The slot of the server that tokenizes the prompts, which also checks a few of them against the chat
+# endpoint when they fit.
+TOKENIZING_SLOT = 2048
 # The version of each stage's code, in stage order. Bump a stage's number in any commit that changes
 # the results it builds. Each record holds the numbers of its own stage and every stage before it, so
 # results built by older code are rebuilt along with everything after them. scores holds the adapters
@@ -100,7 +103,7 @@ def _remove(path: Path) -> None:
         path.unlink(missing_ok=True)
 
 
-def _read_record(record: Path) -> Any:
+def read_record(record: Path) -> Any:
     try:
         return json.loads(record.read_text())
     except (OSError, UnicodeDecodeError, json.JSONDecodeError):
@@ -252,7 +255,7 @@ class Run:
     def current(self, output: Path, inputs: dict[str, Any]) -> bool:
         """Whether output exists and was built from exactly these inputs, by this version of candor."""
         expected = json.loads(json.dumps(self._with_code(output, inputs)))
-        return output.exists() and _read_record(record_of(output)) == expected
+        return output.exists() and read_record(record_of(output)) == expected
 
     def fresh(self, output: Path, inputs: dict[str, Any]) -> bool:
         """Whether output is current, saying why it will be rebuilt when it isn't."""
@@ -263,6 +266,11 @@ class Run:
             why = "what it was built from has changed" if output.exists() else "it is missing"
             self.report(f"Rebuilding {output.relative_to(self.folder)}: {why}")
         return False
+
+    def discard(self, output: Path) -> None:
+        """Remove output and its record, the record first."""
+        record_of(output).unlink(missing_ok=True)
+        _remove(output)
 
     def commit(self, partial: Path, output: Path, inputs: dict[str, Any]) -> None:
         """Replace output with the finished partial and record what it was built from. The output is
@@ -464,14 +472,15 @@ class Run:
         parallel: int = 4,
         slots_setting: str | None = None,
     ) -> LlamaServer:
-        extra = self.cache_flags()
+        binaries = toolchain.binaries()
+        extra = self.cache_flags() + toolchain.device_flags(binaries)
         if self.settings.sampling.temperature > 0:
             # Sampling on the GPU, which a request falls back from where it can't, such as when it
             # asks for first-token probabilities: the same samplers, many times faster for a large
             # vocabulary.
             extra.append("--backend-sampling")
         self.path("logs").mkdir(exist_ok=True)
-        binary = toolchain.binaries() / "llama-server"
+        binary = binaries / "llama-server"
         log = self.path("logs", "server.log")
         return LlamaServer(
             binary, model, log, adapters, parallel, context_per_slot, extra=extra, slots_setting=slots_setting
@@ -537,6 +546,13 @@ class Run:
                 "this model's chat template can't turn its thinking off, so the model is never used "
                 "answering after an empty thinking block and a score with thinking off would measure a way "
                 'no one runs it: keep scoring.thinking = "on"'
+            )
+        if not off.startswith(on):
+            raise RunError(
+                "this model's chat template changes more than the end of a prompt when it turns thinking "
+                "off at these settings, as Qwen3.8's leaves out the system message of every reasoning "
+                "effort but medium, so answers after an empty thinking block wouldn't be the model with "
+                'its thinking off: keep scoring.thinking = "on"'
             )
         if off != on + (self.settings.deployment.think_close or ""):
             raise RunError(
@@ -667,6 +683,16 @@ class Run:
             "maths": settings.measure.maths_answer_tokens,
         }
 
+    def _check_chat_ids(
+        self, server: LlamaServer, ids: dict[str, list[list[int]]], texts: dict[str, list[str]]
+    ) -> None:
+        """That the ids of a few prompts from each set are as long as the chat endpoint's own."""
+        for name in PROMPT_SETS:
+            chats = self.chats(texts[name][:CHECKED_PER_SET])
+            expected = [server.chat_prompt_length(chat, self.template_kwargs()) for chat in chats]
+            if [len(i) for i in ids[name][:CHECKED_PER_SET]] != expected:
+                raise RunError(f"llama-server's ids for the {name} prompts don't match its chat endpoint")
+
     def _check_lengths(self, ids: dict[str, list[list[int]]]) -> None:
         """Prompts the model answers must fit with whole thinking and a whole answer; the rest need room
         for one token."""
@@ -732,7 +758,7 @@ class Run:
         )
         self.report("Tokenizing prompts with llama-server")
         kwargs = self.template_kwargs()
-        with self.server(quantized, context_per_slot=2048, parallel=2) as server:
+        with self.server(quantized, context_per_slot=TOKENIZING_SLOT, parallel=2) as server:
             if settings.model.date:
                 rendered = server.apply_template(self.chats(["x"])[0], self.template_kwargs(DATE_PROBE))
                 if DATE_PROBE not in rendered:
@@ -746,17 +772,13 @@ class Run:
             if close:
                 for name in CLOSED_SETS:
                     ids[name + ANSWERING] = server.chat_ids(self.chats(texts[name]), kwargs, close)
-        self._check_lengths(ids)
-        sampled = {name: ids[name][:CHECKED_PER_SET] for name in PROMPT_SETS}
-        slot = max(len(p) for prompts in sampled.values() for p in prompts) + 16
-        with self.server(quantized, context_per_slot=slot, parallel=1) as server:
-            for name in PROMPT_SETS:
-                expected = [
-                    server.chat_prompt_length(chat, kwargs)
-                    for chat in self.chats(texts[name][:CHECKED_PER_SET])
-                ]
-                if [len(i) for i in sampled[name]] != expected:
-                    raise RunError(f"llama-server's ids for the {name} prompts don't match its chat endpoint")
+            self._check_lengths(ids)
+            slot = max(len(p) for name in PROMPT_SETS for p in ids[name][:CHECKED_PER_SET]) + 16
+            if slot <= TOKENIZING_SLOT:
+                self._check_chat_ids(server, ids, texts)
+        if slot > TOKENIZING_SLOT:
+            with self.server(quantized, context_per_slot=slot, parallel=1) as server:
+                self._check_chat_ids(server, ids, texts)
         partial = path.with_name("prompts.json.building")
         partial.write_text(json.dumps(ids))
         self.commit(partial, path, inputs)

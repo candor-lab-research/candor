@@ -1,6 +1,8 @@
 import io
 import json
+import shutil
 
+import numpy as np
 import pytest
 from rich.console import Console
 from typer.testing import CliRunner
@@ -95,6 +97,9 @@ def test_a_new_way_of_counting_labels_judges_again_without_answering_again(tiny,
     Measurement(tiny, None, "base").measure()
     answered = counting_answers(monkeypatch)
     monkeypatch.setattr(measure, "COUNTING", measure.COUNTING + 1)
+    # Labels counted the old way are never compared with ones counted the new way.
+    with pytest.raises(RunError, match="aren't of its answers as candor counts them now"):
+        measure.load(tiny, "base")
     FakeGuard.judged = []
     messages = []
     tiny.report = messages.append
@@ -105,6 +110,67 @@ def test_a_new_way_of_counting_labels_judges_again_without_answering_again(tiny,
         "Rebuilding measurements/base/harmful_held_out.judged.json: what it was built from has changed",
         "Rebuilding measurements/base/harmless_held_out.judged.json: what it was built from has changed",
     ]
+    assert measure.load(tiny, "base")
+
+
+def test_a_measurement_stopped_part_way_never_shows_another_edits_answers_or_labels(tiny, monkeypatch):
+    Measurement(tiny, None, "finalist").measure()
+
+    def stopped(*args):
+        raise KeyboardInterrupt
+
+    monkeypatch.setattr(measure, "Guard", stopped)
+    with pytest.raises(KeyboardInterrupt):
+        Measurement(tiny, EDIT, "finalist").measure()
+    with pytest.raises(
+        RunError, match=r"missing harmful_held_out\.judged\.json, harmless_held_out\.judged\.json"
+    ):
+        measure.load(tiny, "finalist")
+    real = LlamaServer.generate
+    calls = []
+
+    def stopping(self, *args, **kwargs):
+        calls.append(1)
+        if len(calls) == 2:
+            raise KeyboardInterrupt
+        return real(self, *args, **kwargs)
+
+    monkeypatch.setattr(LlamaServer, "generate", stopping)
+    other = Edit("other", EDIT.direction_layer, {"attn": Kernel(0.9, 1.0, 0.8, 1.0)})
+    with pytest.raises(KeyboardInterrupt):
+        Measurement(tiny, other, "finalist").measure()
+    with pytest.raises(RunError, match=r"missing harmless_held_out\.json, maths\.json"):
+        measure.load(tiny, "finalist")
+
+
+def test_labels_of_other_answers_are_refused(tiny):
+    Measurement(tiny, None, "base").measure()
+    Measurement(tiny, EDIT, "trial").measure()
+    for name in ("harmful_held_out.json", "harmful_held_out.json.inputs.json"):
+        shutil.copy(tiny.path("measurements", "trial", name), tiny.path("measurements", "base", name))
+    with pytest.raises(RunError, match="labels for the held-out harmful prompts aren't of its answers"):
+        measure.load(tiny, "base")
+
+
+def test_compare_leaves_out_prompts_either_judge_didnt_label_and_names_other_slots(tiny):
+    a = Measurement(tiny, None, "base").measure()
+    b = Measurement(tiny, None, "base-slots-2", slots=2).measure()
+    assert a["harmful_held_out"]["judge_refused"] == [True, False, False]
+    b["harmful_held_out"]["judge_refused"][0] = None
+    rows = {row[0]: row for row in measure.compare(a, b)}
+    assert (
+        rows["Harmful refused, judge"][1:4] == ("0/2", "0/2", "+0")
+        and rows["Harmful refused, judge"][5] == "0 / 0"
+    )
+    assert rows["Slots"][1:3] == (str(a["maths"]["slots"]), "2")
+    assert dict(measure.summary(b))["Harmful refused, judge"] == "0/2 (1 unlabelled)"
+    assert "Slots" not in {row[0] for row in measure.compare(a, a)}
+
+
+def test_the_median_thinking_of_an_even_count_is_halfway_between_the_middle_two(tiny):
+    results = Measurement(tiny, None, "base").measure()
+    results["maths"]["thinking"] = [10, 1, 3, 2]
+    assert dict(measure.summary(results))["Maths, thinking tokens"] == "median 2.5, most 10"
 
 
 def test_answers_survive_a_judge_that_fails_to_load(tiny, monkeypatch):
@@ -180,6 +246,19 @@ def test_measure_names_a_measurement_for_slots_other_than_8_from_the_settings_or
         assert f"candor measure: {name}" in measured.output
 
 
+def test_a_name_candor_gives_another_measurement_is_refused(tiny):
+    config.write(tiny.folder.parent, "cli", tiny.settings, "made by a test")
+    folder = tiny.folder.parent / "cli"
+    runner = CliRunner(env={"COLUMNS": "250"})
+    for taken in ("base", "trial-3", "heretic-2-exported"):
+        measured = runner.invoke(app, ["measure", str(folder), "--limit", "1", "--name", taken])
+        assert measured.exit_code == 1 and "it could replace one; choose another" in measured.output
+    assert not (folder / "measurements").exists()
+    for name in ("base-first-1", "regress-before"):
+        measured = runner.invoke(app, ["measure", str(folder), "--limit", "1", "--name", name])
+        assert measured.exit_code == 0, measured.output
+
+
 def test_prompts_that_changed_since_prompts_json_stop_the_measurement(tiny, monkeypatch):
     tiny.prompt_ids()
 
@@ -207,6 +286,8 @@ def test_an_edit_gets_its_own_adapters_and_strengths_and_moves_the_first_tokens(
     }
     rows = measure.compare(base, edited)
     assert rows[-1][0] == "Harmless KL from A" and float(rows[-1][2]) > 0
+    low, high = map(float, rows[-1][4].split(", "))
+    assert low <= float(rows[-1][2]) <= high
     assert float(measure.compare(base, base)[-1][2]) == 0
 
 
@@ -269,6 +350,11 @@ def test_measure_and_compare_from_the_command_line_show_counts_only(tiny):
     compared = runner.invoke(app, ["compare", str(folder), "base-first-2", "base-first-2"])
     assert compared.exit_code == 0, compared.output
     assert "Harmless KL from A" in compared.output
+    # In an 80-column terminal every label still shows whole, wrapped rather than cut.
+    narrow = CliRunner(env={"COLUMNS": "80"}).invoke(
+        app, ["compare", str(folder), "base-first-2", "base-first-2"]
+    )
+    assert "Harmless" in narrow.output and "\u2026" not in narrow.output
     private = folder / "private" / "measurements" / "base-first-2"
     for name in measure.SETS:
         for answer in json.loads((private / f"{name}.json").read_text())["answers"]:
@@ -305,6 +391,41 @@ def test_gsm8k_answers_give_their_final_number():
     assert measure.gold_number("Work: 2 + 2 = 4\n#### 1,234") == 1234
     with pytest.raises(RunError, match="no '#### ' and number"):
         measure.gold_number("4")
+
+
+def test_a_change_has_an_interval_even_when_nothing_differs():
+    # K2 trial 205's maths against the unedited model's: 1,222 and 1,209 of 1,319 right.
+    assert measure.change_interval(62, 49, 1319) == (
+        pytest.approx(-33.8, abs=0.05),
+        pytest.approx(7.8, abs=0.05),
+    )
+    assert measure.change_interval(0, 0, 300) == (
+        pytest.approx(-2.75, abs=0.01),
+        pytest.approx(2.75, abs=0.01),
+    )
+    assert measure.change_interval(0, 20, 300)[0] > 0
+    assert measure.mean_interval([0.1] * 10) == (pytest.approx(0.1), pytest.approx(0.1))
+    # Too few to bootstrap, and never outside the values themselves.
+    assert measure.mean_interval([0.5]) is None and measure.mean_interval([0.0, 0.3]) is None
+    assert interval([0.0] * 98 + [0.01, 0.2])[0] >= 0
+    low, high = interval([0.0, 1.0] * 50)
+    assert 0.35 < low < 0.45 and 0.55 < high < 0.65 and interval([0.0, 1.0] * 50) == (low, high)
+
+
+def interval(values: list[float]) -> tuple[float, float]:
+    found = measure.mean_interval(values)
+    assert found is not None
+    return found
+
+
+def test_a_mean_carried_by_a_few_prompts_is_still_in_its_interval_most_of_the_time():
+    # Skewed as KL is: a plain percentile bootstrap held this mean only 82% of the time.
+    draws = np.random.default_rng(1)
+    held = []
+    for _ in range(400):
+        low, high = interval(list(draws.lognormal(0, 1.5, 100)))
+        held.append(low <= np.exp(1.5**2 / 2) <= high)
+    assert sum(held) / len(held) > 0.88
 
 
 def test_mcnemar_is_exact_and_symmetric():

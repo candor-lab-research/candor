@@ -20,7 +20,7 @@ from candor.run import Run, RunError
 from candor.toolchain import ToolchainError
 
 from .custom_code import write_custom_code_model
-from .test_checks import THINKING
+from .test_checks import MESSAGE_WHEN_THINKING, OPENS_ITS_OWN, THINKING
 from .test_targets import LLAMA_3B, QWEN35, llama
 from .tiny_run import ALWAYS_THINKING_TEMPLATE
 from .tiny_tokenizer import DATED, PINNABLE, WITH_BOS, tokenizer
@@ -209,9 +209,48 @@ def test_init_finds_a_thinking_models_close_and_gives_it_a_budget(tmp_path):
     assert "Set [sampling] to the thinking settings its model card recommends" in shown
     deployment = config.load(tmp_path / "runs" / "first").deployment
     assert deployment.think_close == "</think>\n\n" and deployment.thinking_budget == config.THINKING_BUDGET
+    (tmp_path / "message").mkdir()
+    assert (
+        init(
+            tmp_path, model_folder(tmp_path / "message", template=MESSAGE_WHEN_THINKING), "message"
+        ).exit_code
+        == 0
+    )
+    assert config.load(tmp_path / "runs" / "message").deployment.think_close == "</think>\n\n"
     (tmp_path / "plain").mkdir()
     plain = init(tmp_path, model_folder(tmp_path / "plain"), "plain")
     assert plain.exit_code == 0 and config.load(tmp_path / "runs" / "plain").deployment.think_close is None
+
+
+# A template that only keeps a model's past thinking out of the chat, so the model may write its own.
+DROPS_PAST_THINKING = (
+    "{{ bos_token }}{% for m in messages %}{{ m['content'].split('</think>')[-1] }}{% endfor %}"
+)
+
+
+@pytest.mark.parametrize(
+    ("template", "status", "shown"),
+    [
+        (OPENS_ITS_OWN, "fail", "its template turns thinking off, but its prompts don't open the"),
+        (DROPS_PAST_THINKING, "warn", "its template names a think tag, but its prompts neither open"),
+        # Qwen3.5's small models: prompts close an empty thinking block unless asked to think.
+        (
+            WITH_BOS + "<think>\n\n</think>\n\n",
+            "ok",
+            "answers without thinking, as far as its template shows",
+        ),
+    ],
+)
+def test_inspect_refuses_a_model_whose_thinking_it_cant_tell_from_its_answer(
+    tmp_path, template, status, shown
+):
+    result = CliRunner(env={"COLUMNS": "250"}).invoke(
+        app, ["inspect", str(model_folder(tmp_path, template=template))]
+    )
+    assert result.exit_code == (1 if status == "fail" else 0), result.output
+    assert f"Thinking │ {status} │ {shown}" in " ".join(result.output.split())
+    if status == "fail":
+        assert init(tmp_path, tmp_path / "model").exit_code == 1
 
 
 def test_init_runs_a_template_that_takes_a_reasoning_effort_at_its_own_and_closes_the_thinking_it_opens(
