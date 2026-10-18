@@ -159,6 +159,44 @@ minutes. Avicennasis's edit wasn't measured (the user: too weak a bar).
 - A whole measurement takes 41 minutes at these settings, against about 6 h for Qwen's unedited
   model; 28 slots of the search's sizing take 8,460 tokens each where the pilot's took 15,616.
 
+## Step 5: the search (2026-10-16 to 2026-10-18)
+
+On the same A40 after step 3: `candor search runs/k2`, strength 0.8-5.0 (widest 0.5-5.0), 28 slots,
+the user's sampling, budget 8192, at most 2 refused of 100, 300 trials a kind planned. From
+12:52 UTC 2026-10-16; stopped between trials after trial 137 to switch on
+`search.max_budget_hits = 8` (07:44-07:46 UTC 2026-10-17, history), then stopped by the user after
+trial 313 at 06:08 UTC 2026-10-18: 41 h 16 min, about $24.
+
+| Trials | Time | Mean a trial | Budget hits (a trial) | Over 8 | Stopped early |
+| --- | --- | --- | --- | --- | --- |
+| 1-137, no limit | 18.8 h | 495 s | 632 (4.6) | 20 | 13 |
+| 88-137 | 8.1 h | 584 s | 261 (5.2) | 10 | |
+| 138-313, limit 8 | 22.4 h | 458 s | 241 (1.4) | 7 | 107 |
+
+Within both caps (judged in full, at most 2 refused, at most 8 budget hits): one layer 15 of 157
+trials (24 over 8), per layer 54 of 156 (3 over 8). The best of each:
+
+| Trial | Kind | Refused /100 | KL | Budget hits | Settings |
+| --- | --- | --- | --- | --- | --- |
+| 207 | one layer | 0 | 0.0240 | 3 | layer 18, think start, attn 3.87, mlp 2.52 |
+| 205 | one layer | 2 | 0.0306 | 0 | layer 18, think start, attn 4.53, mlp 2.24 |
+| 265 | one layer | 1 | 0.0316 | 1 | layer 18, think start, attn 2.58, mlp 2.46 |
+| 203 | one layer | 2 | 0.0473 | 2 | |
+| 285 | one layer | 1 | 0.0475 | 2 | |
+| 114 | per layer | 2 | 0.0470 | 0 | think start, attn 4.57, mlp 3.08 |
+| 202 | per layer | 2 | 0.0489 | 1 | |
+| 112 | per layer | 1 | 0.0492 | 2 | |
+
+- One layer's best fell from KL 0.143 (trial 115) to 0.052 (151) and 0.024 (207), then held for
+  106 trials; per layer's held at trial 114 for 199. Every finalist reads the direction at the think
+  start, the one-layer ones from layer 18.
+- After the switch a trial took 22% less time (584 to 458 s) and hit the budget 1.4 times rather
+  than 5.2. Only 7 trials failed on the budget, so the saving comes mostly from the sampler drawing
+  fewer edits that think long (by K2's seconds model, 27 s a budget hit, about 100 s of the 126) and
+  from more trials stopped early (107 of 176 against 13 of 137). The simulator shows the same fall
+  in budget hits from steering.
+- Trials 207, 205, 265 and 114 are the finalists (history, 2026-10-18).
+
 ## Step 5: when to stop the search, replayed (2026-10-17)
 
 A stall stop (stop once both kinds' best KL within the cap gained under 10% in their last 50 own

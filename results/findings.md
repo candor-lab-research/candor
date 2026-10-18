@@ -173,8 +173,10 @@ entry is corrected rather than deleted when later evidence changes it.
   +1.1), even with failing edits beside the best, and saves 6-26% of K2's pod time in K2-like
   landscapes; but it helps some landscapes and costs others up to 6.5 points, beyond chance.
   So: on from trial 1 for a thinking model whose pilot shows budget hits common (K2: 15% of trials
-  over 8), off where they are rare and the saving small. Owed: its pace on K2 against the 17%
-  estimate; whether the fixed prompt order biases it. (`phase-4-k2-horizon-7b.md`, step 5) Related:
+  over 8), off where they are rare and the saving small. [Measured: K2's search, 176 trials with
+  it, 50 before] A trial took 22% less time (584 to 458 s) and hit the budget 1.4 times rather than
+  5.2, with only 7 failing on it: the sampler steering away from long thinking, as on the
+  simulator, saves more than the stop itself. Owed: whether the fixed prompt order biases it. (`phase-4-k2-horizon-7b.md`, step 5) Related:
   thinking length as a criterion, above.
 - **ARA, heretic's new default edit.** [Published: others' judged tests] It kept models intact best
   but never removed the most refusals; on Qwen3.8-27B 57.5% complied against 82.2% for a careful
