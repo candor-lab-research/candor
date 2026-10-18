@@ -854,3 +854,10 @@ moved by up to 20.5 tokens and are corrected; the released cards quote 948, 1,64
 for the user). `findings.md` was corrected where the review found its numbers wrong or overreaching.
 Both reviews passed after their points were fixed: 801 tests pass.
 
+### The released cards corrected (the user, 2026-10-18)
+
+With the user's go, both cards were corrected on Hugging Face from candor-team. Qwen's said the edit
+was a rank-1 change to every layer: it is rank 3 and edits 48 of 64 matrices (attention in layers
+7-31, MLP in 9-31). Both now give true medians of harmful thinking: K2 947 (was 948), Qwen 1,641 and
+Trial 161 2,973 (were 1,648 and 2,980). CLAUDE.md's slots rule now takes the reference's from its
+name or results file, as `[slots]` holds it.

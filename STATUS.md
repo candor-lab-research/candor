@@ -47,7 +47,7 @@ thinking on (next, e.g. Qwen3.8-27B). A 9B model must not take days.
 - The repository review (2026-10-18): 24 work packages in the order agreed
   (`results/evidence-2026-10-18/repo-review.md`). Steps 1 (faster tests, one server launch) and 2
   (the thinking check, measurements that can't pair stale labels, intervals in `compare`, findings
-  corrected) done; step 3, 27B cost and safety (packages 6-10, 14 and 17), next.
+  corrected) done; step 3, 27B cost and safety: packages 6-10 done (3b in review), 14 and 17 next.
 
 ## Next
 
@@ -57,9 +57,7 @@ thinking on (next, e.g. Qwen3.8-27B). A 9B model must not take days.
    changes until agreed.
 2. Phase 4, later: low effort's two closes; Uno not now. The budget limit
    (`search.max_budget_hits`, on K2 from trial 138) costs no measurable hits on the simulator and
-   stays on (results file, step 5). The released cards wait for the user's go to be corrected: the
-   Qwen card says the edit is rank-1 (it is rank 3), and with true medians the harmful thinking
-   medians are 947 (K2 card: 948) and 1,641 and 2,973 (Qwen card: 1,648 and 2,980).
+   stays on (results file, step 5).
 3. Not blocking, each when there is a reason:
    - speed: 64 slots (15% faster than 32), weights cached on the GPU for "full" trials, the proxy's
      adapters loaded into one server;
