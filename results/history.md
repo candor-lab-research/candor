@@ -813,3 +813,18 @@ is 32,768 tokens. `CANDOR_MCP=` before a command serves as measured, without the
 
 The user chatted with trial 205's shipped file in llama-server on the Mac, with their web and
 sandbox tools, and is happy with the model. The release decision remains theirs.
+
+### candor serve: a trial's export no longer downloads the original weights (2026-10-18)
+
+Serving K2's trial 205 downloaded its 11 GB of original weights, for the context limit and the layer
+count. Both now come from the served GGUF and the model's config.json, so `serve --trial` fetches
+only the config; checked on `runs/k2` with the weights deleted. Serving the unedited model still
+downloads them to check its GGUF (STATUS).
+
+### Phase 4, step 6: trial 205 released (the user, 2026-10-18)
+
+Published from candor-team as `candor-lab/K2-Horizon-7B-Candor-Uncensored-GGUF`, with the Qwen
+release's card template: the measured export with `general.name` set and `general.finetune` (a
+snapshot hash) dropped, all 327 tensors byte-identical, loaded in llama-server b11524. The card was
+reviewed against the measurements twice; the review found the "full" edit is rank 3, so the Qwen
+card's "rank-1" is wrong. K2's original weights were then deleted from the Mac.

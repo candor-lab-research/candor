@@ -17,7 +17,7 @@ anything else. Every model is scored and shipped as a GGUF in llama-server, and 
 | 1 | Core maths and `candor inspect` | Done |
 | 2 | rude-llama end to end: search, export, measure against heretic's Trial 170 | Done 2026-10-13: trial 535 passes and ships (`results/milestone-rude-llama-vs-heretic.md`) |
 | 3 | Qwen3.5-9B, a thinking model, scored as used against heretic's Trial 161 | Measured 2026-10-15: trial 175 beats Trial 161 (`results/milestone-qwen3.5-9b-vs-heretic.md`); the phase-end discussion remains |
-| 4 | K2-Horizon-7B at your real settings: llama-server, reasoning effort high | Measured 2026-10-18: trial 205 passes the decision rule and ships (`results/phase-4-k2-horizon-7b.md`); the user's test passed; the release decision remains |
+| 4 | K2-Horizon-7B at your real settings: llama-server, reasoning effort high | Released 2026-10-18: trial 205 passes the decision rule and the user's test (`results/phase-4-k2-horizon-7b.md`); the phase-end discussion remains |
 
 Qwen3.5-9B is a testbed: the process must work, affordably, for larger thinking models used with
 thinking on (next, e.g. Qwen3.8-27B). A 9B model must not take days.
@@ -40,18 +40,19 @@ thinking on (next, e.g. Qwen3.8-27B). A 9B model must not take days.
 
 - Phase 3: trial 175 beats Trial 161 (0/288 refused, maths at the unedited model's level);
   `results/phase-3-qwen3.5-9b.md`. The phase-end discussion remains.
-- Phase 4: trial 205 passes the decision rule and the user's test in llama-server, with tools
-  (2026-10-18); its file is on the Mac (`runs/k2/exports/trial-205/`). Numbers in
-  `results/phase-4-k2-horizon-7b.md`. The release decision is the user's.
+- Phase 4: trial 205 released 2026-10-18 as `candor-lab/K2-Horizon-7B-Candor-Uncensored-GGUF`
+  after passing the decision rule and the user's test; numbers in
+  `results/phase-4-k2-horizon-7b.md`.
 - 20 ideas from arXiv are ranked in `results/new-features.md`.
 
 ## Next
 
 1. The phase-end discussion: where to go next, from `results/findings.md` and
    `results/new-features.md` (chiefly the search's cost for 27B); no changes until agreed.
-2. Phase 4 step 6: the release decision on trial 205. Later: low effort's two closes; Uno not now.
-   The budget limit (`search.max_budget_hits`, on K2 from trial 138) costs no measurable hits on
-   the simulator and stays on (results file, step 5).
+2. Phase 4, later: low effort's two closes; Uno not now. The budget limit
+   (`search.max_budget_hits`, on K2 from trial 138) costs no measurable hits on the simulator and
+   stays on (results file, step 5). The Qwen card says the edit is rank-1; it is rank 3 (history,
+   2026-10-18): correcting it waits for the user's go.
 3. Not blocking, each when there is a reason:
    - speed: 64 slots (15% faster than 32), weights cached on the GPU for "full" trials, the proxy's
      adapters loaded into one server;
@@ -104,8 +105,7 @@ the unedited model (the user, 2026-10-16). Strength 0.8-5.0 from the start (the 
 
 | Step | What | State |
 | --- | --- | --- |
-| 1-5 | Code for K2 and the timed pilot; the unedited model as used (287/288 refused, maths 1,222/1,319); the decision rule; the search, stopped by the user after 313 trials (budget limit 8 from trial 138); finalists 207, 205, 265 and 114 measured: 205 and 114 pass, 205 ships | Done 2026-10-18 (history, results file) |
-| 6 | The user's test in llama-server, then a release decision | Test passed 2026-10-18 (the user, with web and sandbox tools); release decision next |
+| 1-6 | Code for K2 and the timed pilot; the unedited model as used (287/288 refused, maths 1,222/1,319); the decision rule; the search, stopped by the user after 313 trials (budget limit 8 from trial 138); finalists 207, 205, 265 and 114 measured: 205 and 114 pass, 205 ships; the user's test with tools; released | Done 2026-10-18 (history, results file) |
 
 ## Not in this plan
 
