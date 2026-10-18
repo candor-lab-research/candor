@@ -207,8 +207,11 @@ def test_init_finds_a_thinking_models_close_and_gives_it_a_budget(tmp_path):
     shown = " ".join(result.output.split())
     assert "Thinking" in shown and "This model thinks before it answers" in shown
     assert "Set [sampling] to the thinking settings its model card recommends" in shown
-    deployment = config.load(tmp_path / "runs" / "first").deployment
+    settings = config.load(tmp_path / "runs" / "first")
+    deployment = settings.deployment
     assert deployment.think_close == "</think>\n\n" and deployment.thinking_budget == config.THINKING_BUDGET
+    # As many slots as the search takes, for every stage: thinking answers are long.
+    assert settings.slots == config.Slots(thinking=32, measure=32)
     (tmp_path / "message").mkdir()
     assert (
         init(
@@ -219,7 +222,9 @@ def test_init_finds_a_thinking_models_close_and_gives_it_a_budget(tmp_path):
     assert config.load(tmp_path / "runs" / "message").deployment.think_close == "</think>\n\n"
     (tmp_path / "plain").mkdir()
     plain = init(tmp_path, model_folder(tmp_path / "plain"), "plain")
-    assert plain.exit_code == 0 and config.load(tmp_path / "runs" / "plain").deployment.think_close is None
+    plain_settings = config.load(tmp_path / "runs" / "plain")
+    assert plain.exit_code == 0 and plain_settings.deployment.think_close is None
+    assert plain_settings.slots == config.Slots()
 
 
 # A template that only keeps a model's past thinking out of the chat, so the model may write its own.

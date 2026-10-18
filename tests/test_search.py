@@ -1,7 +1,9 @@
 import dataclasses
 import filecmp
+import hashlib
 import itertools
 import json
+import math
 import re
 import shutil
 
@@ -131,11 +133,11 @@ def test_a_trial_stopped_part_way_is_marked_failed_and_the_search_carries_on(tin
     real = search._Scorer.score
     calls = []
 
-    def stopping(self, scales, stop_above=None, forced_above=None):
+    def stopping(self, scales, stop_above=None, forced_above=None, read_kl=True):
         calls.append(scales)
         if len(calls) == 3:
             raise KeyboardInterrupt
-        return real(self, scales, stop_above, forced_above)
+        return real(self, scales, stop_above, forced_above, read_kl)
 
     monkeypatch.setattr(search._Scorer, "score", stopping)
     with pytest.raises(KeyboardInterrupt):
@@ -283,9 +285,9 @@ def test_each_trial_is_scored_with_its_own_directions_adapters(tiny, monkeypatch
     scored = []
     real = search._Scorer.score
 
-    def recording(self, scales, stop_above=None, forced_above=None):
+    def recording(self, scales, stop_above=None, forced_above=None, read_kl=True):
         scored.append({path.parent.name for path in scales})
-        return real(self, scales, stop_above, forced_above)
+        return real(self, scales, stop_above, forced_above, read_kl)
 
     monkeypatch.setattr(search._Scorer, "score", recording)
     Search(tiny).search(6)
@@ -509,7 +511,7 @@ def scripted(monkeypatch, scores: list[Score], budget: list | None = None):
     asked = []
     queue = iter(scores)
 
-    def score(self, scales, stop_above=None, forced_above=None):
+    def score(self, scales, stop_above=None, forced_above=None, read_kl=True):
         asked.append(stop_above)
         if budget is not None:
             budget.append(forced_above)
@@ -585,6 +587,46 @@ def test_a_trial_stops_once_it_refuses_more_than_the_cap_and_enough_trials_of_it
     assert asked == [None] * 5
 
 
+def stop_free_draws(refusals_and_kl):
+    """A scorer whose scores follow from each edit's strengths alone, and which stops as the real one
+    does: a stopped trial is judged in part and its KL never read."""
+
+    def score(self, scales, stop_above=None, forced_above=None, read_kl=True):
+        if not scales:
+            return Score(3, 0, 0, math.inf, 3)
+        refusals, kl = refusals_and_kl(scales)
+        if stop_above is not None and refusals > stop_above and stop_above + 1 < 3:
+            return Score(stop_above + 1, 0, 0, math.inf, stop_above + 1)
+        return Score(refusals, 0, 0, kl, 3)
+
+    return score
+
+
+@pytest.mark.parametrize("cap", [0, 1])
+def test_stopping_a_trial_changes_no_draw_the_sampler_makes(tiny, monkeypatch, cap):
+    # Optuna ranks trials over the caps by how far over they are, never by KL: so the trials it draws
+    # are the same whether the ones that can't win are stopped or scored in full.
+    def made_up(scales):
+        key = hashlib.sha256(
+            repr(sorted((p.name, round(s, 12)) for p, s in scales.items())).encode()
+        ).digest()
+        return key[0] % 4, (key[1] + 1) / 2560
+
+    monkeypatch.setattr(search, "STOP_AFTER", 1)
+    monkeypatch.setattr(search._Scorer, "score", stop_free_draws(made_up))
+    small(tiny, trials=10)
+    tiny.settings.search.startup_per_scope = 2
+    tiny.settings.search.max_refusals = cap
+    drawn = {}
+    for stop in (True, False):
+        tiny.settings.search.stop_early = stop
+        Search(tiny).search(20)
+        drawn[stop] = [(t.params, t.user_attrs["stopped"]) for t in finished(tiny)]
+        tiny.path("search").rename(tiny.path(f"search-{stop}"))
+    assert [params for params, _ in drawn[True]] == [params for params, _ in drawn[False]]
+    assert any(stopped for _, stopped in drawn[True]) and not any(stopped for _, stopped in drawn[False])
+
+
 @pytest.mark.parametrize(
     ("stop_after", "expected"), [(1, [None, None, None, 3, 3, 2]), (2, [None] * 5 + [3])]
 )
@@ -626,14 +668,22 @@ def test_scoring_stops_at_the_end_of_the_chunk_that_goes_over(tiny, monkeypatch)
         return [REFUSED if labels.pop(0) else ANSWERED for _ in answers]
 
     monkeypatch.setattr(FakeGuard, "replies", replies)
+    read = []
+    real = LlamaServer.top_logprobs
+    monkeypatch.setattr(
+        LlamaServer, "top_logprobs", lambda *args, **kwargs: read.append(1) or real(*args, **kwargs)
+    )
     with Search(tiny)._scorer(*scorer_inputs(tiny)) as scorer:
         labels[:], asked[:] = [True, False, True], []
         whole = scorer.score({}, stop_above=2)
         assert (whole.refusals, whole.judged, asked) == (2, 3, [2, 1])
-        labels[:], asked[:] = [True, True, True], []
+        labels[:], asked[:], read[:] = [True, True, True], [], []
         stopped = scorer.score({}, stop_above=1)
         assert (stopped.refusals, stopped.judged, asked) == (2, 2, [2])
-        assert stopped.kl == whole.kl == 0.0
+        # A stopped trial can't win, so its KL is never read.
+        assert math.isinf(stopped.kl) and stopped.kl_thinking is None and whole.kl == 0.0 and not read
+        labels[:] = [True, True, True]
+        assert math.isinf(scorer.score({}, read_kl=False).kl) and not read
         labels[:], asked[:] = [True, True, True], []
         assert scorer.score({}).judged == 3 and asked == [2, 1]
         labels[:], asked[:] = [True, True, False], []
@@ -723,9 +773,9 @@ def scored_folders(monkeypatch, root) -> list[tuple[set[str], dict]]:
     used = []
     real = search._Scorer.score
 
-    def recording(self, scales):
+    def recording(self, scales, **kwargs):
         used.append(({str(path.parent.relative_to(root)) for path in scales}, scales))
-        return real(self, scales)
+        return real(self, scales, **kwargs)
 
     monkeypatch.setattr(search._Scorer, "score", recording)
     return used
@@ -1174,11 +1224,11 @@ def test_a_spread_trial_that_failed_is_queued_again(tiny, monkeypatch):
     real = search._Scorer.score
     calls = []
 
-    def stopping(self, scales, stop_above=None, forced_above=None):
+    def stopping(self, scales, stop_above=None, forced_above=None, read_kl=True):
         calls.append(scales)
         if len(calls) == 3:
             raise KeyboardInterrupt
-        return real(self, scales, stop_above, forced_above)
+        return real(self, scales, stop_above, forced_above, read_kl)
 
     monkeypatch.setattr(search._Scorer, "score", stopping)
     with pytest.raises(KeyboardInterrupt):
@@ -1316,6 +1366,8 @@ def test_scoring_a_trial_stopped_early_says_so(tiny, monkeypatch):
     shown = flat(result.output)
     assert "trial-1 was stopped early in the search, after 1 prompts" in shown
     assert "scores differently" not in shown
+    # Its KL in the search was never read, so the table doesn't show one.
+    assert "3 of 1, stopped early" in shown and "inf" not in shown
 
 
 def test_the_search_scores_a_thinking_model_at_its_own_budget_with_the_same_seeds(tiny, monkeypatch):
@@ -1587,7 +1639,7 @@ def refusing(monkeypatch, refusals=3, stop_at=None):
     call, counting the unedited model's, is stopped part way."""
     calls = []
 
-    def score(self, scales, stop_above=None, forced_above=None):
+    def score(self, scales, stop_above=None, forced_above=None, read_kl=True):
         calls.append(scales)
         if len(calls) == stop_at:
             raise KeyboardInterrupt
@@ -1950,7 +2002,7 @@ def test_a_search_already_scored_with_thinking_off_starts_no_server_to_check_it(
     Search(tiny).search(2)
     assert started == []
     Search(tiny).score([Edit("e", None, {"mlp": Kernel(1.0, 1.0, 0.0, 0.5)})])
-    assert started == [config.THINKING_MODEL_SEARCH_SLOTS]
+    assert started == [config.THINKING_MODEL_SLOTS]
 
 
 @pytest.mark.parametrize("thinks", [False, True])
@@ -1968,7 +2020,7 @@ def test_scoring_answers_a_thinking_models_trials_many_at_once_unless_set(tiny, 
     small(thinking(tiny) if thinks else tiny)
     tiny.settings.slots.search = slots
     Search(tiny).search(1)
-    used = slots or (config.THINKING_MODEL_SEARCH_SLOTS if thinks else config.SEARCH_SLOTS)
+    used = slots or (config.THINKING_MODEL_SLOTS if thinks else config.SEARCH_SLOTS)
     # The scorer's server is the last one the search starts.
     assert started[-1] == (used, "slots.search in candor.toml")
     recorded = json.loads(tiny.path("search", "inputs.json").read_text())
@@ -1981,7 +2033,7 @@ def test_a_search_carries_on_with_its_slots_set_to_the_number_it_used_unset(tiny
     thinks_through(monkeypatch)
     small(thinking(tiny) if thinks else tiny)
     Search(tiny).search(1)
-    tiny.settings.slots.search = config.THINKING_MODEL_SEARCH_SLOTS if thinks else config.SEARCH_SLOTS
+    tiny.settings.slots.search = config.THINKING_MODEL_SLOTS if thinks else config.SEARCH_SLOTS
     Search(tiny).search(2)
     assert len(finished(tiny)) == 2
     tiny.settings.slots.search = 3
@@ -2198,7 +2250,7 @@ def varied(monkeypatch) -> list[list[int | None]]:
     stopped after one prompt; records each call's stop_above and forced_above."""
     asked = []
 
-    def score(self, scales, stop_above=None, forced_above=None):
+    def score(self, scales, stop_above=None, forced_above=None, read_kl=True):
         asked.append([stop_above, forced_above])
         n = len(asked)
         refusals = n * 5 % 4

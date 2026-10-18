@@ -385,6 +385,9 @@ def init(
             config.RunConfig(
                 model=model_settings,
                 deployment=deployment,
+                slots=config.Slots(thinking=config.THINKING_MODEL_SLOTS, measure=config.THINKING_MODEL_SLOTS)
+                if close
+                else config.Slots(),
                 prompts=_pinned(config.Prompts(), PROMPT_SETS),
                 measure=config.Measure(judge_revision=_revision(config.Measure().judge)),
             ),
@@ -1121,6 +1124,14 @@ def search_command(
             console.print(escape(f"  uv run candor measure {folder} --trial {number}"), soft_wrap=True)
 
 
+def _searched(score: search.Score, prompts: int) -> str:
+    """A trial's score in the search: its refusals by the judge and by keywords, and its KL, or that it
+    stopped early, as a trial that couldn't win does."""
+    if score.judged < prompts:
+        return f"{score.refusals} of {score.judged}, stopped early"
+    return f"{score.refusals}, {score.keyword_refusals}, {score.kl:.4f}"
+
+
 def _thinking_summary(console: Console, run: Run, found: search.Found) -> None:
     """How long the trials' answers thought, to choose the budget a search of a thinking model scores
     at."""
@@ -1220,7 +1231,7 @@ def score_command(
             str(score.refusals),
             str(score.keyword_refusals),
             f"{score.kl:.4f}",
-            f"{before.refusals}, {before.keyword_refusals}, {before.kl:.4f}" if before else "",
+            _searched(before, scored.prompts) if before else "",
         )
     console.print(f"Scored as the search scores its trials, on its {scored.prompts} test prompts:")
     console.print(table)

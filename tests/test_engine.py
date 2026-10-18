@@ -13,6 +13,7 @@ import socket
 import subprocess
 import sys
 import time
+from concurrent.futures import ThreadPoolExecutor
 from pathlib import Path
 
 import pytest
@@ -493,7 +494,7 @@ def test_answers_come_in_order_and_closing_early_cancels_those_not_started(monke
     s = LlamaServer(LLAMA_SERVER, Path("model.gguf"), Path("server.log"), parallel=2)
     sent, done = [], []
 
-    def complete(payload):
+    def complete(payload, requests=None):
         sent.append(payload["prompt"])
         time.sleep(0.05 if payload["prompt"][0] % 2 == 0 else 0.02)  # odd ones finish first
         done.append(payload["prompt"])
@@ -513,7 +514,7 @@ def test_a_failed_answer_stops_those_still_queued(monkeypatch):
     s = LlamaServer(LLAMA_SERVER, Path("model.gguf"), Path("server.log"), parallel=2)
     sent = []
 
-    def complete(payload):
+    def complete(payload, requests=None):
         sent.append(payload)
         time.sleep(0.02)
         if len(sent) == 3:
@@ -531,7 +532,7 @@ def test_a_failure_stops_the_requests_still_queued(monkeypatch):
     s = LlamaServer(LLAMA_SERVER, Path("model.gguf"), Path("server.log"), parallel=2)
     sent = []
 
-    def complete(payload):
+    def complete(payload, requests=None):
         sent.append(payload)
         time.sleep(0.02)
         return {}
@@ -664,7 +665,7 @@ def thinking_server(
     monkeypatch.setattr(s, "_whole", lambda token: token not in broken)
     asked = []
 
-    def complete(payload):
+    def complete(payload, requests=None):
         asked.append(payload)
         reply = replies[len(asked) - 1]
         return {"truncated": False, "tokens_predicted": len(reply.get("tokens", [0, 0])), **reply}
@@ -761,12 +762,33 @@ def test_each_prompt_has_a_seed_of_its_own_that_never_changes():
     assert run_seeds(1, 2) == [2791857979, 3602223452]
 
 
+def test_a_request_no_one_wants_any_more_is_dropped_at_once(files, tmp_path):
+    # Big enough that a long answer takes seconds.
+    write_model(tmp_path / "slow.gguf", random_weights(hidden=512, ffn=2048, layers=8), context=8192)
+    s = LlamaServer(
+        LLAMA_SERVER, tmp_path / "slow.gguf", tmp_path / "server.log", parallel=1, context_per_slot=8192
+    )
+    requests = engine.Requests()
+    with s, ThreadPoolExecutor(1) as pool:
+        running = pool.submit(s._answer_one, PROMPTS[1], 6000, [], engine.GREEDY, 0, None, requests)
+        time.sleep(0.5)
+        requests.stop()
+        with pytest.raises(engine.Stopped):
+            running.result(timeout=2)
+        # The server dropped it too: the next answer doesn't wait for the rest of it.
+        started = time.monotonic()
+        s.generate([PROMPTS[0]], 4)
+        assert time.monotonic() - started < 3
+
+
 def test_a_thinking_model_whose_answer_no_one_wants_any_more_doesnt_answer(monkeypatch):
     s = LlamaServer(LLAMA_SERVER, Path("model.gguf"), Path("server.log"), parallel=2)
     monkeypatch.setattr(s, "tokenize", lambda text: {END_THINK: [99], "": []}.get(text, [98, 10]))
     asked = {"thinking": 0, "answering": 0}
 
-    def complete(payload):
+    def complete(payload, requests=None):
+        if requests is not None and requests.stopped:
+            raise engine.Stopped
         if "stop" in payload:
             asked["thinking"] += 1
             time.sleep(0.05)

@@ -3,6 +3,8 @@
 Generated text is handed back to the caller. Nothing here prints or logs it.
 """
 
+import http.client
+import json
 import os
 import re
 import socket
@@ -11,10 +13,11 @@ import tempfile
 import time
 from collections.abc import Callable, Generator, Iterable, Mapping, Sequence
 from concurrent.futures import ThreadPoolExecutor, as_completed
+from contextlib import suppress
 from dataclasses import dataclass
 from functools import partial
 from pathlib import Path
-from threading import Event
+from threading import Lock
 from typing import Any
 
 import httpx
@@ -37,6 +40,29 @@ NO_DEVICE = re.compile(r"invalid device: (\S+)")
 
 class ServerError(RuntimeError):
     pass
+
+
+class Stopped(Exception):
+    """A request ended because no one wants its answer any more."""
+
+
+class Requests:
+    """The requests behind one set of answers, each on a connection of its own, so stop() can end every
+    one still running at once: llama-server drops a request whose connection closes, within a second,
+    rather than finish a thinking no one will read."""
+
+    def __init__(self) -> None:
+        self.stopped = False
+        self.open: set[http.client.HTTPConnection] = set()
+        self.lock = Lock()
+
+    def stop(self) -> None:
+        with self.lock:
+            self.stopped = True
+            for connection in self.open:
+                if connection.sock is not None:
+                    with suppress(OSError):
+                        connection.sock.shutdown(socket.SHUT_RDWR)
 
 
 @dataclass(frozen=True)
@@ -200,12 +226,41 @@ class LlamaServer:
         state = "is still running" if code is None else f"has exited with code {code}"
         return ServerError(f"llama-server {what} and {state}, see {self.log}")
 
-    def _complete(self, payload: dict[str, Any]) -> dict[str, Any]:
+    def _complete(self, payload: dict[str, Any], requests: Requests | None = None) -> dict[str, Any]:
         # Cached prompt states don't record which adapters computed them, so reusing one can mix an
         # unedited prompt with an edited answer. cache_prompt false makes every request start from
         # position 0, which the engine test checks.
         body = {**payload, "cache_prompt": False}
-        return self._call("POST", "/completion", _answering(payload["n_predict"]), json=body)
+        timeout = _answering(payload["n_predict"])
+        if requests is None:
+            return self._call("POST", "/completion", timeout, json=body)
+        return self._stoppable(body, timeout.read or 0, requests)
+
+    def _stoppable(self, body: dict[str, Any], timeout: float, requests: Requests) -> dict[str, Any]:
+        """The server's answer to a /completion request that requests.stop() ends at once, on a connection
+        of its own; Stopped once it has."""
+        connection = http.client.HTTPConnection("127.0.0.1", self.port, timeout=timeout)
+        try:
+            with requests.lock:
+                requests.open.add(connection)
+            connection.connect()
+            # Stopped while connecting, before stop() could see the connection.
+            if requests.stopped:
+                raise Stopped
+            connection.request("POST", "/completion", json.dumps(body), {"Content-Type": "application/json"})
+            response = connection.getresponse()
+            data = response.read()
+        except (OSError, http.client.HTTPException) as error:
+            if requests.stopped:
+                raise Stopped from None
+            raise self._failed(f"didn't answer /completion ({type(error).__name__})") from None
+        finally:
+            with requests.lock:
+                requests.open.discard(connection)
+            connection.close()
+        if response.status >= 400:
+            raise self._failed(f"answered /completion with HTTP {response.status}")
+        return json.loads(data)
 
     def _complete_all(
         self, payloads: list[dict[str, Any]], done: Callable[[], None] | None = None
@@ -310,23 +365,23 @@ class LlamaServer:
         meanwhile. Closing the iterator early cancels those not yet started."""
         lora = self.lora(scales)
         seeds = seeds or [0] * len(prompts)
-        stopped = Event()
+        requests = Requests()
         pool = ThreadPoolExecutor(self.parallel)
         try:
             futures = [
-                pool.submit(self._answer_one, prompt, max_tokens, lora, sampling, seed, thinking, stopped)
+                pool.submit(self._answer_one, prompt, max_tokens, lora, sampling, seed, thinking, requests)
                 for prompt, seed in zip(prompts, seeds, strict=True)
             ]
             for future in futures:
                 yield future.result()
         except GeneratorExit:
-            # The server can't be told to drop an answer it has started, so wait for those rather
-            # than let them slow whatever is asked next; a thinking model's that are still thinking
-            # don't go on to answer.
-            stopped.set()
+            # The server drops a request whose connection closes, so close those still running, and
+            # wait the moment that takes rather than let them slow whatever is asked next.
+            requests.stop()
             pool.shutdown(cancel_futures=True)
             raise
         except BaseException:
+            requests.stop()
             pool.shutdown(wait=False, cancel_futures=True)
             raise
         pool.shutdown()
@@ -339,25 +394,22 @@ class LlamaServer:
         sampling: Mapping[str, float],
         seed: int,
         thinking: Thinking | None,
-        stopped: Event | None = None,
+        requests: Requests | None = None,
     ) -> Answer:
         """One answer. A thinking model thinks until it ends its thinking or its budget makes it stop,
         then answers in a request of its own, so the answer's length is limited apart from the
-        thinking's; unless stopped is set by then, as no one wants the answer any more."""
+        thinking's. With requests, requests.stop() ends it, as no one wants the answer any more."""
         settings = {**sampling, "seed": seed, "lora": lora}
         if thinking is None:
             payload = {"prompt": prompt, "n_predict": max_tokens, **settings}
-            result = self._checked(payload, self._complete(payload))
+            result = self._checked(payload, self._complete(payload, requests))
             return Answer(result["content"], result["tokens_predicted"], result["stop_type"] != "limit")
-        thought, closed, made_to_stop = self._think(prompt, settings, thinking)
+        thought, closed, made_to_stop = self._think(prompt, settings, thinking, requests)
         if not closed:
             # The model ended without closing its thinking, so it never answered.
             return Answer("", 0, False, len(thought))
-        # The thinking's length leaves out the end tag.
-        if stopped is not None and stopped.is_set():
-            return Answer("", 0, False, len(thought) - 1, made_to_stop)
         payload = {"prompt": prompt + thought, "n_predict": max_tokens, **settings}
-        result = self._checked(payload, self._complete(payload))
+        result = self._checked(payload, self._complete(payload, requests))
         finished = result["stop_type"] != "limit"
         return Answer(result["content"], result["tokens_predicted"], finished, len(thought) - 1, made_to_stop)
 
@@ -385,7 +437,11 @@ class LlamaServer:
         )
 
     def _think(
-        self, prompt: list[int], settings: dict[str, Any], thinking: Thinking
+        self,
+        prompt: list[int],
+        settings: dict[str, Any],
+        thinking: Thinking,
+        requests: Requests | None = None,
     ) -> tuple[list[int], bool, bool]:
         """A thinking model's thinking: the tokens it thought, up to and with its end tag when it closed
         its thinking; whether it closed it; and whether its budget ran out so it was made to stop.
@@ -401,7 +457,9 @@ class LlamaServer:
             raise ServerError(f"the thinking's close {thinking.close!r} doesn't end with its end tag")
         # The budget also counts the open's tokens after the start tag, as the server tokenizes it.
         freely = max(thinking.budget - (len(self.tokenize(thinking.opened)) - 1), 0)
-        thought, stop = self._thought(prompt, freely, settings, thinking) if freely else ([], "limit")
+        thought, stop = (
+            self._thought(prompt, freely, settings, thinking, requests) if freely else ([], "limit")
+        )
         if end in thought:
             return thought[: thought.index(end) + 1], True, False
         if stop != "limit":
@@ -410,7 +468,7 @@ class LlamaServer:
         if thought and not self._whole(thought[-1]):
             # Finished in one request, so its tokens are drawn one after another as the server's
             # would be, and cut after the first whole one.
-            more, stop = self._thought(prompt + thought, UNFINISHED_CHARACTER, settings, thinking)
+            more, stop = self._thought(prompt + thought, UNFINISHED_CHARACTER, settings, thinking, requests)
             # The server keeps the token that ended the model's turn, last.
             drawn = more[:-1] if stop == "eos" else more
             for i, token in enumerate(drawn):
@@ -426,7 +484,12 @@ class LlamaServer:
         return thought + forced, True, True
 
     def _thought(
-        self, prompt: list[int], tokens: int, settings: dict[str, Any], thinking: Thinking
+        self,
+        prompt: list[int],
+        tokens: int,
+        settings: dict[str, Any],
+        thinking: Thinking,
+        requests: Requests | None = None,
     ) -> tuple[list[int], str]:
         """Up to tokens more of the model's thinking, stopping at its end tag, and why it stopped:
         "limit" when it thought all of them."""
@@ -437,7 +500,7 @@ class LlamaServer:
             "return_tokens": True,
             **settings,
         }
-        result = self._checked(payload, self._complete(payload))
+        result = self._checked(payload, self._complete(payload, requests))
         return result["tokens"], result["stop_type"]
 
     def _whole(self, token: int) -> bool:

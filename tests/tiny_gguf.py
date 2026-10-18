@@ -56,12 +56,14 @@ def write_model(
     chat_template: str | None = None,
     thinking: bool = False,
     types: dict[str, gguf.GGMLQuantizationType] | None = None,
+    context: int = 256,
 ) -> None:
-    """A llama of the weights' size, each tensor stored as types gives it or as its array is."""
+    """A llama of the weights' size, trained for context tokens, each tensor stored as types gives it or
+    as its array is."""
     tokens, token_types = (THINKING_TOKENS, THINKING_TYPES) if thinking else (TOKENS, TYPES)
     hidden = weights["token_embd.weight"].shape[1]
     writer = gguf.GGUFWriter(path, "llama")
-    writer.add_context_length(256)
+    writer.add_context_length(context)
     writer.add_embedding_length(hidden)
     writer.add_block_count(sum(name.endswith(".attn_norm.weight") for name in weights))
     writer.add_feed_forward_length(weights["blk.0.ffn_up.weight"].shape[0])

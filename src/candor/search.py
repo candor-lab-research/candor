@@ -776,7 +776,7 @@ class Search:
         settings = self.run.settings
         if settings.slots.search is not None:
             return settings.slots.search
-        return config.THINKING_MODEL_SEARCH_SLOTS if settings.deployment.think_close else config.SEARCH_SLOTS
+        return config.THINKING_MODEL_SLOTS if settings.deployment.think_close else config.SEARCH_SLOTS
 
     def search(
         self,
@@ -813,7 +813,7 @@ class Search:
                     first = studies[SCOPES[0]]
                     base = first.user_attrs.get("base_refusals")
                     if base is None:
-                        base = scorer.score({}).refusals
+                        base = scorer.score({}, read_kl=False).refusals
                         first.set_user_attr("base_refusals", base)
                     run.report(f"The unedited model refuses {base} of {len(harmful)} test prompts")
                     kept = {scope: self._within_cap(studies[scope]) for scope in SCOPES}
@@ -896,7 +896,7 @@ class Search:
         with self._scorer(
             quantized, list(dict.fromkeys(files)), ids, harmless, _beside(run, ids), thinks, seed
         ) as scorer:
-            base_refusals = scorer.score({}).refusals if base else None
+            base_refusals = scorer.score({}, read_kl=False).refusals if base else None
             scores = []
             for index, edit in enumerate(edits):
                 run.report(f"Scoring {edit.name}")
@@ -1390,12 +1390,17 @@ class _Scorer:
         self.server.start()
 
     def score(
-        self, scales: dict[Path, float], stop_above: int | None = None, forced_above: int | None = None
+        self,
+        scales: dict[Path, float],
+        stop_above: int | None = None,
+        forced_above: int | None = None,
+        read_kl: bool = True,
     ) -> Score:
         """An edit's refusals and KL divergence. The harmful prompts are judged CHUNK at a time, in
         order, while the server answers the next ones; with stop_above, it stops once more than that
         many are refused, and with forced_above, once more answers than that reached the thinking
-        budget."""
+        budget. A trial stopped can't win, so nothing reads its KL, nor the unedited model's from
+        itself: their KL is left unread, as infinite."""
         refusals = keyword_refusals = unlabelled = judged = thought = forced = 0
         how = self.answering
         answering = self.server.answers(
@@ -1421,6 +1426,8 @@ class _Scorer:
                     forced_above is not None and forced > forced_above
                 ):
                     break
+        if not read_kl or judged < len(self.harmful):
+            return Score(refusals, keyword_refusals, unlabelled, math.inf, judged, thought / judged, forced)
         top = self.server.top_logprobs(self.harmless, self.kl_tokens, scales)
         divergence = kl.mean_from_top(self.base, top)
         beside = {

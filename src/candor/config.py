@@ -52,12 +52,13 @@ KV_CACHE_TYPES = {
 }
 # The thinking budget init gives a model that thinks: the longest llama-server's chat page offers.
 THINKING_BUDGET = 8192
-# How many answers llama-server works on at once unless [slots] says otherwise. A thinking model's
-# answers are long, and the server makes more tokens a second the more it answers together.
+# How many answers llama-server works on at once unless [slots] says otherwise.
 THINKING_SLOTS = 8
 SEARCH_SLOTS = 8
-THINKING_MODEL_SEARCH_SLOTS = 32
 MEASURE_SLOTS = 8
+# A thinking model's answers are long, and the server makes more tokens a second the more it answers
+# together, so init gives a thinking model this many for every stage, and the search takes it unset.
+THINKING_MODEL_SLOTS = 32
 RUN_NAME = re.compile(r"[A-Za-z0-9][A-Za-z0-9._-]*")
 BARE_KEY = re.compile(r"[A-Za-z0-9_-]+")
 END_TAG = re.compile(r"\s*</[^<>\s]+>\s*")
@@ -482,7 +483,7 @@ class Slots(Section):
         default=None,
         ge=1,
         description="How many answers the search, candor score and candor proxy work on at once. A search "
-        f"is carried on only at the number it was made with. Unset: {THINKING_MODEL_SEARCH_SLOTS} for a "
+        f"is carried on only at the number it was made with. Unset: {THINKING_MODEL_SLOTS} for a "
         "model that thinks, whose answers are long and come faster the more are made together, and "
         f"{SEARCH_SLOTS} otherwise.",
     )

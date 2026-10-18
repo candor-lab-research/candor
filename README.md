@@ -49,8 +49,9 @@ uv run candor serve runs/rude --trial 37                       # chat with it in
   much a token of context takes at f16, how many tokens fit in a GiB, and for a hybrid such as
   Qwen3.5 the state its linear-attention layers hold for each slot.
 - `[slots]` sets how many answers llama-server works on at once: `thinking` as the unedited model
-  thinks for `thinking/` (8), `search` as the search, `score` and `proxy` score edits (unset: 32 for
-  a thinking model, 8 otherwise), and `measure` for `measure` (8), which `--slots` overrides. The
+  thinks for `thinking/`, `search` as the search, `score` and `proxy` score edits (unset: 32 for a
+  thinking model, 8 otherwise), and `measure` for `measure`, which `--slots` overrides. `init` sets
+  `thinking` and `measure` to 32 for a thinking model, 8 otherwise. The
   server holds every slot's context in GPU memory from its start, so the slots times each one's
   context, plus a hybrid's state for each slot, must fit: the search gives each slot room for the
   longer of an answer and a KL read. When they don't fit, candor says how many slots of how many
