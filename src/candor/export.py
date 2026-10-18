@@ -9,9 +9,9 @@ never quantised, Q4_K keeps nearly all of an edit. Merging can round a tiny edit
 weights stored in 16 bits, an edit under half a step of theirs rounds back to the weight. So the export
 measures how much of each weight's edit the quantised file holds. A weight that lost too much is merged
 again unrounded, in F32, and quantised as Q8_0 from that, or left in F32 where Q8_0 still loses too
-much and straight away for a run deploying Q8_0 or finer, while every other tensor keeps the type the
-plain quantisation gave it. The file is refused if a
-weight still falls short, and is then measured before it ships.
+much (straight away for a run deploying Q8_0 or finer); every other tensor keeps the type the plain
+quantisation gave it. The file is refused if a weight still falls short, and is then measured before
+it ships.
 
 A model edited elsewhere, such as heretic's own save of one of its trials, is exported the same way:
 the run's model with each edited weight taken from it, so it is converted, quantised and checked
