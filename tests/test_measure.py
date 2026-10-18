@@ -9,7 +9,7 @@ from typer.testing import CliRunner
 
 from candor import cli, config, measure, run
 from candor.cli import app
-from candor.engine import LlamaServer
+from candor.engine import LlamaServer, ServerError
 from candor.kernel import Kernel
 from candor.measure import Edit, Measurement
 from candor.run import RunError
@@ -185,6 +185,68 @@ def test_answers_survive_a_judge_that_fails_to_load(tiny, monkeypatch):
     FakeGuard.judged = []
     Measurement(tiny, None, "base").measure()
     assert answered == [] and FakeGuard.judged == [3, 3]
+
+
+def stopping_after(monkeypatch, saved: int) -> None:
+    """The measurement stops, as at a signal, once this many answers are saved."""
+    real = LlamaServer.generate
+    count = []
+
+    def generate(self, *args, each=None, **kwargs):
+        def saving(place, answer):
+            assert each is not None
+            each(place, answer)
+            count.append(1)
+            if len(count) == saved:
+                raise KeyboardInterrupt
+
+        return real(self, *args, each=saving, **kwargs)
+
+    monkeypatch.setattr(LlamaServer, "generate", generate)
+
+
+def test_a_set_stopped_part_way_answers_only_the_prompts_left(tiny, monkeypatch):
+    whole = Measurement(tiny, None, "whole").measure()
+    with monkeypatch.context() as stopped:
+        stopping_after(stopped, 2)
+        with pytest.raises(KeyboardInterrupt):
+            Measurement(tiny, None, "base").measure()
+    journal = tiny.path("private", "measurements", "base", "harmful_held_out.answering.jsonl")
+    earlier = max(json.loads(line)["at"] for line in journal.read_text().splitlines()[1:])
+    answered = counting_answers(monkeypatch)
+    resumed = Measurement(tiny, None, "base").measure()
+    # Each answer has its own seed, so the one asked again is the one an unbroken run gives.
+    assert answered == [1, 3, 3] and not journal.exists()
+    private = tiny.path("private", "measurements")
+    for name in measure.SETS:
+        assert (private / "base" / f"{name}.json").read_text() == (
+            private / "whole" / f"{name}.json"
+        ).read_text()
+        assert resumed[name]["finished"] == whole[name]["finished"]
+    assert resumed["harmful_held_out"]["answer_seconds"] > earlier
+
+
+def test_answers_saved_from_other_inputs_are_answered_again(tiny, monkeypatch):
+    with monkeypatch.context() as stopped:
+        stopping_after(stopped, 2)
+        with pytest.raises(KeyboardInterrupt):
+            Measurement(tiny, None, "base").measure()
+    answered = counting_answers(monkeypatch)
+    Measurement(tiny, None, "base", slots=2).measure()
+    assert answered == [3, 3, 3]
+
+
+def test_a_failed_read_of_first_tokens_loses_no_answers(tiny, monkeypatch):
+    def broken(*args, **kwargs):
+        raise ServerError("injected")
+
+    answered = counting_answers(monkeypatch)
+    with monkeypatch.context() as failing:
+        failing.setattr(LlamaServer, "top_logprobs", broken)
+        with pytest.raises(ServerError, match="injected"):
+            Measurement(tiny, None, "base").measure()
+    # The harmless set's first tokens are read before it is answered, so nothing was answered for them.
+    assert answered == [3]
 
 
 def test_missing_saved_answers_are_answered_again(tiny, monkeypatch):

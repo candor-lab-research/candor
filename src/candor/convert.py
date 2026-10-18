@@ -138,11 +138,10 @@ def _column_order(name: str, arch: str, config: dict[str, Any]) -> Tensor | None
     return torch.arange(values * head).reshape(keys, values // keys, head).transpose(0, 1).reshape(-1)
 
 
-def _as_float(tensor: gguf.ReaderTensor) -> np.ndarray:
-    if tensor.tensor_type == gguf.GGMLQuantizationType.BF16:
-        raw = np.ascontiguousarray(tensor.data).view(np.uint16).astype(np.uint32) << 16
-        return raw.view(np.float32).reshape(list(reversed(tensor.shape.tolist())))
-    return np.asarray(tensor.data, dtype=np.float32).reshape(list(reversed(tensor.shape.tolist())))
+def stored(tensor: gguf.ReaderTensor) -> Tensor:
+    """A GGUF tensor's values in float32, laid out as torch lays out the model's weight."""
+    values = gguf.quants.dequantize(tensor.data, tensor.tensor_type)
+    return torch.from_numpy(np.array(values, dtype=np.float32)).reshape(list(reversed(tensor.shape.tolist())))
 
 
 def check_targets(
@@ -175,7 +174,7 @@ def check_targets(
                 np.asarray(tensor.data).view(np.uint8).reshape(-1),
             )
         else:
-            same = np.allclose(_as_float(tensor), expected.float().numpy(), rtol=1 / 128, atol=1e-6)
+            same = np.allclose(stored(tensor).numpy(), expected.float().numpy(), rtol=1 / 128, atol=1e-6)
         if not same:
             problems.append(f"{name} doesn't hold the same values as {writer.name}; the converter changed it")
     return problems

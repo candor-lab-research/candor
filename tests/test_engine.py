@@ -772,13 +772,21 @@ def test_a_request_no_one_wants_any_more_is_dropped_at_once(files, tmp_path):
     with s, ThreadPoolExecutor(1) as pool:
         running = pool.submit(s._answer_one, PROMPTS[1], 6000, [], engine.GREEDY, 0, None, requests)
         time.sleep(0.5)
+        logged = s.log.stat().st_size
         requests.stop()
         with pytest.raises(engine.Stopped):
             running.result(timeout=2)
-        # The server dropped it too: the next answer doesn't wait for the rest of it.
-        started = time.monotonic()
+        # The server dropped it too, once nothing else finished for a second: the next answer waited
+        # for that, not for the rest of it.
         s.generate([PROMPTS[0]], 4)
-        assert time.monotonic() - started < 3
+        with s.log.open("rb") as log:
+            log.seek(logged)
+            assert b"cancel task" in log.read()
+        # A request asked for once the answers are stopped is never sent.
+        started = time.monotonic()
+        with pytest.raises(engine.Stopped):
+            s._answer_one(PROMPTS[1], 6000, [], engine.GREEDY, 0, None, requests)
+        assert time.monotonic() - started < 1
 
 
 def test_a_thinking_model_whose_answer_no_one_wants_any_more_doesnt_answer(monkeypatch):

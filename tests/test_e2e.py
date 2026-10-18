@@ -4,13 +4,15 @@ the first time, and sets up llama.cpp's converter)."""
 import json
 import os
 import shutil
+from functools import partial
 from pathlib import Path
 
 import gguf
+import numpy as np
 import pytest
 import torch
 from huggingface_hub import snapshot_download
-from safetensors.torch import save_file
+from safetensors.torch import load_file, save_file
 from transformers import (
     AutoTokenizer,
     LlamaConfig,
@@ -20,10 +22,11 @@ from transformers import (
     Qwen3_5TextConfig,
 )
 
-from candor import checks, config, convert, source, targets, toolchain
+from candor import checks, config, convert, export, source, targets, toolchain
 from candor.config import Measure
 from candor.engine import LlamaServer, Thinking
 from candor.judge import Guard, Verdict, read_verdict
+from candor.weights import ModelFiles
 
 pytestmark = pytest.mark.skipif(os.environ.get("CANDOR_E2E") != "1", reason="set CANDOR_E2E=1 to run")
 MODEL = "HuggingFaceTB/SmolLM2-135M-Instruct"
@@ -67,6 +70,54 @@ def converted_targets(folder: Path, model_gguf: Path) -> list[str]:
     arch = targets.gguf_architecture(config)
     assert found.ok and arch is not None
     return convert.check_targets(model_gguf, folder, found.writers, arch, layers)
+
+
+def test_an_edit_written_into_the_gguf_is_what_the_converter_writes_from_the_edited_weights(
+    converted, tmp_path
+):
+    folder, bf16, _, _ = converted
+    config = source.read_config(str(folder))
+    text = source.text_config(config)
+    layers = text["num_hidden_layers"]
+    found = targets.find_targets(source.tensor_shapes(str(folder)), text["hidden_size"], layers)
+    arch = targets.gguf_architecture(config)
+    assert arch is not None
+    weights = load_file(folder / "model.safetensors")
+    torch.manual_seed(0)
+    # Changes from under half a 16-bit step to large, so rounding is exercised as well as writing.
+    changes = {}
+    for i, writer in enumerate(found.writers[:6]):
+        rows, cols = weights[writer.name].shape
+        changes[writer.name] = (torch.randn(rows, 1) * [1e-5, 1e-3, 1e-1][i % 3], torch.randn(1, cols))
+    # The converter names the GGUF after the folder, so the edited copy keeps the folder's name.
+    edited_folder = tmp_path / "edited" / folder.name
+    shutil.copytree(folder, edited_folder)
+    for name, change in changes.items():
+        weights[name] = export.edited(weights[name], change).to(weights[name].dtype)
+    save_file(weights, edited_folder / "model.safetensors", metadata={"format": "pt"})
+    convert.to_gguf(edited_folder, tmp_path / "converted.gguf", tmp_path / "convert.log")
+    files = ModelFiles(folder)
+
+    def written(name, change):
+        return convert.as_converted(export.edited(files.tensor(name), change), name, arch, config).numpy()
+
+    names = {
+        name: str(targets.gguf_name(w, arch, layers)) for w in found.writers if (name := w.name) in changes
+    }
+    export._rewritten(
+        bf16, tmp_path / "written.gguf", {names[n]: partial(written, n, c) for n, c in changes.items()}
+    )
+    ours, theirs = gguf.GGUFReader(tmp_path / "written.gguf"), gguf.GGUFReader(tmp_path / "converted.gguf")
+    fields = [
+        {f.name: f.contents() for f in r.fields.values() if not f.name.startswith("GGUF.")}
+        for r in (ours, theirs)
+    ]
+    assert fields[0] == fields[1]
+    tensors = [
+        {t.name: (t.tensor_type, bytes(np.asarray(t.data).view(np.uint8))) for t in r.tensors}
+        for r in (ours, theirs)
+    ]
+    assert tensors[0] == tensors[1]
 
 
 def test_a_model_whose_tokenizer_transformers_5_saved_converts_with_the_same_vocabulary(converted, tmp_path):

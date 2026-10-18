@@ -39,6 +39,10 @@ if TYPE_CHECKING:
     from .measure import Edit
 
 MODEL_FILES = ["*.json", "*.safetensors", "*.jinja", "*.txt", "*.model", "*.tiktoken"]
+# Mistral's own format beside the transformers one: the same weights again, which nothing here reads.
+NOT_MODEL_FILES = ["consolidated*.safetensors"]
+# A llama-server log past this many bytes is kept as server.log.1 when the next server starts.
+LOG_BYTES = 50_000_000
 PROMPT_SETS = tuple(config.Prompts.model_fields)
 # Prompt sets the search never sees, kept for comparing finished edits.
 HELD_OUT = ("harmful_held_out", "harmless_held_out")
@@ -252,10 +256,13 @@ class Run:
         before = DEPENDS.get(stage, stages[: stages.index(stage)])
         return {**inputs, "code": {name: STAGES[name] for name in (*before, stage)}}
 
+    def record_for(self, output: Path, inputs: dict[str, Any]) -> dict[str, Any]:
+        """The record output gets when built from these inputs by this version of candor."""
+        return json.loads(json.dumps(self._with_code(output, inputs)))
+
     def current(self, output: Path, inputs: dict[str, Any]) -> bool:
         """Whether output exists and was built from exactly these inputs, by this version of candor."""
-        expected = json.loads(json.dumps(self._with_code(output, inputs)))
-        return output.exists() and read_record(record_of(output)) == expected
+        return output.exists() and read_record(record_of(output)) == self.record_for(output, inputs)
 
     def fresh(self, output: Path, inputs: dict[str, Any]) -> bool:
         """Whether output is current, saying why it will be rebuilt when it isn't."""
@@ -303,20 +310,37 @@ class Run:
                 raise RunError(f"the model folder {folder} is gone; move it back or edit model.source")
             return folder
         self._check_download()
-        return Path(snapshot_download(model.source, revision=model.revision, allow_patterns=self.model_files))
+        return Path(
+            snapshot_download(
+                model.source,
+                revision=model.revision,
+                allow_patterns=self.model_files,
+                ignore_patterns=NOT_MODEL_FILES,
+            )
+        )
 
     def _check_download(self) -> None:
+        """Stop before downloading unless there is room for the download, and for converting the model
+        too while the run has no GGUF of it, where that goes on the same disk."""
         model = self.settings.model
         planned = snapshot_download(
-            model.source, revision=model.revision, allow_patterns=self.model_files, dry_run=True
+            model.source,
+            revision=model.revision,
+            allow_patterns=self.model_files,
+            ignore_patterns=NOT_MODEL_FILES,
+            dry_run=True,
         )
         needed = sum(file.file_size or 0 for file in planned if file.will_download)
         cache = Path(constants.HF_HUB_CACHE)
-        free = shutil.disk_usage(next(p for p in [cache, *cache.parents] if p.exists())).free
+        cache = next(p for p in [cache, *cache.parents] if p.exists())
+        what = "downloading the model"
+        if not self.path("gguf").exists() and cache.stat().st_dev == self.folder.stat().st_dev:
+            needed += self._room(1, True, self._model_without_download)
+            what = "downloading and converting the model"
+        free = shutil.disk_usage(cache).free
         if free < needed:
             raise RunError(
-                f"downloading the model needs {needed / 1e9:.1f} GB free in {cache}; there is "
-                f"{free / 1e9:.1f} GB"
+                f"{what} needs {needed / 1e9:.1f} GB free in {cache}; there is {free / 1e9:.1f} GB"
             )
 
     @cached_property
@@ -410,13 +434,19 @@ class Run:
 
     # GGUF
 
+    def _room(self, copies: int, quantized_needed: bool, where: str, extra: int = 0) -> float:
+        """The bytes this many 16-bit copies of the model, a quantised one and extra bytes take, with
+        a tenth to spare; the model read from where."""
+        weights = sum(
+            math.prod(shape) for shape in source.tensor_shapes(where, self.settings.model.revision).values()
+        )
+        quantized = config.QUANTIZATIONS[self.settings.deployment.quantization] / 8 if quantized_needed else 0
+        return 1.1 * (weights * (2 * copies + quantized) + extra)
+
     def check_disk(self, copies: int, quantized_needed: bool, extra: int = 0) -> None:
         """Stop unless there is room for this many 16-bit copies of the model, a quantised one, and
         extra bytes."""
-        shapes = source.tensor_shapes(str(self.model_folder))
-        weights = sum(math.prod(shape) for shape in shapes.values())
-        quantized = config.QUANTIZATIONS[self.settings.deployment.quantization] / 8 if quantized_needed else 0
-        needed = 1.1 * (weights * (2 * copies + quantized) + extra)
+        needed = self._room(copies, quantized_needed, str(self.model_folder), extra)
         free = shutil.disk_usage(self.folder).free
         if free < needed:
             raise RunError(
@@ -482,6 +512,8 @@ class Run:
         self.path("logs").mkdir(exist_ok=True)
         binary = binaries / "llama-server"
         log = self.path("logs", "server.log")
+        if log.exists() and log.stat().st_size > LOG_BYTES:
+            log.replace(log.with_name("server.log.1"))
         return LlamaServer(
             binary, model, log, adapters, parallel, context_per_slot, extra=extra, slots_setting=slots_setting
         )
@@ -941,26 +973,36 @@ class Run:
                 _remove(leftover)
         return {name: self.adapter_set(root / name, made, inputs) for name, (made, inputs) in sets.items()}
 
+    def changes(self, edit: "Edit") -> dict[str, tuple[torch.Tensor, torch.Tensor]]:
+        """Each weight the edit changes, by its name in the model, and the change as factors (b, a), the
+        strength folded in, laid out as the GGUF stores the weight: what its adapter holds and its
+        export writes, built the same way for both (on one machine, the same numbers)."""
+        _, _, arch, writers = self.shape
+        found = self.edit_directions(edit.name, edit.direction_layer, edit.answering)
+        files = ModelFiles(self.model_folder)
+        model_config = source.read_config(str(self.model_folder))
+        row_norm = RowNorm(self.settings.edit.row_norm)
+        return {
+            writer.name: edit_factors(
+                convert.as_converted(files.tensor(writer.name), writer.name, arch, model_config),
+                found[writer.layer],
+                strength,
+                row_norm,
+            )
+            for writer in writers
+            if (strength := edit.strength(writer))
+        }
+
     def edit_adapter(self, folder: Path, edit: "Edit") -> tuple[Path, dict[str, Any]]:
         """One adapter holding every change the edit makes, at its strengths, applied at scale 1, as an
         edit that isn't linear in strength needs; and what it is built from. Written to folder unless
-        already there. Built on the GPU when there is one, as each "full" change takes an SVD."""
-        _, _, arch, writers = self.shape
-        names = self.target_names
-        found = self.edit_directions(edit.name, edit.direction_layer, edit.answering)
+        already there."""
+        _, _, arch, _ = self.shape
+        self.edit_directions(edit.name, edit.direction_layer, edit.answering)
         inputs = {**self.adapter_inputs(edit.answering), "edit": edit.record()}
         path = folder / "edit.gguf"
         if not self.fresh(path, inputs):
-            files = ModelFiles(self.model_folder)
-            model_config = source.read_config(str(self.model_folder))
-            row_norm = RowNorm(self.settings.edit.row_norm)
-            device = "cuda" if torch.cuda.is_available() else "cpu"
-            factors = {}
-            for writer in writers:
-                if strength := edit.strength(writer):
-                    weight = convert.as_converted(files.tensor(writer.name), writer.name, arch, model_config)
-                    b, a = edit_factors(weight.to(device), found[writer.layer], strength, row_norm)
-                    factors[names[writer.name]] = (b.cpu(), a.cpu())
+            factors = {self.target_names[name]: change for name, change in self.changes(edit).items()}
             if not factors:
                 raise RunError(f"{edit.name} changes no weight")
             folder.mkdir(parents=True, exist_ok=True)
@@ -981,6 +1023,14 @@ class Run:
             made = self.adapters()
             ids = json.loads(self.path("prompts.json").read_text())
             kept = self.thinking_traces() if self.settings.deployment.think_close else {}
+            # Found at the end of a search instead, a pod's disk can't grow without a restart that wipes it.
+            quantized = self.settings.deployment.quantization != convert.float_type(self.model_folder)
+            export = self._room(1, quantized, str(self.model_folder))
+            if (free := shutil.disk_usage(self.folder).free) < export:
+                self.report(
+                    f"Exporting an edit will need about {export / 1e9:.1f} GB free here, and there is "
+                    f"{free / 1e9:.1f} GB: make room before the search ends"
+                )
         # How many prompts of each set KL is read on, after the unedited model's thinking ended by itself.
         thought = {
             f"of {len(kept[name])} {name.replace('_', ' ')} prompts thought through": sum(

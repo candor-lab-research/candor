@@ -680,10 +680,14 @@ def test_scoring_stops_at_the_end_of_the_chunk_that_goes_over(tiny, monkeypatch)
         labels[:], asked[:], read[:] = [True, True, True], [], []
         stopped = scorer.score({}, stop_above=1)
         assert (stopped.refusals, stopped.judged, asked) == (2, 2, [2])
-        # A stopped trial can't win, so its KL is never read.
+        # A trial stopped on its refusals can't win, so its KL is never read.
         assert math.isinf(stopped.kl) and stopped.kl_thinking is None and whole.kl == 0.0 and not read
         labels[:] = [True, True, True]
         assert math.isinf(scorer.score({}, read_kl=False).kl) and not read
+        # One stopped on its thinking reads it: it could count once search.max_budget_hits rises.
+        labels[:] = [False, False, False]
+        budget = scorer.score({}, forced_above=-1)
+        assert budget.judged == 2 and budget.kl == 0.0 and read
         labels[:], asked[:] = [True, True, True], []
         assert scorer.score({}).judged == 3 and asked == [2, 1]
         labels[:], asked[:] = [True, True, False], []
@@ -1357,7 +1361,7 @@ def test_with_nothing_within_the_cap_the_fewest_refused_of_each_kind_is_reported
 
 def test_scoring_a_trial_stopped_early_says_so(tiny, monkeypatch):
     folder = cli_run(tiny, trials=1)
-    scripted(monkeypatch, [Score(1, 0, 0, 0.0, 3), Score(3, 0, 0, 0.1, 1), Score(1, 0, 0, 0.2, 3)])
+    scripted(monkeypatch, [Score(1, 0, 0, 0.0, 3), Score(3, 0, 0, math.inf, 1), Score(1, 0, 0, 0.2, 3)])
     runner = CliRunner(env={"COLUMNS": "200"})
     assert runner.invoke(app, ["search", str(folder)]).exit_code == 0
     monkeypatch.setattr(Search, "score", lambda self, edits: search.Scores(3, 1, [Score(3, 0, 0, 0.1, 3)]))

@@ -24,8 +24,8 @@ refusals can only add up, so a trial that has refused more than the cap, and mor
 trials of its kind, can't win and stops there, unseen by the sampler. With search.max_budget_hits set, an
 edit counts only if its thinking also reaches the budget on no more prompts than that, and a trial stops
 once it can't, though the sampler may see that stop. KL divergence is read from the harmless test
-prompts' first tokens. The held-out prompts are left for candor measure. Nothing a model writes is kept:
-answers are judged, then dropped.
+prompts' first tokens, unless the trial stopped on its refusals. The held-out prompts are left for
+candor measure. Nothing a model writes is kept: answers are judged, then dropped.
 
 Any other edit, such as a heretic trial, can be scored the same way without joining the search, to see
 where it would sit among the search's trials and whether the search could have drawn it.
@@ -62,8 +62,8 @@ from .run import ANSWER_SETS, ANSWERING, STAGES, Run, RunError, answering, diges
 CHUNK = 8
 # The sampler weighs this many candidates for each trial, as heretic does, rather than Optuna's 24.
 CANDIDATES = 128
-# The version of what a trial's score means. Bump it in any commit that changes how trials are scored,
-# so an older search isn't carried on as if it were the same.
+# The version of what a trial's score means. Bump it in any commit that changes a score the sampler or
+# the choice of edits reads, so an older search isn't carried on as if it were the same.
 VERSION = 2
 PER_LAYER, ONE_LAYER = "per layer", "one layer"
 # The kinds of edit, in the order they take turns.
@@ -97,6 +97,7 @@ class Score:
     refusals: int
     keyword_refusals: int
     unlabelled: int
+    # Infinite where it wasn't read, as for a trial stopped on its refusals.
     kl: float
     # Harmful prompts judged: all of them, unless the trial was stopped early.
     judged: int
@@ -1399,8 +1400,8 @@ class _Scorer:
         """An edit's refusals and KL divergence. The harmful prompts are judged CHUNK at a time, in
         order, while the server answers the next ones; with stop_above, it stops once more than that
         many are refused, and with forced_above, once more answers than that reached the thinking
-        budget. A trial stopped can't win, so nothing reads its KL, nor the unedited model's from
-        itself: their KL is left unread, as infinite."""
+        budget. A trial stopped on its refusals can't win, so nothing reads its KL, nor the unedited
+        model's from itself: their KL is left unread, as infinite."""
         refusals = keyword_refusals = unlabelled = judged = thought = forced = 0
         how = self.answering
         answering = self.server.answers(
@@ -1426,7 +1427,9 @@ class _Scorer:
                     forced_above is not None and forced > forced_above
                 ):
                     break
-        if not read_kl or judged < len(self.harmful):
+        # A trial stopped for its refusals stays over the cap, which a search can't change, so its KL
+        # is never read; one stopped for its thinking could count once search.max_budget_hits rises.
+        if not read_kl or (stop_above is not None and refusals > stop_above):
             return Score(refusals, keyword_refusals, unlabelled, math.inf, judged, thought / judged, forced)
         top = self.server.top_logprobs(self.harmless, self.kl_tokens, scales)
         divergence = kl.mean_from_top(self.base, top)

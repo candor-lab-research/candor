@@ -10,7 +10,7 @@ import torch
 import torch.nn.functional as F
 from safetensors.torch import save_file
 
-from candor import config, run
+from candor import config, convert, export, run
 from candor.edit import RowNorm, edit_factors, rank_one
 from candor.kernel import Kernel
 from candor.measure import Edit
@@ -139,3 +139,45 @@ def test_a_full_qwen35_edits_adapter_is_built_in_the_gguf_layout(tmp_path, monke
     weight = ModelFiles(this.model_folder).tensor(OUT_PROJ).float()
     hf_b, hf_a = edit_factors(weight, found[1], 1.2, RowNorm.FULL)
     torch.testing.assert_close(weight[:, CONVERTER_ORDER] + b @ a, (weight + hf_b @ hf_a)[:, CONVERTER_ORDER])
+
+
+def test_a_qwen35_export_writes_and_reads_its_edit_in_the_converters_order(tmp_path, monkeypatch):
+    this = make_run(tmp_path, qwen35(), QWEN35, torch.bfloat16)
+    this.settings.edit.row_norm = "full"
+    found = F.normalize(torch.randn(LAYERS + 1, HIDDEN), dim=-1)
+
+    def fake_directions(self, answering=False):
+        self.inputs["directions"] = "fixed"
+        return found
+
+    monkeypatch.setattr(Run, "directions", fake_directions)
+    edit = Edit("e", None, {"attn": Kernel(1.2, 0.0, 1.2, 1.0)})
+    changes = export.deltas(this, edit)
+    weights = ModelFiles(this.model_folder)
+    weight = weights.tensor(OUT_PROJ).float()
+    # The export writes the weight with the very change its adapter holds, in the converter's order.
+    written = torch.from_numpy(export._written(this, OUT_PROJ, changes[OUT_PROJ]))
+    b, a = adapter_factors(this.edit_adapter(this.path("scores", "e"), edit)[0], "blk.0.ssm_out.weight")
+    torch.testing.assert_close(written, weight[:, CONVERTER_ORDER] + b @ a)
+    # A GGUF holding that reads back as the whole edit, and as the model's own weight changed.
+    path = tmp_path / "edited.gguf"
+    writer = gguf.GGUFWriter(path, "qwen35")
+    for name, gguf_name in this.target_names.items():
+        values = (
+            written
+            if name == OUT_PROJ
+            else convert.as_converted(weights.tensor(name).float(), name, "qwen35", QWEN35)
+        )
+        writer.add_tensor(gguf_name, values.numpy())
+    writer.write_header_to_file()
+    writer.write_kv_data_to_file()
+    writer.write_tensors_to_file()
+    writer.close()
+    assert export.kept(this, path, {OUT_PROJ: changes[OUT_PROJ]})["blk.0.ssm_out.weight"] == pytest.approx(
+        1, abs=1e-5
+    )
+    taken = export.taken_from_gguf(this, path)
+    assert set(taken) == {OUT_PROJ}
+    torch.testing.assert_close(
+        export.edited(weight, taken[OUT_PROJ]), export.edited(weight, changes[OUT_PROJ])
+    )

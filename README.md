@@ -12,8 +12,8 @@ How it works:
    residual stream) for each candidate direction, in the layout llama.cpp's converter gives them.
 3. Load them all into llama-server and score each candidate by setting per-layer strengths per
    request, so nothing is re-converted between trials.
-4. Merge the chosen edit straight into the safetensors files, copying every other file untouched,
-   then convert and quantise it to the GGUF you run, and measure that exact file.
+4. Write the chosen edit into a copy of the model's GGUF, every other tensor untouched, quantise
+   it as you run it, and measure that exact file.
 
 Answers to harmful prompts are only ever written to a run's `private/` folder. Commands print
 counts and measurements, never generated text.
@@ -36,7 +36,7 @@ uv run candor proxy runs/qwen --trial 37 --trial 41            # the search's pi
 uv run candor search runs/rude                                 # search for a better edit, overnight
 uv run candor measure runs/rude --trial 37                     # one of its trials, on held-out prompts
 uv run candor score runs/rude --heretic STUDY.jsonl --trial 170     # where it would sit in the search
-uv run candor export runs/rude --trial 37                      # merge it into the GGUF you run
+uv run candor export runs/rude --trial 37                      # write it into the GGUF you run
 uv run candor measure runs/rude --trial 37 --exported          # measure that exact file
 uv run candor measure runs/rude --seed 1                       # sampled again with other draws: the noise
 uv run candor export runs/rude --outside ~/heretic-save --name heretic-saved   # another tool's edit
@@ -92,8 +92,8 @@ uv run candor serve runs/rude --trial 37                       # chat with it in
   trials starts that afresh.
 - `edit.row_norm = "full"` makes heretic's "full" edit: each edited weight row is scaled back to its
   own length, then the change is kept at heretic's rank of 3, so rows keep their length only roughly,
-  built as heretic builds it (checked against its code; its randomised SVD's seed moves the result
-  by about 1e-5). On Qwen3.5-9B heretic's Trial 161 used it, and a candor search with it did better
+  built as heretic builds it (checked against its code; its randomised SVD's seed moves the change
+  by under 0.1%). On Qwen3.5-9B heretic's Trial 161 used it, and a candor search with it did better
   than one with "pre" (`findings.md`). A "full"
   edit isn't linear in strength, so it can't be one adapter per weight dialled per request: each
   trial gets an adapter built at its strengths and llama-server is restarted with it, which adds
@@ -135,7 +135,8 @@ uv run candor serve runs/rude --trial 37                       # chat with it in
   keyword counts beside it, and the first-token probabilities on the harmless prompts give KL
   divergence. It keeps one number per prompt in `measurements/NAME/`; answers and the judge's
   replies go only to `private/`. `--limit N` measures the first N prompts of each set and estimates
-  the full run's time; a stopped measurement resumes; the Mac is kept awake. `--name` names it, but
+  the full run's time; a stopped measurement resumes from the last answer it saved; the Mac is kept
+  awake. `--name` names it, but
   never as candor names its own (`base`, `trial-N`, `heretic-N`).
 - `compare A B` pairs two measurements prompt by prompt: each count, the change with a 95% interval
   (Bonett and Price's for paired counts; for KL a studentised bootstrap over the prompts), how many
@@ -149,7 +150,7 @@ uv run candor serve runs/rude --trial 37                       # chat with it in
   strengths: it answers the test prompts `slots.search` at a time and the judge counts refusals,
   stopping once the trial has refused more than the cap and more than 25 fully scored trials of its
   kind, which leaves every trial the sampler draws unchanged; KL is read from the 100 harmless test
-  prompts. For a thinking model `search.max_budget_hits` (unset) can also cap the test prompts whose
+  prompts, except for a trial stopped so, which can't win. For a thinking model `search.max_budget_hits` (unset) can also cap the test prompts whose
   thinking reaches the budget: an edit over it doesn't count, and its trial stops there, which unlike
   the refusal stop can change later draws. Changing it carries a search on, its finished trials judged
   again by the new number. Nothing a model writes is kept. Strength starts at heretic's 0.8-1.5. From
@@ -176,20 +177,21 @@ uv run candor serve runs/rude --trial 37                       # chat with it in
   it shows which of the search's best trials beat it on both refusals and KL, and whether the search
   could have drawn it at all. The search's best trial is scored again beside it and should repeat its
   score, which shows the two can be compared. `--trial N` alone scores one of the search's trials.
-- `export` merges a trial's edit into a copy of the model's weights as its adapters apply it, then
-  converts and quantises the copy as the run deploys, checking the edited weights reach the GGUF
-  unchanged. Quantising can round part of a small edit away (on rude-llama, whose weights were 4-bit
-  before, Q4_K_M kept 55-98% of trial 535's and its refusals came back), and so can the merge, as an
-  edit under half a 16-bit step rounds back to the weight. So it measures how much of each edited
-  weight's change the quantised file holds. A weight that kept less than 98% is merged again
-  unrounded, in F32, and quantised as Q8_0 from that, or left in F32 where Q8_0 still falls short
+- `export` writes a trial's edit, as its adapters apply it, into a copy of the run's unquantised
+  GGUF, each edited weight as llama.cpp's converter writes it (checked to give the same file as
+  editing the safetensors and converting them), then quantises it as the run deploys. Quantising can
+  round part of a small edit away (on rude-llama, whose weights were 4-bit before, Q4_K_M kept 55-98%
+  of trial 535's and its refusals came back), and so can writing it in 16 bits, as an edit under half
+  a 16-bit step rounds back to the weight. So it measures how much of each edited weight's change the
+  quantised file holds. A weight that kept less than 98% is written again unrounded, in F32, and
+  quantised as Q8_0 from that, or left in F32 where Q8_0 still falls short
   (straight away for a run deploying Q8_0 or finer); every other tensor keeps its plain type. The
   file is refused if one still falls short. Only `exports/EDIT/RUN-EDIT-QUANTISATION.gguf` is kept.
   `measure --exported` measures that exact file, and `compare` sets it against the unedited model
   and against the trial measured with adapters.
   `export --outside FOLDER --name NAME` ships a copy of the model edited elsewhere, such as heretic's
   own save of one of its trials, the same way (the run's model with each edited weight taken from
-  the copy, so it is converted, quantised and checked alike), and `measure --outside NAME` measures it.
+  the copy, so it is written, quantised and checked alike), and `measure --outside NAME` measures it.
   `--outside` also takes one unquantised GGUF (F32, F16 or BF16), for an edit published only that way;
   a weight that differs from the run's only by rounding to the file's type counts as unedited.
 - `serve` runs the unedited model, or a trial's export, in llama-server as candor measures it: the
@@ -233,7 +235,10 @@ does everything but create and delete it (its header lists every command):
    and `cmd`): Runpod's own start, and a watchdog that deletes the pod HOURS from now (at most 48)
    whatever happens on this side, even if the pod's own start fails. Create it from
    `runpod/pytorch:1.0.2-cu1281-torch280-ubuntu2404` with port `22/tcp`, SSH on, a CUDA floor of
-   12.8 and enough container disk for the run (about 50 GB for rude-llama, 100 GB for Qwen3.5-9B).
+   12.8 and enough container disk for the run: about 7.5 bytes a parameter for the run and its
+   first export, 0.6 for each more export kept, and about 10 GB of tools (about 85 GB for
+   Qwen3.5-9B, 260 GB for a 27B with four exports kept). A container disk can't grow without a
+   restart, which wipes it, so `candor run` warns when an export won't fit.
 2. `export CANDOR_POD=root@IP:PORT` (the pod's direct SSH address), then `scripts/pod.sh setup`
    checks the watchdog is armed, copies this working tree and your Hugging Face token, installs
    candor and checks that torch and llama-server both see the GPU. On Linux torch is the CUDA 12.8

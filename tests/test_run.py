@@ -175,6 +175,19 @@ def test_a_run_with_a_full_edit_has_no_shared_adapters_to_count(tiny):
     assert "adapters" not in done and done["prompts"] > 0
 
 
+def test_a_run_says_when_an_export_wont_fit_before_the_search_starts(tiny, monkeypatch):
+    said = []
+    tiny.report = said.append
+    tiny.prepare()
+    warning = "Exporting an edit will need about"
+    assert not any(line.startswith(warning) for line in said)
+    monkeypatch.setattr(run.shutil, "disk_usage", lambda _: shutil._ntuple_diskusage(0, 0, 1000))
+    tiny.prepare()
+    assert any(
+        line.startswith(warning) and line.endswith("make room before the search ends") for line in said
+    )
+
+
 def test_unchanged_adapters_are_reused_untouched(current):
     this, messages = current
     first = this.adapters()
@@ -310,11 +323,12 @@ def test_a_hub_id_is_never_read_from_a_folder_of_the_same_name(current, monkeypa
     this.settings.model.revision = "abc123"
     calls = []
 
-    def download(repo, revision, allow_patterns, dry_run=False):
+    def download(repo, revision, allow_patterns, ignore_patterns=None, dry_run=False):
         calls.append((repo, revision, dry_run))
         return [] if dry_run else str(tmp_path / "snapshot")
 
     monkeypatch.setattr(run, "snapshot_download", download)
+    monkeypatch.setattr(run.source, "tensor_shapes", lambda model, revision=None: {"w": [4, 4]})
     assert this.model_folder == tmp_path / "snapshot"
     assert calls == [("org/model", "abc123", True), ("org/model", "abc123", False)]
 
@@ -326,11 +340,12 @@ def test_a_models_own_python_is_downloaded_only_when_trusted(current, monkeypatc
     this.settings.model.trust_remote_code = trusted
     patterns = []
 
-    def download(repo, revision, allow_patterns, dry_run=False):
+    def download(repo, revision, allow_patterns, ignore_patterns=None, dry_run=False):
         patterns.append(allow_patterns)
         return [] if dry_run else str(tmp_path)
 
     monkeypatch.setattr(run, "snapshot_download", download)
+    monkeypatch.setattr(run.source, "tensor_shapes", lambda model, revision=None: {"w": [4, 4]})
     assert this.model_folder == tmp_path
     assert all(("*.py" in p) == python for p in patterns)
 
@@ -340,7 +355,7 @@ def test_a_download_that_would_not_fit_stops_before_it_starts(current, monkeypat
     this.settings.model.source = "org/model"
     calls = []
 
-    def download(repo, revision, allow_patterns, dry_run=False):
+    def download(repo, revision, allow_patterns, ignore_patterns=None, dry_run=False):
         calls.append(dry_run)
         planned = [(3000, True), (5000, False), (None, True)]
         if dry_run:
@@ -356,6 +371,7 @@ def test_a_download_that_would_not_fit_stops_before_it_starts(current, monkeypat
     monkeypatch.setattr(run, "snapshot_download", download)
     monkeypatch.setattr(run.constants, "HF_HUB_CACHE", str(tmp_path / "not" / "made" / "yet"))
     monkeypatch.setattr(run.shutil, "disk_usage", disk_usage)
+    this.path("gguf").mkdir()  # converted already
     free = 2999
     with pytest.raises(RunError, match="downloading the model needs"):
         _ = this.model_folder
@@ -364,6 +380,37 @@ def test_a_download_that_would_not_fit_stops_before_it_starts(current, monkeypat
     free = 3000
     assert this.model_folder == tmp_path
     assert calls == [True, True, False]
+
+
+def test_a_download_with_no_room_left_to_convert_stops_before_it_starts(current, monkeypatch, tmp_path):
+    this, _ = current
+    this.settings.model.source = "org/model"
+    monkeypatch.setattr(
+        run,
+        "snapshot_download",
+        lambda *args, dry_run=False, **kwargs: (
+            [SimpleNamespace(file_size=3000, will_download=True)] if dry_run else str(tmp_path)
+        ),
+    )
+    monkeypatch.setattr(run.source, "tensor_shapes", lambda model, revision=None: {"w": [100, 100]})
+    monkeypatch.setattr(run.constants, "HF_HUB_CACHE", str(tmp_path))
+    # Room for the download, and for converting it into a 16-bit and a quantised copy, on the one disk.
+    needed = 3000 + 1.1 * 10_000 * (2 + config.QUANTIZATIONS["Q4_K_M"] / 8)
+    monkeypatch.setattr(
+        run.shutil, "disk_usage", lambda _: shutil._ntuple_diskusage(0, 0, math.floor(needed))
+    )
+    with pytest.raises(RunError, match="downloading and converting the model needs"):
+        _ = this.model_folder
+    monkeypatch.setattr(run.shutil, "disk_usage", lambda _: shutil._ntuple_diskusage(0, 0, math.ceil(needed)))
+    assert this.model_folder == tmp_path
+
+
+def test_mistrals_own_copy_of_the_weights_is_never_downloaded():
+    from huggingface_hub.utils import filter_repo_objects
+
+    files = ["consolidated.safetensors", "model-00001-of-00002.safetensors", "params.json", "config.json"]
+    kept = filter_repo_objects(files, allow_patterns=run.MODEL_FILES, ignore_patterns=run.NOT_MODEL_FILES)
+    assert list(kept) == ["model-00001-of-00002.safetensors", "params.json", "config.json"]
 
 
 @pytest.fixture
@@ -938,6 +985,19 @@ def test_a_damaged_record_means_rebuild_not_crash(current):
     this.path("adapters", "per-layer.inputs.json").write_text('{"half')
     this.adapters()
     assert any("Rebuilding adapters/per-layer" in m for m in messages)
+
+
+def test_a_long_server_log_is_kept_as_the_last_one_when_a_server_starts(current, monkeypatch):
+    this, _ = current
+    monkeypatch.setattr(run.toolchain, "binaries", lambda: Path("/bin"))
+    log = this.path("logs", "server.log")
+    log.parent.mkdir()
+    log.write_bytes(b"x" * 10)
+    this.server(Path("m.gguf"))
+    assert log.exists() and not log.with_name("server.log.1").exists()
+    monkeypatch.setattr(run, "LOG_BYTES", 5)
+    this.server(Path("m.gguf"))
+    assert not log.exists() and log.with_name("server.log.1").read_bytes() == b"x" * 10
 
 
 def test_old_gguf_files_are_cleared_before_the_disk_check(current, fake_conversion, monkeypatch):

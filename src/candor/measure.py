@@ -21,7 +21,7 @@ import numpy as np
 
 from . import export, heretic, kl
 from .edit import FULL_RANK
-from .engine import LlamaServer, Thinking
+from .engine import Answer, LlamaServer, Thinking
 from .judge import Guard, is_refusal, judged_refusal, read_verdict
 from .kernel import Kernel
 from .run import (
@@ -330,7 +330,7 @@ class Measurement:
     ) -> dict[str, Any]:
         """What a set's answers depend on. Everything but the edit and the slots must match for two
         measurements to be compared. An export counts as its edit: it is the run's model, quantised
-        the same way, with the edit merged in."""
+        the same way, with the edit written in."""
         run = self.run
         deployment = run.settings.deployment
         paired: dict[str, Any] = {
@@ -386,24 +386,28 @@ class Measurement:
         thinking: Thinking | None,
         inputs: dict[str, Any],
     ) -> dict[str, Any]:
+        """A set's answers and what reading them gives, committed once every prompt is answered. What
+        needs no answers is done first, so failing there loses none; answers are saved as they come,
+        so a measurement stopped part way answers only the prompts left."""
         run = self.run
         settings = run.settings
         started = time.perf_counter()
-        answers = server.generate(
-            ids,
-            run.answer_tokens[name],
-            scales,
-            self.progress(f"{SHORT_LABELS[name]}: answering", len(ids)),
-            run.sampling(),
-            seeds(self.seed, len(ids)),
-            thinking,
-        )
+        if name == "maths":
+            spec = settings.prompts.maths
+            gold = [gold_number(a) for a in load_prompts(spec.model_copy(update={"column": "answer"}))]
+            gold = gold[: len(ids)] if self.limit else gold
+        read: dict[str, Any] = {}
+        for key, prompts_read in firsts.items():
+            done = self.progress(f"{SHORT_LABELS[name]}: first tokens", len(prompts_read))
+            top = server.top_logprobs(prompts_read, settings.scoring.kl_tokens, scales, done)
+            read[key] = [[[t, p] for t, p in sorted(found.items())] for found in top]
+        answers, before, answering = self._answered(server, name, ids, scales, thinking, inputs)
         # Only what follows a thinking model's thinking is its answer, so only that is judged.
         texts = [a.text for a in answers]
         result: dict[str, Any] = {
             "finished": [a.finished for a in answers],
             "tokens": [a.tokens for a in answers],
-            "answer_seconds": time.perf_counter() - started,
+            "answer_seconds": before + answering,
             "seed": self.seed,
         }
         if thinking:
@@ -413,18 +417,11 @@ class Measurement:
             result["keyword_refused"] = [is_refusal(text) for text in texts]
             result["prompts"] = digest(prompts)
         if name == "maths":
-            spec = settings.prompts.maths
-            gold = [gold_number(a) for a in load_prompts(spec.model_copy(update={"column": "answer"}))]
-            gold = gold[: len(answers)] if self.limit else gold
             result["correct"] = [
                 is_correct(a.text, g, a.finished) for a, g in zip(answers, gold, strict=True)
             ]
-        for key, prompts_read in firsts.items():
-            done = self.progress(f"{SHORT_LABELS[name]}: first tokens", len(prompts_read))
-            top = server.top_logprobs(prompts_read, settings.scoring.kl_tokens, scales, done)
-            result[key] = [[[t, p] for t, p in sorted(found.items())] for found in top]
-        result |= {
-            "seconds": time.perf_counter() - started,
+        result |= read | {
+            "seconds": before + time.perf_counter() - started,
             "slots": self.slots,
             "paired": digest(inputs["paired"]),
             "answers": digest(texts),
@@ -434,7 +431,63 @@ class Measurement:
         partial = path.with_name(path.name + ".building")
         partial.write_text(json.dumps(result))
         self.run.commit(partial, path, inputs)
+        self._private(f"{name}.answering.jsonl").unlink(missing_ok=True)
         return result
+
+    def _answered(
+        self,
+        server: LlamaServer,
+        name: str,
+        ids: list[list[int]],
+        scales: dict[Path, float],
+        thinking: Thinking | None,
+        inputs: dict[str, Any],
+    ) -> tuple[list[Answer], float, float]:
+        """Every prompt's answer, the seconds earlier sessions spent answering it and the seconds this
+        one did. Each answer is saved as it comes, to the private folder, with the set's record; those a
+        measurement stopped part way saved from the same inputs are kept, and only the rest are asked
+        for, each with its own seed, as it would have been."""
+        run = self.run
+        journal = self._private(f"{name}.answering.jsonl")
+        record = {"record": run.record_for(self.folder / f"{name}.json", inputs)}
+        saved = _journal(journal)
+        kept: dict[int, dict[str, Any]] = {e["i"]: e for e in saved[1:]} if saved[:1] == [record] else {}
+        before = max((e["at"] for e in kept.values()), default=0.0)
+        todo = [i for i in range(len(ids)) if i not in kept]
+        if kept:
+            run.report(f"Answering the {len(todo)} {LABELS[name]} a stopped measurement left of {len(ids)}")
+        prompt_seeds = seeds(self.seed, len(ids))
+        journal.parent.mkdir(parents=True, exist_ok=True)
+        with journal.open("w") as out:
+            for line in [record, *kept.values()]:
+                out.write(json.dumps(line) + "\n")
+            out.flush()
+            started = time.perf_counter()
+
+            def save(place: int, answer: Answer) -> None:
+                entry = {
+                    "i": todo[place],
+                    "answer": asdict(answer),
+                    "at": before + time.perf_counter() - started,
+                }
+                out.write(json.dumps(entry) + "\n")
+                out.flush()
+
+            new = server.generate(
+                [ids[i] for i in todo],
+                run.answer_tokens[name],
+                scales,
+                self.progress(f"{SHORT_LABELS[name]}: answering", len(todo)),
+                run.sampling(),
+                [prompt_seeds[i] for i in todo],
+                thinking,
+                each=save,
+            )
+            answering = time.perf_counter() - started
+        found = {i: Answer(**entry["answer"]) for i, entry in kept.items()} | dict(
+            zip(todo, new, strict=True)
+        )
+        return [found[i] for i in range(len(ids))], before, answering
 
     def _texts(self, name: str) -> list[str]:
         """A set's prompts as the model is asked them, read from their datasets once, when first needed."""
@@ -544,6 +597,19 @@ def _kl(a: list[list[list[float]]], b: list[list[list[float]]]) -> list[float]:
     return [
         kl.from_top({int(t): p for t, p in x}, {int(t): p for t, p in y}) for x, y in zip(a, b, strict=True)
     ]
+
+
+def _journal(path: Path) -> list[dict[str, Any]]:
+    """The lines a set's answers were saved in as they came, the first its record, leaving out a last one
+    a stop cut short."""
+    lines = path.read_text().splitlines() if path.exists() else []
+    found = []
+    for line in lines:
+        try:
+            found.append(json.loads(line))
+        except json.JSONDecodeError:
+            break
+    return found
 
 
 def seconds(result: dict[str, Any]) -> float:

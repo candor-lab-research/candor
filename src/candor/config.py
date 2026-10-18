@@ -52,7 +52,8 @@ KV_CACHE_TYPES = {
 }
 # The thinking budget init gives a model that thinks: the longest llama-server's chat page offers.
 THINKING_BUDGET = 8192
-# How many answers llama-server works on at once unless [slots] says otherwise.
+# How many answers llama-server works on at once unless [slots] says otherwise: what runs used before
+# slots were settings, so a candor.toml without them reads as it did.
 THINKING_SLOTS = 8
 SEARCH_SLOTS = 8
 MEASURE_SLOTS = 8

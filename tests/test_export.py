@@ -1,5 +1,6 @@
 import json
 import re
+import shutil
 from collections.abc import Callable
 from dataclasses import replace
 from functools import partial
@@ -11,11 +12,11 @@ import torch
 from safetensors.torch import load_file, save_file
 from typer.testing import CliRunner
 
-from candor import config, convert, export, measure, merge, run
+from candor import config, convert, export, measure, run
 from candor.cli import app
 from candor.convert import check_targets
 from candor.convert import quantize as real_quantize
-from candor.edit import RowNorm, edit_factors, rank_one
+from candor.edit import RowNorm, rank_one
 from candor.kernel import Kernel
 from candor.measure import Edit, Measurement
 from candor.run import Run, RunError
@@ -28,39 +29,50 @@ from .tiny_gguf import HIDDEN, random_weights, write_model
 from .tiny_run import HF_NAMES, THINKING_TEMPLATE, thinking
 
 GGUF_NAMES = {hf: kind for kind, hf in HF_NAMES.items()}
+TYPE = gguf.GGMLQuantizationType
 
 
-def gguf_from_folder(folder, destination, log, rounded_to=torch.float32, thinks=False):
+def gguf_from_folder(folder, destination, log, rounded_to=torch.float32, thinks=False, types=None):
     """The tiny model's GGUF with the layer weights of a Hugging Face folder, as the converter would
-    write it, rounded to a type and of the thinking model when it thinks: the tiny run's own converter
-    only copies the unedited GGUF."""
+    write it, rounded to a type, its matrices stored as types gives, and of the thinking model when it
+    thinks: the tiny run's own converter only copies the unedited GGUF."""
     weights = random_weights()
     for name, tensor in load_file(folder / "model.safetensors").items():
         _, _, layer, *kind, _ = name.split(".")
         weights[f"blk.{layer}.{GGUF_NAMES['.'.join(kind)]}.weight"] = tensor.to(rounded_to).float().numpy()
-    write_model(destination, weights, THINKING_TEMPLATE if thinks else TEMPLATE, thinking=thinks)
+    kinds = {name: types for name, array in weights.items() if array.ndim == 2} if types else None
+    write_model(destination, weights, THINKING_TEMPLATE if thinks else TEMPLATE, thinking=thinks, types=kinds)
 
 
 @pytest.fixture
 def converting(tiny, monkeypatch):
-    calls = []
-
-    def to_gguf(folder, destination, log):
-        if "exports" in destination.parts:  # not the run's own conversion of the unedited model
-            calls.append(folder)
-        gguf_from_folder(folder, destination, log, thinks=bool(tiny.settings.deployment.think_close))
-
-    monkeypatch.setattr(convert, "to_gguf", to_gguf)
+    """The run's GGUF made from the tiny model's own weights, as the converter would, and every export
+    written, by where it goes."""
+    monkeypatch.setattr(
+        convert,
+        "to_gguf",
+        lambda folder, destination, log: gguf_from_folder(
+            folder, destination, log, thinks=bool(tiny.settings.deployment.think_close)
+        ),
+    )
     monkeypatch.setattr(convert, "check_targets", check_targets)
-    return calls
+    shipped = []
+    real = export._ship
+    monkeypatch.setattr(
+        export, "_ship", lambda run, path, *args: shipped.append(path) or real(run, path, *args)
+    )
+    return shipped
 
 
 def kl_between(a, b):
     return float(next(row for row in measure.compare(a, b) if row[0] == "Harmless KL from A")[2])
 
 
-@pytest.mark.parametrize("row_norm", ["pre", "none", "full"])
-@pytest.mark.parametrize("edit", [EDIT, Edit("trial", None, EDIT.kernels)], ids=["one layer", "per layer"])
+@pytest.mark.parametrize(
+    ("row_norm", "edit"),
+    [("pre", EDIT), ("none", Edit("trial", None, EDIT.kernels)), ("full", Edit("trial", None, EDIT.kernels))],
+    ids=["pre, one layer", "none, per layer", "full, per layer"],
+)
 def test_the_export_answers_as_the_model_with_the_edits_adapters(tiny, converting, edit, row_norm):
     tiny.settings.edit.row_norm = row_norm
     shipped = export.export(tiny, edit)
@@ -162,22 +174,6 @@ def test_an_export_is_reused_until_the_edit_or_the_quantisation_changes(tiny, co
     assert sorted(p.name for p in again.parent.iterdir()) == [again.name, f"{again.name}.inputs.json"]
 
 
-@pytest.mark.parametrize("row_norm", list(RowNorm))
-def test_merging_before_the_qwen35_reorder_gives_the_adapter_built_after_it(row_norm):
-    config = {"linear_num_key_heads": 2, "linear_num_value_heads": 4, "linear_value_head_dim": 3}
-    name = "model.language_model.layers.0.linear_attn.out_proj.weight"
-    torch.manual_seed(0)
-    # Enough rows for a "full" edit's rank-3 SVD; its randomised SVD of reordered columns agrees to
-    # within a few parts in a million.
-    weight, direction = torch.randn(16, 12), torch.nn.functional.normalize(torch.randn(16), dim=0)
-    b, a = edit_factors(weight, direction, 1.3, row_norm)
-    reordered = convert.as_converted(weight, name, "qwen35", config)
-    assert not torch.equal(reordered, weight)
-    b_converted, a_converted = edit_factors(reordered, direction, 1.3, row_norm)
-    merged = convert.as_converted(weight + b @ a, name, "qwen35", config)
-    torch.testing.assert_close(merged, reordered + b_converted @ a_converted)
-
-
 def test_the_deployed_float_type_is_exported_without_quantising(tiny, converting, monkeypatch):
     def refuse(*_):
         raise AssertionError("quantised")
@@ -244,7 +240,7 @@ def losing(tiny, monkeypatch, share=0.5, at_q8_0: float | Callable[[str], float]
             asked.append(types)
         weights, kinds = {}, {}
         for tensor in gguf.GGUFReader(base).tensors:
-            values = export._stored(tensor).numpy()
+            values = convert.stored(tensor).numpy()
             kind = (types or {}).get(tensor.name) or ("F16" if values.ndim == 2 else "F32")
             kept = {"F16": share, "Q8_0": at_q8_0, "F32": at_f32}[kind]
             kept = kept(tensor.name) if callable(kept) else kept
@@ -295,7 +291,8 @@ def test_weights_q8_0_still_rounds_the_edit_away_from_stay_f32_and_the_rest_q8_0
     assert down and down != edited
     plain = convert.tensor_types(tiny.gguf()[1])
     held = dict.fromkeys(edited - down, "Q8_0") | dict.fromkeys(down, "F32")
-    assert asked == [None, plain | dict.fromkeys(edited, "Q8_0"), plain | held]
+    # F32 is written straight into the file, not asked of llama-quantize.
+    assert asked == [None, plain | dict.fromkeys(edited, "Q8_0")]
     assert convert.tensor_types(shipped) == plain | held
     assert any(
         line.startswith("Q8_0 keeps ")
@@ -310,15 +307,18 @@ def test_a_run_deploying_q8_0_stores_what_it_rounds_away_as_f32(tiny, converting
     shipped = export.export(tiny, EDIT)
     assert shipped.name == "tiny-trial-Q8_0.gguf"
     plain = convert.tensor_types(tiny.gguf()[1])
-    assert asked == [None, plain | dict.fromkeys(edited_in_gguf(tiny), "F32")]
+    assert asked == [None]
+    assert convert.tensor_types(shipped) == plain | dict.fromkeys(edited_in_gguf(tiny), "F32")
 
 
-def test_a_weight_kept_in_f32_holds_its_merge_unrounded_in_one_gguf(tiny, converting, monkeypatch):
-    # The tiny model's float type is BF16, which the converter rounds the merged weights to.
+def test_a_weight_kept_in_f32_holds_its_change_unrounded_in_one_gguf(tiny, converting, monkeypatch):
+    # The tiny model's float type is BF16, which the converter rounds the weights to.
     monkeypatch.setattr(
         convert,
         "to_gguf",
-        lambda folder, destination, log: gguf_from_folder(folder, destination, log, torch.bfloat16),
+        lambda folder, destination, log: gguf_from_folder(
+            folder, destination, log, torch.bfloat16, types=TYPE.BF16
+        ),
     )
     asked = losing(tiny, monkeypatch, at_q8_0=0.5)
     said = []
@@ -330,12 +330,12 @@ def test_a_weight_kept_in_f32_holds_its_merge_unrounded_in_one_gguf(tiny, conver
     for name, (b, a) in export.deltas(tiny, EDIT).items():
         tensor = stored[tiny.target_names[name]]
         assert tensor.tensor_type == TYPE.F32
-        assert torch.equal(export._stored(tensor), original[name].float() + b.float() @ a.float())
-    assert any(line.startswith("Merged in BF16, those kept ") for line in said)
+        assert torch.equal(convert.stored(tensor), original[name].float() + b.float() @ a.float())
+    assert any(line.startswith("Written in BF16, those kept ") for line in said)
     edited = edited_in_gguf(tiny)
     record = json.loads(run.record_of(shipped).read_text())
     assert record["apart"] == dict.fromkeys(edited, "F32")
-    assert export.export(tiny, EDIT) == shipped and len(asked) == 3
+    assert export.export(tiny, EDIT) == shipped and len(asked) == 2
     Measurement(tiny, EDIT, "merged", exported=True).measure()
 
 
@@ -347,7 +347,7 @@ def test_an_export_recorded_before_it_listed_what_it_holds_apart_is_reused_unles
     record = json.loads(run.record_of(shipped).read_text())
     del record["apart"]  # as candor recorded exports before it listed the tensors they hold apart
     run.record_of(shipped).write_text(json.dumps(record))
-    assert export.export(tiny, EDIT) == shipped and len(asked) == 3
+    assert export.export(tiny, EDIT) == shipped and len(asked) == 2
     Measurement(tiny, EDIT, "reused", exported=True).measure()
     # An unedited tensor's type moved, as llama-quantize moved some past a tensor given its own type.
     moved = tiny.folder / "moved.gguf"
@@ -363,44 +363,47 @@ def test_an_export_recorded_before_it_listed_what_it_holds_apart_is_reused_unles
         Measurement(tiny, EDIT, "stale", exported=True).measure()
 
 
-def test_a_run_deploying_its_float_type_stores_what_the_merge_rounds_away_in_f32_unquantised(
-    tiny, converting, monkeypatch
+def to_a_float_type(base, destination, quantization, log, types=None):
+    """llama-quantize given a float type: every matrix in that type, whatever types asks."""
+    weights = {tensor.name: convert.stored(tensor).numpy() for tensor in gguf.GGUFReader(base).tensors}
+    kinds = {name: TYPE[quantization] for name, values in weights.items() if values.ndim == 2}
+    write_model(destination, weights, TEMPLATE, types=kinds)
+
+
+# An edit too small for 16 bits to hold: under half a step of the weights it changes.
+TINY = Edit("trial", 0.4, {"attn": Kernel(1e-5, 1.0, 1e-5, 1.0), "mlp": Kernel(1e-5, 0.0, 1e-5, 1.0)})
+
+
+@pytest.mark.parametrize(
+    ("stored", "deployed"),
+    # BF16 weights are exact in F16, so only the edit's rounding moves what the export reads.
+    [(torch.bfloat16, "BF16"), (torch.bfloat16, "F16")],
+    ids=["its float type", "another float type"],
+)
+def test_a_float_deployment_stores_what_16_bits_round_away_in_f32(
+    tiny, converting, monkeypatch, stored, deployed
 ):
-    tiny.settings.deployment.quantization = "BF16"  # the tiny model's float type
-    original = load_file(tiny.model_folder / "model.safetensors")
-
-    def halving(folder, destination, log):
-        """The converter writing matrices in F16 and keeping half of each change, as rounding to 16 bits
-        keeps of a tiny edit."""
-        weights = random_weights()
-        for name, tensor in load_file(folder / "model.safetensors").items():
-            _, _, layer, *kind, _ = name.split(".")
-            kept = original[name] + (tensor - original[name]) / 2
-            weights[f"blk.{layer}.{GGUF_NAMES['.'.join(kind)]}.weight"] = kept.numpy()
-        matrices = {name: TYPE.F16 for name, array in weights.items() if array.ndim == 2}
-        write_model(destination, weights, TEMPLATE, types=matrices)
-
-    def refuse(*_):
-        raise AssertionError("quantised")
-
-    monkeypatch.setattr(convert, "to_gguf", halving)
-    monkeypatch.setattr(convert, "check_targets", lambda *_: [])
-    monkeypatch.setattr(convert, "quantize", refuse)
+    # A checkpoint stored in 16 bits, as real ones are, so its GGUF holds every weight exactly.
+    weights = tiny.model_folder / "model.safetensors"
+    save_file({name: tensor.to(stored) for name, tensor in load_file(weights).items()}, weights)
+    monkeypatch.setattr(
+        convert,
+        "to_gguf",
+        lambda folder, destination, log: gguf_from_folder(
+            folder, destination, log, stored, types=TYPE.BF16 if stored == torch.bfloat16 else TYPE.F16
+        ),
+    )
+    monkeypatch.setattr(convert, "quantize", to_a_float_type)
+    tiny.settings.deployment.quantization = deployed
     said = []
     tiny.report = said.append
-    shipped = export.export(tiny, EDIT)
-    edited = edited_in_gguf(tiny)
-    plain = convert.tensor_types(tiny.gguf()[1])
-    assert convert.tensor_types(shipped) == plain | dict.fromkeys(edited, "F32")
+    shipped = export.export(tiny, TINY)
+    edited = {tiny.target_names[name] for name in export.deltas(tiny, TINY)}
+    assert edited and {convert.tensor_types(shipped)[name] for name in edited} == {"F32"}
     assert json.loads(run.record_of(shipped).read_text())["apart"] == dict.fromkeys(edited, "F32")
-    assert (
-        f"BF16 keeps 50.0% to 50.0% of the edit in {len(edited)} of {len(edited)} edited weights; "
-        "storing those as F32"
-    ) in said
-    assert all(
-        share == pytest.approx(1, abs=1e-6)
-        for share in export.kept(tiny, shipped, export.deltas(tiny, EDIT)).values()
-    )
+    assert any(line.endswith("storing those as F32") for line in said)
+    held = export.kept(tiny, shipped, export.deltas(tiny, TINY))
+    assert all(share == pytest.approx(1, abs=1e-6) for share in held.values())
 
 
 def test_a_bf16_gguf_rewritten_with_some_tensors_in_f32_keeps_everything_else(tmp_path):
@@ -411,16 +414,20 @@ def test_a_bf16_gguf_rewritten_with_some_tensors_in_f32_keeps_everything_else(tm
         TEMPLATE,
         types={name: TYPE.BF16 for name, array in weights.items() if array.ndim == 2},
     )
-    # Values BF16 can't hold, as an unrounded merge's.
+    # Values BF16 can't hold, as an unrounded change's.
     replaced = {
         name: weights[name] * np.float32(1.001)
         for name in ("blk.0.ffn_down.weight", "blk.1.attn_output.weight")
     }
-    export._in_float32(
-        tmp_path / "bf16.gguf",
-        tmp_path / "f32.gguf",
-        {name: partial(values.copy) for name, values in replaced.items()},
-    )
+    functions = {name: partial(values.copy) for name, values in replaced.items()}
+    export._rewritten(tmp_path / "bf16.gguf", tmp_path / "f32.gguf", functions, export.F32)
+    # Without a type, each keeps its own, rounded as the converter rounds.
+    export._rewritten(tmp_path / "bf16.gguf", tmp_path / "rounded.gguf", functions)
+    for tensor in gguf.GGUFReader(tmp_path / "rounded.gguf").tensors:
+        if tensor.name in replaced:
+            assert tensor.tensor_type == TYPE.BF16
+            expected = torch.from_numpy(replaced[tensor.name]).to(torch.bfloat16).float()
+            assert torch.equal(convert.stored(tensor), expected)
     before, after = gguf.GGUFReader(tmp_path / "bf16.gguf"), gguf.GGUFReader(tmp_path / "f32.gguf")
 
     def fields(reader):
@@ -434,32 +441,34 @@ def test_a_bf16_gguf_rewritten_with_some_tensors_in_f32_keeps_everything_else(tm
     for tensor in after.tensors:
         if tensor.name in replaced:
             assert tensor.tensor_type == TYPE.F32
-            assert np.array_equal(export._stored(tensor).numpy(), replaced[tensor.name])
+            assert np.array_equal(convert.stored(tensor).numpy(), replaced[tensor.name])
         else:
             assert tensor.tensor_type == unchanged[tensor.name].tensor_type
             assert np.array_equal(np.asarray(tensor.data), np.asarray(unchanged[tensor.name].data))
 
 
-@pytest.mark.parametrize("share", [0.0, 0.5])
-def test_an_edit_still_lost_in_f32_is_refused(tiny, converting, monkeypatch, share):
-    asked = losing(tiny, monkeypatch, share, share, share)
-    with pytest.raises(
-        RunError, match=f"keep less than 98% of the edit even stored as F32, e.g. .* {share:.1%}"
-    ):
+def test_a_file_that_still_falls_short_in_f32_is_refused(tiny, converting, monkeypatch):
+    asked = losing(tiny, monkeypatch, 0.5, 0.5)
+    by_gguf_name = {gguf_name: name for name, gguf_name in tiny.target_names.items()}
+    # As if what was written in F32 didn't hold the change.
+    monkeypatch.setattr(
+        export, "_values", lambda tensor: tiny_weight(tiny, by_gguf_name[tensor.name]).numpy()
+    )
+    with pytest.raises(RunError, match=r"keep less than 98% of the edit even stored as F32, e\.g\. .* 0\.0%"):
         export.export(tiny, EDIT)
-    assert len(asked) == 3
+    assert len(asked) == 2
     assert not tiny.path("exports", "trial", "tiny-trial-Q4_K_M.gguf").exists()
 
 
-def test_an_edit_lost_even_merged_unrounded_is_refused_as_the_merges(tiny, converting, monkeypatch):
+def tiny_weight(tiny, name):
+    return export.ModelFiles(tiny.model_folder).tensor(name).float()
+
+
+def test_an_edit_lost_even_written_unrounded_is_refused(tiny, converting, monkeypatch):
     asked = losing(tiny, monkeypatch)
-    monkeypatch.setattr(
-        export,
-        "_unrounded",
-        lambda run, name, change: export.ModelFiles(run.model_folder).tensor(name).numpy(),
-    )
+    monkeypatch.setattr(export, "_written", lambda run, name, change: tiny_weight(run, name).numpy())
     with pytest.raises(
-        RunError, match="keep less than 98% of the edit even merged unrounded, in F32, before quantising"
+        RunError, match="keep less than 98% of the edit even written unrounded, in F32, before quantising"
     ):
         export.export(tiny, EDIT)
     assert asked == [None]
@@ -499,27 +508,16 @@ def test_llama_quantize_given_every_tensors_type_changes_only_the_one_given_anot
 
 
 def test_a_failed_export_leaves_nothing_behind(tiny, monkeypatch):
-    def broken(folder, destination, log):
-        if "exports" not in destination.parts:
-            return gguf_from_folder(folder, destination, log)
-        destination.write_bytes(b"half")
-        raise convert.ConversionError("llama.cpp's converter failed")
+    tiny.gguf()
 
-    monkeypatch.setattr(convert, "to_gguf", broken)
+    def broken(base, destination, *_):
+        destination.write_bytes(b"half")
+        raise convert.ConversionError("llama-quantize failed")
+
+    monkeypatch.setattr(convert, "quantize", broken)
     with pytest.raises(convert.ConversionError):
         export.export(tiny, EDIT)
     assert list(tiny.path("exports", "trial").iterdir()) == []
-
-
-def test_an_export_whose_converter_changed_an_edited_weight_is_refused(tiny, monkeypatch):
-    def unedited(folder, destination, log):
-        gguf_from_folder(tiny.model_folder, destination, log)
-
-    monkeypatch.setattr(convert, "to_gguf", unedited)
-    monkeypatch.setattr(convert, "check_targets", check_targets)
-    with pytest.raises(RunError, match="doesn't hold the edited weights unchanged"):
-        export.export(tiny, EDIT)
-    assert not tiny.path("exports", "trial", "tiny-trial-Q4_K_M.gguf").exists()
 
 
 def test_only_an_edit_has_an_export_to_measure(tiny):
@@ -558,10 +556,12 @@ def test_exported_needs_a_trial(tiny):
 
 
 def saved_elsewhere(tiny, rename=lambda name: name, called="saved"):
-    """A copy of the tiny model with EDIT merged in, as another tool would save it."""
+    """A copy of the tiny model with EDIT in its weights, as another tool would save it."""
     folder = tiny.folder.parent / called
-    merge.merge(tiny.model_folder, folder, export.deltas(tiny, EDIT))
+    shutil.copytree(tiny.model_folder, folder)
     weights = load_file(folder / "model.safetensors")
+    for name, change in export.deltas(tiny, EDIT).items():
+        weights[name] = export.edited(weights[name], change).to(weights[name].dtype)
     save_file({rename(name): tensor for name, tensor in weights.items()}, folder / "model.safetensors")
     return folder
 
@@ -632,9 +632,6 @@ def test_models_edited_elsewhere_that_cant_be_taken_are_refused(tiny, converting
         export.export_outside(tiny, "renamed", folder)
     with pytest.raises(RunError, match="has no export in Q4_K_M; run candor export --outside first"):
         Measurement(tiny, None, "missing", outside="missing").measure()
-
-
-TYPE = gguf.GGMLQuantizationType
 
 
 def gguf_holding(tiny, path, folder, kind=TYPE.F32, arch: str | None = "llama", only=None):

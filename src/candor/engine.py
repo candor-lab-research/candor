@@ -48,8 +48,8 @@ class Stopped(Exception):
 
 class Requests:
     """The requests behind one set of answers, each on a connection of its own, so stop() can end every
-    one still running at once: llama-server drops a request whose connection closes, within a second,
-    rather than finish a thinking no one will read."""
+    one still running at once. llama-server drops a request whose connection closes once a second passes
+    with no request finishing, rather than finish a thinking no one will read."""
 
     def __init__(self) -> None:
         self.stopped = False
@@ -60,9 +60,10 @@ class Requests:
         with self.lock:
             self.stopped = True
             for connection in self.open:
-                if connection.sock is not None:
+                # The worker's own close can clear sock meanwhile.
+                if (sock := connection.sock) is not None:
                     with suppress(OSError):
-                        connection.sock.shutdown(socket.SHUT_RDWR)
+                        sock.shutdown(socket.SHUT_RDWR)
 
 
 @dataclass(frozen=True)
@@ -231,10 +232,9 @@ class LlamaServer:
         # unedited prompt with an edited answer. cache_prompt false makes every request start from
         # position 0, which the engine test checks.
         body = {**payload, "cache_prompt": False}
-        timeout = _answering(payload["n_predict"])
         if requests is None:
-            return self._call("POST", "/completion", timeout, json=body)
-        return self._stoppable(body, timeout.read or 0, requests)
+            return self._call("POST", "/completion", _answering(payload["n_predict"]), json=body)
+        return self._stoppable(body, _answer_seconds(payload["n_predict"]), requests)
 
     def _stoppable(self, body: dict[str, Any], timeout: float, requests: Requests) -> dict[str, Any]:
         """The server's answer to a /completion request that requests.stop() ends at once, on a connection
@@ -268,15 +268,23 @@ class LlamaServer:
         """Every payload's result, in order. done is called as each one finishes."""
         return self._all([partial(self._complete, payload) for payload in payloads], done)
 
-    def _all[T](self, work: Sequence[Callable[[], T]], done: Callable[[], None] | None = None) -> list[T]:
-        """Every piece of work's result, in order, as many at once as the server has slots. done is
-        called as each one finishes."""
+    def _all[T](
+        self,
+        work: Sequence[Callable[[], T]],
+        done: Callable[[], None] | None = None,
+        each: Callable[[int, T], None] | None = None,
+    ) -> list[T]:
+        """Every piece of work's result, in order, as many at once as the server has slots. As each one
+        finishes, done is called, and each with its place and its result."""
         results: list[Any] = [None] * len(work)
         pool = ThreadPoolExecutor(self.parallel)
         try:
             futures = {pool.submit(job): i for i, job in enumerate(work)}
             for future in as_completed(futures):
-                results[futures[future]] = future.result()
+                i = futures[future]
+                results[i] = future.result()
+                if each:
+                    each(i, results[i])
                 if done:
                     done()
         except BaseException:
@@ -342,15 +350,17 @@ class LlamaServer:
         sampling: Mapping[str, float] = GREEDY,
         seeds: list[int] | None = None,
         thinking: Thinking | None = None,
+        each: Callable[[int, Answer], None] | None = None,
     ) -> list[Answer]:
         """Answers to prompts given as token ids, max_tokens long at most after any thinking, sampled
-        with each prompt's seed. done is called as each one finishes."""
+        with each prompt's seed. As each one finishes, done is called, and each with its place and
+        the answer."""
         lora = self.lora(scales)
         work = [
             partial(self._answer_one, prompt, max_tokens, lora, sampling, seed, thinking)
             for prompt, seed in zip(prompts, seeds or [0] * len(prompts), strict=True)
         ]
-        return self._all(work, done)
+        return self._all(work, done, each)
 
     def answers(
         self,
@@ -362,7 +372,8 @@ class LlamaServer:
         thinking: Thinking | None = None,
     ) -> Generator[Answer]:
         """generate's answers in order, each as soon as it is ready. The server answers the rest
-        meanwhile. Closing the iterator early cancels those not yet started."""
+        meanwhile. Closing the iterator early ends those still running and cancels those not yet
+        started."""
         lora = self.lora(scales)
         seeds = seeds or [0] * len(prompts)
         requests = Requests()
@@ -375,8 +386,8 @@ class LlamaServer:
             for future in futures:
                 yield future.result()
         except GeneratorExit:
-            # The server drops a request whose connection closes, so close those still running, and
-            # wait the moment that takes rather than let them slow whatever is asked next.
+            # The server drops a request whose connection closes (see Requests), so close those still
+            # running rather than wait for them to finish.
             requests.stop()
             pool.shutdown(cancel_futures=True)
             raise
@@ -575,10 +586,14 @@ def _quoted(field: str) -> str:
     return '"' + field.replace('"', '""') + '"'
 
 
-def _answering(tokens: int) -> httpx.Timeout:
+def _answer_seconds(tokens: int) -> float:
     """A limit for a request that answers only once its whole answer is ready: 10 minutes plus a
     second per token, so only a server that has stopped working can reach it."""
-    return httpx.Timeout(600 + tokens, connect=5)
+    return 600 + tokens
+
+
+def _answering(tokens: int) -> httpx.Timeout:
+    return httpx.Timeout(_answer_seconds(tokens), connect=5)
 
 
 def _free_port() -> int:
