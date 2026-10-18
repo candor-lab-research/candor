@@ -103,6 +103,11 @@ def quantize(
     _run("llama-quantize", [*args, base, destination, quantization], log)
 
 
+def tensor_types(model_gguf: Path) -> dict[str, str]:
+    """Each tensor's type in a GGUF, by name."""
+    return {tensor.name: tensor.tensor_type.name for tensor in gguf.GGUFReader(model_gguf).tensors}
+
+
 def as_converted(weight: Tensor, name: str, arch: str, config: dict[str, Any]) -> Tensor:
     """The weight as llama.cpp b11524's converter writes it into the GGUF.
 

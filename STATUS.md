@@ -68,8 +68,8 @@ thinking on (next, e.g. Qwen3.8-27B). A 9B model must not take days.
    - small fixes: an interrupted `candor proxy` scores the unedited model again; the search prints
      "Rebuilding scores/trial/edit.gguf" every "full" trial; `serve` downloads the original weights
      only to fingerprint the run; an `inspect` warning when weights were quantised before; the
-     export's file name when some tensors are Q8_0; a local model copied to a pod rebuilds every
-     stage.
+     export's file name when some tensors are Q8_0 or F32; a local model copied to a pod rebuilds
+     every stage.
 
 ## Phase 3: in force
 

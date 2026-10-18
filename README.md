@@ -170,11 +170,14 @@ uv run candor serve runs/rude --trial 37                       # chat with it in
 - `export` merges a trial's edit into a copy of the model's weights as its adapters apply it, then
   converts and quantises the copy as the run deploys, checking the edited weights reach the GGUF
   unchanged. Quantising can round part of a small edit away (on rude-llama, whose weights were 4-bit
-  before, Q4_K_M kept 55-98% of trial 535's and its refusals came back), so it measures how much of
-  each edited weight's change the quantised file holds, quantises any weight that kept less than 98%
-  as Q8_0 instead, and refuses the file if one still falls short. Only
-  `exports/EDIT/RUN-EDIT-QUANTISATION.gguf` is kept. `measure --exported` measures that exact file,
-  and `compare` sets it against the unedited model and against the trial measured with adapters.
+  before, Q4_K_M kept 55-98% of trial 535's and its refusals came back), and so can the merge, as an
+  edit under half a 16-bit step rounds back to the weight. So it measures how much of each edited
+  weight's change the quantised file holds. A weight that kept less than 98% is merged again
+  unrounded, in F32, and quantised as Q8_0 from that, or left in F32 where Q8_0 still falls short
+  (straight away for a run deploying Q8_0 or finer); every other tensor keeps its plain type. The
+  file is refused if one still falls short. Only `exports/EDIT/RUN-EDIT-QUANTISATION.gguf` is kept.
+  `measure --exported` measures that exact file, and `compare` sets it against the unedited model
+  and against the trial measured with adapters.
   `export --outside FOLDER --name NAME` ships a copy of the model edited elsewhere, such as heretic's
   own save of one of its trials, the same way (the run's model with each edited weight taken from
   the copy, so it is converted, quantised and checked alike), and `measure --outside NAME` measures it.

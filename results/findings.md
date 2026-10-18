@@ -136,6 +136,18 @@ entry is corrected rather than deleted when later evidence changes it.
   28 at once at 1,107-1,139 tokens/s. An A100 is about 10% faster for 3 times the price; 56 slots
   give no more than 28. (`phase-4-k2-horizon-7b.md`, speed test)
 
+## Export
+
+- **Merging into BF16 rounds tiny edits away before any quantising.** [Measured: K2-Horizon-7B
+  trial 207, Qwen3.5-9B weights, a synthetic 4096x4096] Round to nearest kept 39-98% of small
+  edits and Q8_0 of that no more (trial 207's two edge weights: 89.9% and 97.6%), while Q8_0 of an
+  unrounded F32 merge kept 100-102%. So `export` merges a short weight again in F32 and stores it
+  as Q8_0 from that, or as F32. (history, 2026-10-18)
+- **Giving one tensor its own type in llama-quantize (b11524) moves others.** [Measured: toy
+  models, the real binary] An override skips the counter Q4_K_M uses to pick Q4_K or Q6_K for later
+  ffn_down layers: one at layer 1 changed 8 of 14 later ones. `export` now gives every tensor its
+  plain type; rude-llama's shipped exports weren't affected (their overrides ran to the last layer).
+
 ## Ideas
 
 - **Start strength wide (to 3.0 or more) rather than widening once the best presses 1.5.**

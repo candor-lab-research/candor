@@ -783,3 +783,13 @@ KL 0.024) and if no finalist passes, the search carries on from its journal. Pro
 one layer's best had held for 106 trials, per layer's (trial 114, KL 0.047) for 199. The finalists
 are the three best one-layer edits within both caps (207, 205, 265) and per layer's best (114),
 measured as used under the rule signed off today. Search numbers in the results file.
+
+### candor export: weights quantising can't hold stay in F32, in one file (the user, 2026-10-18)
+
+Trial 207's export was refused: 2 of its 66 edited weights kept 89.9% and 97.6% of the edit even
+at Q8_0. The user chose to keep such weights at higher precision in the one GGUF rather than the
+2026-10-13 backup of the plain Q4_K_M base plus a LoRA adapter. A first attempt (BF16) was found in
+review not to work: the merge itself rounds tiny edits away (findings, Export). So a short weight
+is merged again unrounded and stored as Q8_0 from that, or as F32; every other tensor keeps its
+plain type, pinned against a llama-quantize quirk the review found. The adapter backup is left for
+a shipped file that fails the decision rule.
