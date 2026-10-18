@@ -898,7 +898,7 @@ def serve_command(
                     model = export.built(run, edit)
             # Tool calls and the pages they return fill a chat's context fast.
             context = context or (32768 if mcp else 16384)
-            limit = run.context_limit
+            limit = serve.context_limit(model)
             context = min(context, limit) if limit else context
             args = serve.arguments(run, model, port, context, mcp)
             settings = serve.chat_settings(run)

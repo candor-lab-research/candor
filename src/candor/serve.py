@@ -7,6 +7,7 @@ import time
 from pathlib import Path
 from typing import Any
 
+import gguf
 import httpx
 
 from . import toolchain
@@ -22,6 +23,15 @@ def chat_settings(run: Run) -> dict[str, Any]:
     """The chat template settings measurements use, such as a thinking mode, except the pinned date:
     apps write today's, and so does the server."""
     return {key: value for key, value in run.template_kwargs().items() if key != "date_string"}
+
+
+def context_limit(model: Path) -> int | None:
+    """The context the model was trained for, as the GGUF served records it, so serving never needs the
+    original weights."""
+    fields = gguf.GGUFReader(model).fields
+    arch = fields.get("general.architecture")
+    limit = fields.get(f"{arch.contents()}.context_length") if arch else None
+    return limit.contents() if limit else None
 
 
 def arguments(run: Run, model: Path, port: int, context: int, mcp: Path | None = None) -> list[str]:

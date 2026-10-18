@@ -758,7 +758,7 @@ def recorded_edit(run: Run, number: int) -> Edit:
         raise RunError(f"{run.folder} has no search yet; run candor search")
     if number not in found.trials:
         raise RunError(f"the search has no finished trial {number}")
-    return edit_from(found.trials[number].params, number, run.shape[1])
+    return edit_from(found.trials[number].params, number, run.layers)
 
 
 class Search:

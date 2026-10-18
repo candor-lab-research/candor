@@ -12,12 +12,12 @@ from typer.testing import CliRunner
 
 from candor import config, serve
 from candor.cli import app
-from candor.run import Run
+from candor.run import Run, RunError
 
 from .test_engine import stub
 from .test_export import converting  # noqa: F401
 from .test_run import TEMPLATE
-from .test_search import write_journal
+from .test_search import small, write_journal
 from .tiny_gguf import random_weights, write_model
 
 
@@ -102,7 +102,7 @@ def test_serve_shows_the_mode_then_serves_until_ctrl_c(tiny, stopped_by_ctrl_c):
     assert (folder / "private" / "logs" / "serve.log").exists()
 
 
-def test_serve_runs_a_trials_export_and_only_that_edits(tiny, converting, stopped_by_ctrl_c):  # noqa: F811
+def test_serve_runs_a_trials_export_and_only_that_edits(tiny, converting, monkeypatch, stopped_by_ctrl_c):  # noqa: F811
     folder = cli_folder(tiny)
     journal = write_journal(tiny.folder.parent / "heretic.jsonl", 0.25)
     runner = CliRunner(env={"COLUMNS": "250"})
@@ -110,13 +110,19 @@ def test_serve_runs_a_trials_export_and_only_that_edits(tiny, converting, stoppe
     early = runner.invoke(app, ["serve", str(folder), *picked])
     assert early.exit_code == 1 and "heretic-1 has no export; run candor export first" in early.output
     assert runner.invoke(app, ["export", str(folder), *picked[:4]]).exit_code == 0
-    # A machine that only serves may not hold the run's full-size GGUF: serving the export needs none.
+    # A machine that only serves may hold neither the run's full-size GGUF nor the original weights.
     for leftover in (folder / "gguf").iterdir():
         leftover.unlink()
+
+    def no_weights(run):
+        raise RunError("the original weights aren't here")
+
+    monkeypatch.setattr(Run, "model_folder", property(no_weights))
     served = runner.invoke(app, ["serve", str(folder), *picked])
     assert served.exit_code == 0, served.output
     shipped = folder / "exports" / "heretic-1" / "cli-heretic-1-Q4_K_M.gguf"
     assert f"Serving heretic-1: {shipped}" in served.output and "Converting" not in served.output
+    assert "256 tokens of context" in served.output  # the limit the export records
     assert "leave the system message empty, as measured" in served.output
     assert not any((folder / "gguf").iterdir())
     record = shipped.with_name(shipped.name + ".inputs.json")
@@ -124,6 +130,24 @@ def test_serve_runs_a_trials_export_and_only_that_edits(tiny, converting, stoppe
     record.write_text(json.dumps({**made, "row_norm": "pre" if made["row_norm"] != "pre" else "none"}))
     other = runner.invoke(app, ["serve", str(folder), *picked])
     assert other.exit_code == 1 and "heretic-1's export was made from another edit" in other.output
+
+
+def test_serve_runs_a_search_trial_without_the_weights(tiny, converting, monkeypatch, stopped_by_ctrl_c):  # noqa: F811
+    small(tiny)
+    folder = cli_folder(tiny)
+    runner = CliRunner(env={"COLUMNS": "250"})
+    assert runner.invoke(app, ["search", str(folder), "--trials", "2"]).exit_code == 0
+    assert runner.invoke(app, ["export", str(folder), "--trial", "2"]).exit_code == 0
+
+    def needs_the_weights(run):
+        raise RunError("this needs the original weights")
+
+    # As for a Hub model on a machine that only serves: its config can be read, its full-size files can't.
+    monkeypatch.setattr(Run, "_model_without_download", property(lambda run: run.settings.model.source))
+    monkeypatch.setattr(Run, "model_folder", property(needs_the_weights))
+    served = runner.invoke(app, ["serve", str(folder), "--trial", "2", "--port", str(free_port())])
+    assert served.exit_code == 0, served.output
+    assert "Serving trial-2" in served.output and "256 tokens of context" in served.output
 
 
 def test_the_sample_shows_the_servers_own_template_settings(tiny, tmp_path, monkeypatch, stopped_by_ctrl_c):
@@ -176,7 +200,7 @@ def test_candor_mcp_gives_every_serve_tools_and_more_context(tiny, tmp_path, mon
     (tmp_path / "one.py").write_text(ONE_TOOL_SERVER)
     one = {"command": sys.executable, "args": [str(tmp_path / "one.py")]}
     (tmp_path / "mcp.json").write_text(json.dumps({"mcpServers": {"one": one}}))
-    monkeypatch.setattr(Run, "context_limit", None)
+    monkeypatch.setattr(serve, "context_limit", lambda model: None)
     serving = ["serve", str(cli_folder(tiny)), "--port", str(free_port())]
     tools = CliRunner(env={"COLUMNS": "250", "CANDOR_MCP": str(tmp_path / "mcp.json")}).invoke(app, serving)
     assert tools.exit_code == 0, tools.output

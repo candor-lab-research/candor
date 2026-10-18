@@ -334,6 +334,16 @@ class Run:
         return limit if isinstance(limit, int) else None
 
     @cached_property
+    def layers(self) -> int:
+        """The model's layer count from its config alone, so a trial's edit can be rebuilt on a machine
+        without the full-size files."""
+        model = self.settings.model
+        found = source.sizes(source.read_config(self._model_without_download, model.revision))
+        if found is None:
+            raise RunError("the model no longer passes candor inspect; run it to see why")
+        return found[1]
+
+    @cached_property
     def shape(self) -> tuple[int, int, str, list[targets.Writer]]:
         model_config = source.read_config(str(self.model_folder))
         sizes = source.sizes(model_config)
