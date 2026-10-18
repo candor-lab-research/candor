@@ -22,6 +22,7 @@ import numpy as np
 from . import export, heretic, kl
 from .edit import FULL_RANK
 from .engine import Answer, LlamaServer, Thinking
+from .files import write_atomic
 from .judge import Guard, is_refusal, judged_refusal, read_verdict
 from .kernel import Kernel
 from .run import (
@@ -35,7 +36,6 @@ from .run import (
     read_record,
     record_of,
     seeds,
-    sync,
 )
 from .targets import Writer
 
@@ -198,8 +198,8 @@ def mcnemar(only_a: int, only_b: int) -> float:
 
 
 class Measurement:
-    """Each set is answered and saved, then its answers are judged and the labels saved apart, so a
-    stopped measurement resumes from the last set saved, and a new judge re-judges saved answers."""
+    """Each set's answers are saved as they come, then judged and the labels saved apart, so a stopped
+    measurement resumes from the last answer saved, and a new judge re-judges saved answers."""
 
     def __init__(
         self,
@@ -357,10 +357,7 @@ class Measurement:
     def _write_private(self, name: str, content: dict[str, list[str]]) -> None:
         path = self._private(name)
         path.parent.mkdir(parents=True, exist_ok=True)
-        partial = path.with_name(path.name + ".building")
-        partial.write_text(json.dumps(content))
-        sync(partial)
-        partial.replace(path)
+        write_atomic(path, json.dumps(content))
 
     def _reused(self, name: str, inputs: dict[str, Any]) -> dict[str, Any] | None:
         """A set's saved results, if they were built from these inputs and their answers are still
@@ -458,10 +455,8 @@ class Measurement:
             run.report(f"Answering the {len(todo)} {LABELS[name]} a stopped measurement left of {len(ids)}")
         prompt_seeds = seeds(self.seed, len(ids))
         journal.parent.mkdir(parents=True, exist_ok=True)
-        with journal.open("w") as out:
-            for line in [record, *kept.values()]:
-                out.write(json.dumps(line) + "\n")
-            out.flush()
+        write_atomic(journal, "".join(json.dumps(line) + "\n" for line in [record, *kept.values()]))
+        with journal.open("a") as out:
             started = time.perf_counter()
 
             def save(place: int, answer: Answer) -> None:
@@ -617,11 +612,14 @@ def seconds(result: dict[str, Any]) -> float:
     return result["seconds"] + result.get("judge_seconds", 0.0)
 
 
+# What a finished measurement holds: each set's results and the held-out sets' labels.
+FINISHED = [f"{s}.json" for s in SETS] + [f"{s}.judged.json" for s in HELD_OUT]
+
+
 def load(run: Run, name: str) -> dict[str, dict[str, Any]]:
     """A measurement's results as candor measure returns them."""
     folder = run.path("measurements", name)
-    files = [f"{s}.json" for s in SETS] + [f"{s}.judged.json" for s in HELD_OUT]
-    if missing := [file for file in files if not (folder / file).exists()]:
+    if missing := [file for file in FINISHED if not (folder / file).exists()]:
         raise RunError(
             f"the measurement {name} is missing {', '.join(missing)}; run candor measure to finish it"
         )

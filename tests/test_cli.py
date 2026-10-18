@@ -527,6 +527,28 @@ def test_run_says_how_it_ended(tmp_path, monkeypatch, outcome, code, message):
     assert (signal.getsignal(signal.SIGTERM), signal.getsignal(signal.SIGHUP)) == handlers
 
 
+def test_run_keeps_the_mac_awake_while_it_works(tmp_path, monkeypatch):
+    happened = []
+
+    class Caffeinate:
+        def __init__(self, args):
+            happened.append(args)
+
+        def terminate(self):
+            happened.append("woken")
+
+    class Working:
+        def prepare(self):
+            happened.append("worked")
+            return {}
+
+    monkeypatch.setattr(cli.shutil, "which", lambda name: f"/usr/bin/{name}")
+    monkeypatch.setattr(cli.subprocess, "Popen", Caffeinate)
+    monkeypatch.setattr(cli.Run, "open", lambda folder, report: Working())
+    assert candor_run(tmp_path).exit_code == 0
+    assert happened == [["/usr/bin/caffeinate", "-is", "-w", str(os.getpid())], "worked", "woken"]
+
+
 STUCK = """
 import subprocess
 import sys

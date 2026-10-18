@@ -861,3 +861,26 @@ was a rank-1 change to every layer: it is rank 3 and edits 48 of 64 matrices (at
 7-31, MLP in 9-31). Both now give true medians of harmful thinking: K2 947 (was 948), Qwen 1,641 and
 Trial 161 2,973 (were 1,648 and 2,980). CLAUDE.md's slots rule now takes the reference's from its
 name or results file, as `[slots]` holds it.
+
+### Repository review step 3: 27B cost and safety (2026-10-18)
+
+Packages 6-10, 14 and 17, each reviewed independently and its findings fixed with tests that fail
+without them.
+- Thinking runs get 32 slots from `init`, and a trial stopped early costs no more GPU time.
+- Measurements save each answer as it comes and resume from the last; an export writes the edit into
+  a copy of the run's GGUF, byte for byte what merging and converting gave (SmolLM2, a tiny
+  Qwen3.5); the disk is checked before a download, from the checkpoint's own float type.
+- Exports are now version 3: "full" exports are built from the GGUF's layout, as their adapters
+  are, so older ones count as stale. The search's VERSION stays: stopped trials' KL changed, which
+  matters only if `search.max_budget_hits` is raised in a search spanning the change.
+- Pod jobs (`scripts/pod.sh`): `wait NAME runs/RUN` pulls every 30 minutes and at the end, exits 0
+  only if the job did, and stops 6 hours before the watchdog's deadline; a dropped SSH connection is
+  reported as such; `code` syncs the pod's packages and refuses while a job runs.
+- Run stages: the unedited thinking is saved per set; a `directions.pt` lost after it was read is
+  refused rather than read again; adapters link by number, so 64 layers with 3 targets fit; the
+  scoring budget can't exceed the deployment's; every small result is flushed to disk as written;
+  `candor run` keeps the Mac awake.
+- Found on the way: llama-server told to stop waits for every request it is answering to close,
+  so an interrupted measurement, search or thinking run waited 60 s and then killed it. Every batch
+  of requests now closes its own when stopped.
+

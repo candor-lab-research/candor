@@ -28,10 +28,11 @@ def protect_memory() -> None:
 
 
 def memory_budget(device: str) -> int | None:
-    """The bytes a model may take on the device: on an Apple GPU, the share protect_memory allows;
-    on CUDA, what is free now. None on the CPU."""
+    """The bytes a model may take on the device: on an Apple GPU, the share protect_memory allows, or
+    all the GPU is recommended to take for a ratio of 0, which PyTorch reads as no limit; on CUDA,
+    what is free now. None on the CPU."""
     if device == "mps":
-        ratio = float(os.environ["PYTORCH_MPS_HIGH_WATERMARK_RATIO"])
+        ratio = float(os.environ["PYTORCH_MPS_HIGH_WATERMARK_RATIO"]) or 1.0
         return int(torch.mps.recommended_max_memory() * ratio)
     if device == "cuda":
         return torch.cuda.mem_get_info()[0]

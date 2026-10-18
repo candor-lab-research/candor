@@ -17,17 +17,24 @@ def test_shapes_follow_the_index_and_skip_other_weight_files(tmp_path):
     assert tensor_shapes(str(tmp_path)) == {"a.weight": [2, 3]}
 
 
-def test_hub_shapes_are_read_at_the_pinned_commit(monkeypatch):
+def test_hub_shapes_and_float_type_are_read_at_the_pinned_commit(monkeypatch):
     asked = []
+    stored = {
+        "a.weight": SimpleNamespace(dtype="F16", shape=[4, 2]),
+        "norm": SimpleNamespace(dtype="F32", shape=[2]),
+    }
 
     def metadata(model, revision):
         asked.append((model, revision))
-        tensors = {"a.weight": SimpleNamespace(shape=[4, 2])}
-        return SimpleNamespace(files_metadata={"model.safetensors": SimpleNamespace(tensors=tensors)})
+        return SimpleNamespace(files_metadata={"model.safetensors": SimpleNamespace(tensors=stored)})
 
     monkeypatch.setattr(source, "get_safetensors_metadata", metadata)
-    assert tensor_shapes("org/model", "abc123") == {"a.weight": [4, 2]}
+    assert tensor_shapes("org/model", "abc123") == {"a.weight": [4, 2], "norm": [2]}
     assert asked == [("org/model", "abc123")]
+    # Only the weight matrices decide it: F16 when every one is F16, as the conversion keeps them.
+    assert source.float_type("org/model", "abc123") == "F16"
+    stored["b.weight"] = SimpleNamespace(dtype="BF16", shape=[4, 2])
+    assert source.float_type("org/model", "abc123") == "BF16"
 
 
 def test_read_json_returns_none_for_a_missing_file(tmp_path):

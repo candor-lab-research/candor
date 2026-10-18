@@ -56,13 +56,11 @@ def edit_factors(
     weight: Tensor, direction: Tensor, strength: float, row_norm: RowNorm
 ) -> tuple[Tensor, Tensor]:
     """Factors (b, a) of the change an edit at this strength makes, so that weight + b @ a is the
-    edited weight, on the CPU. Built on the GPU when there is one, as a "full" change takes an SVD,
-    and the same way wherever they are built, so the adapters scored and the file exported hold one
-    change on any one machine."""
-    weight = weight.to("cuda" if torch.cuda.is_available() else "cpu")
+    edited weight, on the CPU. A "full" change takes an SVD, so it is built on the GPU when there is
+    one; a rank-one change on the CPU, as Run.adapter_set builds it. Either way the adapters scored
+    and the file exported hold one change on any one machine."""
     if row_norm is RowNorm.FULL:
-        b, a = full(weight, direction, strength)
-    else:
-        b, a = rank_one(weight, direction, row_norm)
-        b = strength * b
-    return b.cpu(), a.cpu()
+        b, a = full(weight.to("cuda" if torch.cuda.is_available() else "cpu"), direction, strength)
+        return b.cpu(), a.cpu()
+    b, a = rank_one(weight, direction, row_norm)
+    return strength * b, a

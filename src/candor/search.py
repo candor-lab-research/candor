@@ -52,6 +52,7 @@ from optuna.trial import BaseTrial, FrozenTrial, TrialState
 
 from . import config, kl
 from .engine import GREEDY, LlamaServer, Thinking
+from .files import write_atomic
 from .judge import Guard, is_refusal, judged_refusal, read_verdict
 from .kernel import Kernel
 from .measure import Edit, edit_adapters
@@ -439,7 +440,8 @@ def _score(trial: FrozenTrial) -> Score:
     )
 
 
-def _candidate(number: int, trial: FrozenTrial) -> Candidate:
+def candidate(number: int, trial: FrozenTrial) -> Candidate:
+    """A finished trial as the search lists it, by the number it shows."""
     return Candidate(
         number,
         direction(trial.params.get("direction_layer"), trial.params.get("position") == ANSWER_START),
@@ -452,7 +454,7 @@ def _candidate(number: int, trial: FrozenTrial) -> Candidate:
 
 def scored_in_full(found: Found) -> list[Candidate]:
     """The trials scored in full: a stopped trial's count is only a lower bound."""
-    return [_candidate(number, t) for number, t in found.trials.items() if not t.user_attrs["stopped"]]
+    return [candidate(number, t) for number, t in found.trials.items() if not t.user_attrs["stopped"]]
 
 
 def front(found: list[Candidate]) -> list[Candidate]:
@@ -485,7 +487,7 @@ def _counts(trial: FrozenTrial, space: config.Search) -> bool:
 def within_cap(found: Found, scope: str, space: config.Search) -> list[Candidate]:
     """The scope's trials within the cap (see counts), least KL first."""
     kept = [
-        _candidate(number, t)
+        candidate(number, t)
         for number, t in found.trials.items()
         if scope_of(t.params) == scope and _counts(t, space)
     ]
@@ -794,8 +796,7 @@ class Search:
         began = time.perf_counter()
         with run.locked():
             run.check_remote_code()
-            if not run.path("directions.pt").exists():
-                run.check_memory()
+            run.check_residuals()
             if self.positions and not self.thinks:
                 self.check_thinking_off()
             adapters = run.adapters()
@@ -876,8 +877,7 @@ class Search:
         to be set beside the search's trials, so a search here made from other inputs is refused."""
         run = self.run
         run.check_remote_code()
-        if not run.path("directions.pt").exists():
-            run.check_memory()
+        run.check_residuals()
         if self.positions and not (self.thinks if thinks is None else thinks):
             self.check_thinking_off()
         _, quantized = run.gguf()
@@ -1091,9 +1091,7 @@ class Search:
         self._check(inputs)
         if not record.exists():
             self.folder.mkdir(exist_ok=True)
-            partial = record.with_name("inputs.json.building")
-            partial.write_text(json.dumps(json.loads(json.dumps(inputs)), sort_keys=True))
-            partial.replace(record)
+            write_atomic(record, json.dumps(json.loads(json.dumps(inputs)), sort_keys=True))
         storage = _storage(self.folder)
         space = self.run.settings.search
         hits = space.max_budget_hits
@@ -1262,9 +1260,7 @@ class Search:
         """Show how the search is going, and write it to search/progress.json in place of the last report."""
         report = progress(_found(studies), self.run.settings.search, done, target, seconds, self.thinks)
         path = self.folder / "progress.json"
-        partial = path.with_name("progress.json.building")
-        partial.write_text(json.dumps(report, indent=2))
-        partial.replace(path)
+        write_atomic(path, json.dumps(report, indent=2))
         for line in progress_lines(report):
             self.run.report(line)
 
@@ -1428,7 +1424,9 @@ class _Scorer:
                 ):
                     break
         # A trial stopped for its refusals stays over the cap, which a search can't change, so its KL
-        # is never read; one stopped for its thinking could count once search.max_budget_hits rises.
+        # is never read. One stopped for its thinking never counts, but once search.max_budget_hits
+        # rises and the trials are judged again, the sampler may take it as within the caps and rank
+        # it by its KL.
         if not read_kl or (stop_above is not None and refusals > stop_above):
             return Score(refusals, keyword_refusals, unlabelled, math.inf, judged, thought / judged, forced)
         top = self.server.top_logprobs(self.harmless, self.kl_tokens, scales)

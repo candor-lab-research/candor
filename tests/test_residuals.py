@@ -1,9 +1,18 @@
 import torch
 
-from candor.residuals import last_token_residuals
+from candor.residuals import last_token_residuals, memory_budget
 
 SHORT = [1, 5, 9, 14]
 LONG = [1, 7, 3, 8, 2, 11, 6, 4, 10]
+
+
+def test_a_watermark_of_0_leaves_what_the_apple_gpu_is_recommended_to_take(monkeypatch):
+    monkeypatch.setattr(torch.mps, "recommended_max_memory", lambda: 1000)
+    monkeypatch.setenv("PYTORCH_MPS_HIGH_WATERMARK_RATIO", "0.7")
+    assert memory_budget("mps") == 700
+    # PyTorch reads 0 as no limit, and its out-of-memory message suggests it.
+    monkeypatch.setenv("PYTORCH_MPS_HIGH_WATERMARK_RATIO", "0.0")
+    assert memory_budget("mps") == 1000
 
 
 def test_shape(tiny_llama):

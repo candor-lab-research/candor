@@ -110,7 +110,7 @@
   "code": {
    "adapters": 1,
    "directions.pt": 1,
-   "exports": 2,
+   "exports": 3,
    "gguf": 1,
    "measurements": 1,
    "prompts.json": 1,

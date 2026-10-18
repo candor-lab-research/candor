@@ -14,7 +14,7 @@ import torch.nn.functional as F
 from datasets.exceptions import DatasetNotFoundError
 from safetensors.torch import save_file
 
-from candor import config, directions, run, targets
+from candor import config, directions, files, run, targets
 from candor.edit import RowNorm, edit_factors, rank_one
 from candor.engine import LlamaServer
 from candor.kernel import Kernel
@@ -261,18 +261,23 @@ def test_a_result_without_its_record_is_rebuilt(current):
 def test_a_result_is_on_the_disk_before_its_record(current, monkeypatch):
     this, _ = current
     events = []
-    sync, rename = run.sync, Path.rename
+    sync, rename, replace = run.sync, Path.rename, Path.replace
 
     def recording_sync(path):
         events.append(("sync", path.name))
         sync(path)
 
-    def recording_rename(path, target):
-        events.append(("rename", path.name))
-        return rename(path, target)
+    def recording(move):
+        def moved(path, target):
+            events.append(("rename", path.name))
+            return move(path, target)
+
+        return moved
 
     monkeypatch.setattr(run, "sync", recording_sync)
-    monkeypatch.setattr(Path, "rename", recording_rename)
+    monkeypatch.setattr(files, "sync", recording_sync)
+    monkeypatch.setattr(Path, "rename", recording(rename))
+    monkeypatch.setattr(Path, "replace", recording(replace))
     this.adapters()
     order = [
         ("sync", "per-layer.building"),
@@ -338,16 +343,19 @@ def test_a_models_own_python_is_downloaded_only_when_trusted(current, monkeypatc
     this, _ = current
     this.settings.model.source = "org/model"
     this.settings.model.trust_remote_code = trusted
-    patterns = []
+    patterns, ignored = [], []
 
     def download(repo, revision, allow_patterns, ignore_patterns=None, dry_run=False):
         patterns.append(allow_patterns)
+        ignored.append(ignore_patterns)
         return [] if dry_run else str(tmp_path)
 
     monkeypatch.setattr(run, "snapshot_download", download)
     monkeypatch.setattr(run.source, "tensor_shapes", lambda model, revision=None: {"w": [4, 4]})
     assert this.model_folder == tmp_path
     assert all(("*.py" in p) == python for p in patterns)
+    # Neither the size check nor the download takes Mistral's own copy of the weights.
+    assert ignored == [run.NOT_MODEL_FILES] * 2
 
 
 def test_a_download_that_would_not_fit_stops_before_it_starts(current, monkeypatch, tmp_path):
@@ -398,6 +406,34 @@ def test_a_download_with_no_room_left_to_convert_stops_before_it_starts(current,
     needed = 3000 + 1.1 * 10_000 * (2 + config.QUANTIZATIONS["Q4_K_M"] / 8)
     monkeypatch.setattr(
         run.shutil, "disk_usage", lambda _: shutil._ntuple_diskusage(0, 0, math.floor(needed))
+    )
+    with pytest.raises(RunError, match="downloading and converting the model needs"):
+        _ = this.model_folder
+    monkeypatch.setattr(run.shutil, "disk_usage", lambda _: shutil._ntuple_diskusage(0, 0, math.ceil(needed)))
+    assert this.model_folder == tmp_path
+
+
+@pytest.mark.parametrize(("deployed", "copies"), [("BF16", 2), ("F16", 4)])
+def test_a_download_deployed_in_16_bits_needs_room_for_a_second_copy_only_of_another_type(
+    current, monkeypatch, tmp_path, deployed, copies
+):
+    this, _ = current
+    this.settings.model.source = "org/model"
+    this.settings.deployment.quantization = deployed
+    monkeypatch.setattr(
+        run,
+        "snapshot_download",
+        lambda *args, dry_run=False, **kwargs: (
+            [SimpleNamespace(file_size=3000, will_download=True)] if dry_run else str(tmp_path)
+        ),
+    )
+    # A BF16 checkpoint, as its headers on the Hub say.
+    headers = {"w": {"dtype": "BF16", "shape": [100, 100]}, "norm": {"dtype": "F32", "shape": [100]}}
+    monkeypatch.setattr(run.source, "tensor_headers", lambda model, revision=None: headers)
+    monkeypatch.setattr(run.constants, "HF_HUB_CACHE", str(tmp_path))
+    needed = 3000 + 1.1 * 10_100 * copies
+    monkeypatch.setattr(
+        run.shutil, "disk_usage", lambda _: shutil._ntuple_diskusage(0, 0, math.floor(needed) - 1)
     )
     with pytest.raises(RunError, match="downloading and converting the model needs"):
         _ = this.model_folder
@@ -574,6 +610,20 @@ def test_memory_is_checked_again_before_residuals_are_read(tmp_path, model, monk
     with pytest.raises(RunError, match="too big"):
         this.directions()
     assert loads.models == []
+
+
+@pytest.mark.parametrize("lost", ["directions.pt", "directions_answering.pt"])
+def test_directions_lost_after_they_were_read_are_never_read_again(tmp_path, model, monkeypatch, lost):
+    this, _ = thinking_run(tmp_path, model, monkeypatch)
+    loads = fake_residuals(monkeypatch)
+    this.directions()
+    this.path(lost).unlink()
+    # Refused before the memory check, which a Mac too small for the model would fail first.
+    monkeypatch.setattr(Run, "check_memory", lambda self: pytest.fail("checked the memory"))
+    for check in (this.check_residuals, this.directions):
+        with pytest.raises(RunError, match=rf"{lost} is missing but its record isn't.*: restore it"):
+            check()
+    assert len(loads.models) == 1
 
 
 def test_a_model_that_needs_its_own_code_must_be_trusted_before_anything_is_downloaded(current, monkeypatch):
@@ -1046,6 +1096,19 @@ def test_lengths_count_answers_only_for_the_prompts_the_model_answers(current, a
         this._check_lengths(fits | {answered: [[0] * 200]})
 
 
+def test_kl_sets_of_a_thinking_model_need_room_for_its_whole_thinking(current):
+    this, _ = current
+    this.settings.deployment = THINKS.model_copy()
+    room = this.thinking_room()
+    this.settings.scoring.answer_tokens = 1
+    this.settings.measure.answer_tokens = 1
+    this.settings.measure.maths_answer_tokens = 1
+    fits = {name: [[0] * (256 - room - 1)] for name in run.PROMPT_SETS}
+    this._check_lengths(fits)
+    with pytest.raises(RunError, match=r"with their answers: 1 harmless_test$"):
+        this._check_lengths(fits | {"harmless_test": [[0] * (256 - room)]})
+
+
 def test_raising_the_answer_length_later_is_still_checked(tiny_run):
     this, _, use, _ = tiny_run
     use(TEMPLATE)
@@ -1053,21 +1116,6 @@ def test_raising_the_answer_length_later_is_still_checked(tiny_run):
     this.settings.scoring.answer_tokens = 250
     with pytest.raises(RunError, match="too long"):
         this.prompt_ids()
-
-
-@pytest.mark.skipif(not hasattr(run.fcntl, "F_FULLFSYNC"), reason="only macOS has F_FULLFSYNC")
-def test_results_are_fully_flushed_on_macos(tmp_path, monkeypatch):
-    calls = []
-    real = run.fcntl.fcntl
-
-    def recording(descriptor, command, *args):
-        calls.append(command)
-        return real(descriptor, command, *args)
-
-    monkeypatch.setattr(run.fcntl, "fcntl", recording)
-    (tmp_path / "result").write_text("x")
-    run.sync(tmp_path / "result")
-    assert calls.count(run.fcntl.F_FULLFSYNC) >= 2
 
 
 def fake_everything_but_the_stages(monkeypatch, tiny: Path) -> None:

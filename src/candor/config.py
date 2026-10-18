@@ -26,6 +26,8 @@ from pydantic import (
     model_validator,
 )
 
+from .files import write_atomic
+
 FILE = "candor.toml"
 # Each GGUF type a run can deploy, with its bits per weight.
 QUANTIZATIONS = {
@@ -524,8 +526,14 @@ class RunConfig(Section):
 
     @model_validator(mode="after")
     def _search_thinks(self) -> "RunConfig":
-        if self.scoring.thinking_budget is not None and self.deployment.think_close is None:
-            raise ValueError("scoring.thinking_budget is set for a model that doesn't think")
+        if self.scoring.thinking_budget is not None:
+            if self.deployment.think_close is None:
+                raise ValueError("scoring.thinking_budget is set for a model that doesn't think")
+            if self.scoring.thinking_budget > (self.deployment.thinking_budget or 0):
+                raise ValueError(
+                    "scoring.thinking_budget is above deployment.thinking_budget, so the search would "
+                    "score edits with more thinking than they are used with"
+                )
         if self.scoring.thinking == "off" and self.deployment.think_close is None:
             raise ValueError('scoring.thinking is "off" for a model that doesn\'t think')
         if self.search.max_budget_hits is not None:
@@ -672,12 +680,7 @@ def rewrite(folder: Path, settings: RunConfig, header: str) -> None:
     text = render(settings, header)
     if parse(text, "the new settings") != settings:
         raise ConfigError("the new settings don't read back as written")
-    partial = folder / f".{FILE}.partial-{os.getpid()}"
-    try:
-        partial.write_text(text, encoding="utf-8")
-        partial.replace(folder / FILE)
-    finally:
-        partial.unlink(missing_ok=True)
+    write_atomic(folder / FILE, text)
 
 
 def _key(key: str) -> str:

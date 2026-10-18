@@ -17,6 +17,7 @@ from collections.abc import Sequence
 from dataclasses import asdict, dataclass, replace
 from typing import Any
 
+from .files import write_atomic
 from .measure import Edit
 from .run import Run, RunError
 from .search import POSITIONS, SCOPES, Score, Search, edit_from, load, scope_of, scored_in_full
@@ -217,6 +218,4 @@ def _load(run: Run, inputs: dict[str, Any], name: str) -> dict[str, Any]:
 def _save(run: Run, saved: dict[str, Any], name: str) -> None:
     path = run.path("proxy", name)
     path.parent.mkdir(exist_ok=True)
-    partial = path.with_name(f"{name}.building")
-    partial.write_text(json.dumps(saved, sort_keys=True))
-    partial.replace(path)
+    write_atomic(path, json.dumps(saved, sort_keys=True))

@@ -281,9 +281,16 @@ def test_a_search_budget_needs_a_model_that_thinks():
     with pytest.raises(ValidationError, match="doesn't think"):
         RunConfig(model=Model(source="org/model"), scoring=config.Scoring(thinking_budget=100))
     thinking = config.Deployment(think_close="</think>", thinking_budget=8192)
-    RunConfig(
-        model=Model(source="org/model"), deployment=thinking, scoring=config.Scoring(thinking_budget=100)
-    )
+    for budget in (100, 8192):
+        RunConfig(
+            model=Model(source="org/model"),
+            deployment=thinking,
+            scoring=config.Scoring(thinking_budget=budget),
+        )
+    with pytest.raises(ValidationError, match=r"above deployment\.thinking_budget"):
+        RunConfig(
+            model=Model(source="org/model"), deployment=thinking, scoring=config.Scoring(thinking_budget=8193)
+        )
 
 
 def test_thinking_and_sampling_settings_read_back(tmp_path):

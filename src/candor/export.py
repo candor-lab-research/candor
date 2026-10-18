@@ -97,8 +97,8 @@ def _planned(run: Run, edit: "Edit") -> tuple[Path, dict[str, Any]]:
 
 
 def export(run: Run, edit: "Edit") -> Path:
-    """The edit written into the model and quantised as the run deploys; reused while it
-    matches. Nothing is left behind but the GGUF and the converter's log."""
+    """The edit written into a copy of the run's GGUF and quantised as the run deploys; reused while
+    it matches. Nothing is left behind but the GGUF and llama-quantize's log, convert.log."""
     with run.locked():
         run.check_remote_code()
         shipped, inputs = _planned(run, edit)
@@ -111,8 +111,8 @@ def export(run: Run, edit: "Edit") -> Path:
 def export_outside(run: Run, name: str, given: Path) -> Path:
     """A copy of the run's model edited elsewhere, such as heretic's save of one of its trials, as a
     folder or an unquantised GGUF, exported as name: the run's model with each edit target's weight
-    taken from that copy, converted and quantised as the run deploys, and checked as candor's own edits
-    are. Reused while it matches."""
+    taken from that copy, written into a copy of the run's GGUF and quantised as the run deploys, and
+    checked as candor's own edits are. Reused while it matches."""
     if RESERVED.fullmatch(name):
         raise RunError(f"{name} is how candor names its own edits and measurements; pick another name")
     given = given.expanduser().absolute()

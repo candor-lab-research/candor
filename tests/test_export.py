@@ -375,22 +375,20 @@ TINY = Edit("trial", 0.4, {"attn": Kernel(1e-5, 1.0, 1e-5, 1.0), "mlp": Kernel(1
 
 
 @pytest.mark.parametrize(
-    ("stored", "deployed"),
+    "deployed",
     # BF16 weights are exact in F16, so only the edit's rounding moves what the export reads.
-    [(torch.bfloat16, "BF16"), (torch.bfloat16, "F16")],
+    ["BF16", "F16"],
     ids=["its float type", "another float type"],
 )
-def test_a_float_deployment_stores_what_16_bits_round_away_in_f32(
-    tiny, converting, monkeypatch, stored, deployed
-):
-    # A checkpoint stored in 16 bits, as real ones are, so its GGUF holds every weight exactly.
+def test_a_float_deployment_stores_what_16_bits_round_away_in_f32(tiny, converting, monkeypatch, deployed):
+    # A checkpoint stored in BF16, as real ones are, so its GGUF holds every weight exactly.
     weights = tiny.model_folder / "model.safetensors"
-    save_file({name: tensor.to(stored) for name, tensor in load_file(weights).items()}, weights)
+    save_file({name: tensor.to(torch.bfloat16) for name, tensor in load_file(weights).items()}, weights)
     monkeypatch.setattr(
         convert,
         "to_gguf",
         lambda folder, destination, log: gguf_from_folder(
-            folder, destination, log, stored, types=TYPE.BF16 if stored == torch.bfloat16 else TYPE.F16
+            folder, destination, log, torch.bfloat16, types=TYPE.BF16
         ),
     )
     monkeypatch.setattr(convert, "quantize", to_a_float_type)

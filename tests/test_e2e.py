@@ -1,6 +1,7 @@
 """End to end on a small real model with the real converter. Run with CANDOR_E2E=1 (downloads ~270 MB
 the first time, and sets up llama.cpp's converter)."""
 
+import filecmp
 import json
 import os
 import shutil
@@ -118,6 +119,8 @@ def test_an_edit_written_into_the_gguf_is_what_the_converter_writes_from_the_edi
         for r in (ours, theirs)
     ]
     assert tensors[0] == tensors[1]
+    # Laid out the same too: the same file, byte for byte.
+    assert filecmp.cmp(tmp_path / "written.gguf", tmp_path / "converted.gguf", shallow=False)
 
 
 def test_a_model_whose_tokenizer_transformers_5_saved_converts_with_the_same_vocabulary(converted, tmp_path):

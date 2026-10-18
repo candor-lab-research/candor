@@ -93,14 +93,16 @@ def test_full_keeps_each_rows_length_and_isnt_linear_in_strength():
     assert (twice[0] @ twice[1] - doubled).norm() > 0.05 * doubled.norm()
 
 
-def test_edit_factors_fold_a_linear_edits_strength_in():
+def test_edit_factors_fold_a_linear_edits_strength_in_as_its_adapters_do_even_beside_a_gpu(monkeypatch):
+    # Run.adapter_set builds a linear edit's adapters on the CPU, so an export of it is built there too.
+    monkeypatch.setattr(torch.cuda, "is_available", lambda: True)
     torch.manual_seed(3)
     weight = torch.randn(16, 8)
     direction = F.normalize(torch.randn(16), dim=0)
     for row_norm in (RowNorm.NONE, RowNorm.PRE):
         b, a = rank_one(weight, direction, row_norm)
         fb, fa = edit_factors(weight, direction, 0.7, row_norm)
-        torch.testing.assert_close(fb @ fa, 0.7 * (b @ a))
+        assert torch.equal(fb, 0.7 * b) and torch.equal(fa, a)
 
 
 def test_a_full_edit_has_no_single_adapter_for_every_strength():

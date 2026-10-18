@@ -136,8 +136,7 @@ uv run candor serve runs/rude --trial 37                       # chat with it in
   divergence. It keeps one number per prompt in `measurements/NAME/`; answers and the judge's
   replies go only to `private/`. `--limit N` measures the first N prompts of each set and estimates
   the full run's time; a stopped measurement resumes from the last answer it saved; the Mac is kept
-  awake. `--name` names it, but
-  never as candor names its own (`base`, `trial-N`, `heretic-N`).
+  awake. `--name` names it, but never as candor names its own (`base`, `trial-N`, `heretic-N`).
 - `compare A B` pairs two measurements prompt by prompt: each count, the change with a 95% interval
   (Bonett and Price's for paired counts; for KL a studentised bootstrap over the prompts), how many
   prompts went each way, and the exact McNemar p-value; and the slots and seeds where they differ.
@@ -150,9 +149,10 @@ uv run candor serve runs/rude --trial 37                       # chat with it in
   strengths: it answers the test prompts `slots.search` at a time and the judge counts refusals,
   stopping once the trial has refused more than the cap and more than 25 fully scored trials of its
   kind, which leaves every trial the sampler draws unchanged; KL is read from the 100 harmless test
-  prompts, except for a trial stopped so, which can't win. For a thinking model `search.max_budget_hits` (unset) can also cap the test prompts whose
-  thinking reaches the budget: an edit over it doesn't count, and its trial stops there, which unlike
-  the refusal stop can change later draws. Changing it carries a search on, its finished trials judged
+  prompts, except for a trial stopped so, which can't win. For a thinking model
+  `search.max_budget_hits` (unset) can also cap the test prompts whose thinking reaches the budget:
+  an edit over it doesn't count, and its trial stops there, which unlike the refusal stop can change
+  later draws. Changing it carries a search on, its finished trials judged
   again by the new number. Nothing a model writes is kept. Strength starts at heretic's 0.8-1.5. From
   a kind's 60th trial, and every 30th after, if its best edit within the cap presses an end of that range
   (or none is within the cap yet: the ceiling), that end moves out to `search.widest_strength`
@@ -242,13 +242,17 @@ does everything but create and delete it (its header lists every command):
 2. `export CANDOR_POD=root@IP:PORT` (the pod's direct SSH address), then `scripts/pod.sh setup`
    checks the watchdog is armed, copies this working tree and your Hugging Face token, installs
    candor and checks that torch and llama-server both see the GPU. On Linux torch is the CUDA 12.8
-   build, as llama.cpp's release is. `scripts/pod.sh code` copies the code again after a change.
+   build, as llama.cpp's release is. `scripts/pod.sh code` copies the code again after a change
+   and brings the pod's packages in line with its `uv.lock`.
 3. `push`, `start NAME candor ...`, `log NAME`, `stop NAME` and `pull runs/NAME` move files, run a
    command detached and bring a run's results back, leaving out its GGUFs unless named
    (`pull runs/NAME/exports/trial-37`). Paths are the same as here, under `/root/candor` on the pod;
-   anything there that git doesn't ignore is replaced by the next `code`. `wait NAME` waits for the
-   command to end and keeps this Mac awake until it does, so nothing needs a timed `caffeinate`;
-   it gives up if the pod stops answering for about five minutes.
+   anything there that git doesn't ignore is replaced by the next `code`, which refuses while a
+   command is running, as it would change the code under it. `wait NAME runs/RUN` waits for the
+   command to end and keeps this Mac awake until it does, so nothing needs a timed `caffeinate`. It
+   pulls `runs/RUN` every 30 minutes and once more at the end, and exits 0 only if the command did.
+   It stops early, with an error, if the pod stops answering for about five minutes or the
+   watchdog's deadline is less than 6 hours away: move the deadline and wait again.
 4. `scripts/pod.sh deadline` checks the watchdog and says when it deletes the pod, and
    `deadline HOURS` moves that to HOURS from now. Everything lives on the container disk, which
    Runpod wipes when a pod is stopped or restarted and which a stopped pod's watchdog can't

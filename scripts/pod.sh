@@ -6,15 +6,18 @@
 #                                    start, and a watchdog that deletes the pod HOURS from now
 #   scripts/pod.sh setup             check the watchdog is armed, copy the code and the Hugging Face
 #                                    token, install candor, and check torch and llama-server see the GPU
-#   scripts/pod.sh code              copy this working tree's code again, uncommitted changes too
+#   scripts/pod.sh code              copy this working tree's code again, uncommitted changes too,
+#                                    and bring the pod's packages in line with it
 #   scripts/pod.sh push SRC [DEST]   copy a file or folder to the pod (DEST defaults to SRC)
 #   scripts/pod.sh pull PATH [DEST]  copy a file or folder back (DEST defaults to PATH), leaving
 #                                    out gguf/ and exports/ folders unless PATH is one of them
 #   scripts/pod.sh start NAME CMD..  run a command in the code folder, detached, logged as NAME
 #   scripts/pod.sh log NAME          the end of that log
 #   scripts/pod.sh stop NAME         stop that command
-#   scripts/pod.sh wait NAME         wait for that command to end, keeping this Mac awake until it
-#                                    does, or until the pod stops answering
+#   scripts/pod.sh wait NAME [PATH]  wait for that command to end, keeping this Mac awake until it
+#                                    does, or until the pod stops answering or nears its deadline;
+#                                    pulling PATH every 30 minutes and at the end; exits 0 only if
+#                                    the command did
 #   scripts/pod.sh deadline [HOURS]  check the watchdog and when it deletes the pod, or move that to
 #                                    HOURS from now
 #   scripts/pod.sh ssh [CMD..]       a shell or a command on the pod
@@ -72,6 +75,11 @@ on_pod() {
     $ssh_command "$host" "$@"
 }
 
+reach() {
+    # The command prints what it finds, so only a failure to reach the pod fails it.
+    on_pod "$1" || die "can't reach the pod over SSH ($CANDOR_POD): check it is up and try again"
+}
+
 remote() {
     plain "$1"
     if [[ $1 = /* ]]; then echo "$1"; else echo "$CODE/$1"; fi
@@ -90,11 +98,13 @@ args() {
 }
 
 armed() {
-    local at
-    at=$(on_pod "cat $DEADLINE 2>/dev/null") ||
+    local at alive
+    at=$(reach "cat $DEADLINE 2>/dev/null || echo none")
+    [[ $at != none ]] ||
         die "the pod has no deadline: it wasn't created with scripts/pod.sh args, so delete it yourself"
     # The whole command line, as the container's own shell and this check's both mention the file.
-    on_pod "pgrep -fx 'bash /pod-watchdog.sh' >/dev/null" || die "the watchdog isn't running: delete the pod yourself"
+    alive=$(reach "pgrep -fx 'bash /pod-watchdog.sh' >/dev/null && echo yes || echo no")
+    [[ $alive = yes ]] || die "the watchdog isn't running: delete the pod yourself"
     [[ $at =~ ^[1-9][0-9]{0,10}$ ]] || die "the pod's deadline isn't a time ('$at'), so the watchdog is deleting it"
     (($(date +%s) < at)) ||
         die "the deadline passed at $(when "$at") but the pod is still up, so the watchdog can't delete it" \
@@ -113,7 +123,18 @@ deadline() {
     armed
 }
 
+running() {
+    # The commands started on the pod that are still running, by name.
+    reach "for pid in $LOGS/*.pid; do
+        [ -f \$pid ] && kill -0 -- -\$(cat \$pid) 2>/dev/null && basename \$pid .pid
+    done; true"
+}
+
 code() {
+    local busy
+    # Packages and code changed under a running command can break its next import.
+    busy=$(running)
+    [[ -z $busy ]] || die "$(echo $busy) still running on the pod: stop it or wait for it first"
     # Every file git tracks or would, as it is here. A tracked file deleted here isn't copied.
     stage=$(mktemp -d)
     trap 'rm -rf "$stage"' EXIT
@@ -124,6 +145,7 @@ code() {
         tar --null -T - -c -C "$here" | tar -x -C "$stage"
     # Whatever git ignores, such as runs/ and .venv/, is left as it is on the pod.
     rsync -a --delete --exclude-from "$here/.gitignore" -e "$ssh_command" "$stage/" "$host:$CODE/"
+    on_pod "cd $CODE && ~/.local/bin/uv sync --frozen --no-dev --quiet"
     local changes=""
     [[ -z $(git -C "$here" status --porcelain) ]] || changes=", with uncommitted changes"
     echo "code: $(git -C "$here" log -1 --format='%h %s')$changes"
@@ -135,10 +157,9 @@ setup() {
     ssh-keygen -R "[${host#*@}]:$port" -f "$KNOWN_HOSTS" >/dev/null 2>&1 || true
     armed
     on_pod "command -v rsync >/dev/null || (apt-get update -qq && DEBIAN_FRONTEND=noninteractive apt-get install -y -qq rsync >/dev/null)"
+    on_pod "[ -x ~/.local/bin/uv ] || curl -LsSf https://astral.sh/uv/$UV_VERSION/install.sh | sh >/dev/null"
     code
     on_pod "umask 077 && mkdir -p ~/.cache/huggingface && cat >~/.cache/huggingface/token" <"$TOKEN"
-    on_pod "[ -x ~/.local/bin/uv ] || curl -LsSf https://astral.sh/uv/$UV_VERSION/install.sh | sh >/dev/null"
-    on_pod "cd $CODE && ~/.local/bin/uv sync --frozen --quiet"
     on_pod "nvidia-smi --query-gpu=name,driver_version,memory.total --format=csv,noheader"
     on_pod "cd $CODE && .venv/bin/python -c '
 import torch
@@ -188,40 +209,79 @@ start() {
     shift
     named "$name"
     armed
-    # setsid makes the command lead its own process group, which stop ends as a whole.
+    # setsid makes the shell running the command lead a process group, which stop ends as a whole. The
+    # shell writes the command's exit status, which a command stopped never gets to.
     on_pod "set -e; mkdir -p $LOGS; cd $CODE
         if [ -f $LOGS/$name.pid ] && kill -0 -- -\$(cat $LOGS/$name.pid) 2>/dev/null; then
             echo '$name is still running: stop it first' >&2
             exit 1
         fi
-        PATH=$CODE/.venv/bin:\$PATH setsid nohup $(printf '%q ' "$@") >$LOGS/$name.log 2>&1 </dev/null &
+        rm -f $LOGS/$name.exit
+        PATH=$CODE/.venv/bin:\$PATH setsid nohup sh -c '\"\$@\"; echo \$? >$LOGS/$name.exit' sh \
+            $(printf '%q ' "$@") >$LOGS/$name.log 2>&1 </dev/null &
         echo \$! >$LOGS/$name.pid"
     echo "started; scripts/pod.sh log $name"
 }
 
 stop() {
+    local result
     named "$1"
-    on_pod "kill -TERM -- -\$(cat $LOGS/$1.pid)" || die "$1 isn't running"
+    result=$(reach "kill -TERM -- -\$(cat $LOGS/$1.pid 2>/dev/null) 2>/dev/null && echo stopped || echo absent")
+    [[ $result = stopped ]] || die "$1 isn't running"
     echo "stopped $1"
 }
 
+deleting() {
+    # Why the watchdog deletes the pod soon, from its deadline, or nothing.
+    if ! [[ $1 =~ ^[1-9][0-9]{0,10}$ ]]; then
+        echo "the pod's deadline isn't a time ('$1'), so the watchdog is deleting it"
+    elif (($1 - $(date +%s) < ${POD_WARN_SECONDS:-21600})); then
+        echo "the watchdog deletes the pod at $(when "$1")"
+    fi
+}
+
 wait_for() {
-    local name=$1 misses=0 state
+    local name=$1 path=${2:-} misses=0 reply state at code result soon pulled=$SECONDS
     named "$name"
+    [[ -z $path ]] || plain "$path"
     # Ends by itself when this script does, so the Mac stays awake exactly as long as the wait.
     caffeinate -is -w $$ &
     while true; do
-        if state=$(on_pod "if [ ! -f $LOGS/$name.pid ]; then echo unknown
-            elif kill -0 -- -\$(cat $LOGS/$name.pid) 2>/dev/null; then echo running
-            else echo ended; fi"); then
+        if reply=$(on_pod "if [ ! -f $LOGS/$name.pid ]; then s=unknown
+            elif kill -0 -- -\$(cat $LOGS/$name.pid) 2>/dev/null; then s=running
+            else s=ended; fi
+            at=\$(cat $DEADLINE 2>/dev/null); code=\$(cat $LOGS/$name.exit 2>/dev/null)
+            echo \"\$s \${at:-none} \${code:-none}\""); then
             misses=0
+            read -r state at code <<<"$reply"
             case $state in
             ended)
-                echo "$name has ended; scripts/pod.sh log $name shows how"
+                if [[ $code = none ]]; then
+                    result="$name ended without an exit status: it was stopped, or killed with the pod's processes"
+                else
+                    result="$name exited with $code"
+                fi
+                if [[ -n $path ]] && ! (pull "$path"); then
+                    die "$result, but $path couldn't be pulled: pull it, or wait again"
+                fi
+                [[ $code = 0 ]] || die "$result; scripts/pod.sh log $name shows how"
+                echo "$result"
                 return
                 ;;
             unknown) die "$name was never started on this pod" ;;
             esac
+            # The watchdog deletes the pod, and everything on it, at its deadline, which only a person moves.
+            soon=$(deleting "$at")
+            if [[ -n $soon ]]; then
+                [[ -z $path ]] || (pull "$path") || true
+                die "$soon, and $name is still running: pull what you need, move the deadline more than" \
+                    "6 hours away with scripts/pod.sh deadline HOURS, and wait again"
+            fi
+            # A pull that fails is tried again next time.
+            if [[ -n $path ]] && ((SECONDS - pulled >= ${POD_PULL_SECONDS:-1800})); then
+                (pull "$path") || echo "pod.sh: couldn't pull $path this time; trying again" >&2
+                pulled=$SECONDS
+            fi
         else
             # The pod's SSH sometimes drops a connection, so only a run of failures means it's gone.
             misses=$((misses + 1))
@@ -277,9 +337,9 @@ stop)
     stop "$1"
     ;;
 wait)
-    need "$# == 1" "wait NAME"
+    need "$# == 1 || $# == 2" "wait NAME [PATH]"
     connect
-    wait_for "$1"
+    wait_for "$@"
     ;;
 deadline)
     need "$# <= 1" "deadline [HOURS]"

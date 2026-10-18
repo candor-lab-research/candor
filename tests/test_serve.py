@@ -286,9 +286,15 @@ def test_sigterm_while_serving_stops_the_server(tiny, monkeypatch):
 
     monkeypatch.setattr(serve, "start", start)
     folder = cli_folder(tiny)
-    result = CliRunner().invoke(app, ["serve", str(folder), "--port", str(free_port())])
-    assert result.exit_code == 128 + signal.SIGTERM
-    assert started[0].poll() is not None
+    try:
+        result = CliRunner().invoke(app, ["serve", str(folder), "--port", str(free_port())])
+        assert result.exit_code == 128 + signal.SIGTERM
+        assert started[0].poll() is not None
+    finally:
+        # A failure here mustn't leave the server running.
+        for process in started:
+            if process.poll() is None:
+                process.kill()
 
 
 def test_a_port_in_use_is_refused_before_starting(tiny):

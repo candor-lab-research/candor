@@ -10,6 +10,7 @@ from candor.measure import Edit
 from candor.run import RunError
 from candor.search import Score, Scores, Search
 
+from .test_files import recorded_syncs
 from .test_search import flat, small
 from .tiny_run import thinking, thinks_through
 
@@ -155,8 +156,10 @@ def test_the_check_scores_both_ways_carries_on_after_a_stop_and_repeats_the_best
     on = [n + 1 for n in range(count)]
     on[4] = 0
     calls = faked(monkeypatch, {False: off, True: on}, die_after=3)
+    synced = recorded_syncs(monkeypatch)
     with pytest.raises(KeyboardInterrupt):
         proxy.check(tiny)
+    assert ("scores.json", tiny.path("proxy", "scores.json").read_text()) in synced
     calls.clear()
     checked = proxy.check(tiny)
     # The three edits scored before the stop aren't scored again.

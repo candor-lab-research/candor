@@ -15,6 +15,7 @@ from candor.measure import Edit, Measurement
 from candor.run import RunError
 from candor.targets import Writer
 
+from .test_files import recorded_syncs
 from .test_heretic import PARAMETERS
 from .tiny_gguf import END_THINK, THINK, THINKING_TOKENS
 from .tiny_run import ALWAYS_THINKING_TEMPLATE, FakeGuard, fake_prompts, thinking, thinks_through
@@ -206,6 +207,9 @@ def stopping_after(monkeypatch, saved: int) -> None:
 
 
 def test_a_set_stopped_part_way_answers_only_the_prompts_left(tiny, monkeypatch):
+    # Sampled, one answer at a time, so each answer depends on its seed alone.
+    tiny.settings.sampling = config.Sampling(temperature=1.0, top_k=0, min_p=0.0)
+    tiny.settings.slots.measure = 1
     whole = Measurement(tiny, None, "whole").measure()
     with monkeypatch.context() as stopped:
         stopping_after(stopped, 2)
@@ -214,9 +218,12 @@ def test_a_set_stopped_part_way_answers_only_the_prompts_left(tiny, monkeypatch)
     journal = tiny.path("private", "measurements", "base", "harmful_held_out.answering.jsonl")
     earlier = max(json.loads(line)["at"] for line in journal.read_text().splitlines()[1:])
     answered = counting_answers(monkeypatch)
+    synced = recorded_syncs(monkeypatch)
     resumed = Measurement(tiny, None, "base").measure()
     # Each answer has its own seed, so the one asked again is the one an unbroken run gives.
     assert answered == [1, 3, 3] and not journal.exists()
+    # The answers kept are written whole before any more are added.
+    assert f"{journal.name}.building" in {name for name, _ in synced}
     private = tiny.path("private", "measurements")
     for name in measure.SETS:
         assert (private / "base" / f"{name}.json").read_text() == (
@@ -224,6 +231,12 @@ def test_a_set_stopped_part_way_answers_only_the_prompts_left(tiny, monkeypatch)
         ).read_text()
         assert resumed[name]["finished"] == whole[name]["finished"]
     assert resumed["harmful_held_out"]["answer_seconds"] > earlier
+
+
+def test_a_saved_answer_a_stop_cut_short_is_left_out(tmp_path):
+    journal = tmp_path / "harmful_held_out.answering.jsonl"
+    journal.write_text('{"record": {}}\n{"i": 0, "at": 1.0}\n{"i": 1, "answ')
+    assert measure._journal(journal) == [{"record": {}}, {"i": 0, "at": 1.0}]
 
 
 def test_answers_saved_from_other_inputs_are_answered_again(tiny, monkeypatch):
@@ -651,6 +664,38 @@ def test_the_unedited_thinking_is_kept_for_each_set_of_settings_and_never_sample
     ):
         tiny.thinking_traces()
     assert len(calls) == len(run.KL_SETS)
+
+
+def test_unedited_thinking_stopped_part_way_resumes_from_the_set_it_stopped_in(tiny, monkeypatch):
+    asked = []
+    thinks_through(monkeypatch, asked=asked)
+    whole = thinking(tiny).thinking_traces()
+    key = tiny.thinking_key()
+    private = tiny.path("private", "thinking")
+    assert [p.name for p in private.iterdir()] == [f"{key}.json"]
+    tiny.discard(tiny.path("thinking", f"{key}.json"))
+    (private / f"{key}.json").unlink()
+
+    real = LlamaServer.thoughts
+
+    def stopped_in_the_second_set(self, prompts, *args, **kwargs):
+        if len(asked) == len(run.KL_SETS) + 1:
+            raise KeyboardInterrupt
+        return real(self, prompts, *args, **kwargs)
+
+    monkeypatch.setattr(LlamaServer, "thoughts", stopped_in_the_second_set)
+    with pytest.raises(KeyboardInterrupt):
+        tiny.thinking_traces()
+    first, second = run.KL_SETS
+    assert [p.name for p in private.iterdir()] == [f"{key}.{first}.json"]
+    asked.clear()
+    assert tiny.thinking_traces() == whole
+    assert [prompts for prompts, *_ in asked] == [tiny.prompt_ids()[second]]
+    assert [p.name for p in private.iterdir()] == [f"{key}.json"]
+    # A set kept along the way that a pull from a pod brought back again goes once the record is there.
+    (private / f"{key}.{first}.json").write_text("[]")
+    assert tiny.thinking_traces() == whole
+    assert [p.name for p in private.iterdir()] == [f"{key}.json"]
 
 
 @pytest.mark.parametrize(

@@ -38,10 +38,8 @@ def _run(program: str, args: list, log: Path) -> None:
 
 
 def float_type(model_folder: Path) -> str:
-    """The GGUF type a model converts to without rounding: F16 when every weight matrix is stored
-    as F16, otherwise BF16, which also holds the range of F32 weights."""
-    stored = {info["dtype"] for info in source.local_headers(model_folder).values() if len(info["shape"]) > 1}
-    return "F16" if stored == {"F16"} else "BF16"
+    """The GGUF type a model folder converts to without rounding (see source.float_type)."""
+    return source.float_type(str(model_folder))
 
 
 def _readable_by_the_converter(model_folder: Path, staging: Path) -> Path:

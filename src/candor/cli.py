@@ -507,7 +507,7 @@ def run(folder: Annotated[Path, typer.Argument(help="A run folder made by candor
         console.print(f"[dim]{escape(message)}[/]")
 
     try:
-        with _stopped_by_signals():
+        with _stopped_by_signals(), _awake():
             done = Run.open(folder, report).prepare()
     except config.ConfigError as error:
         console.print(f"[red]{escape(str(error))}[/]")
@@ -529,7 +529,7 @@ def run(folder: Annotated[Path, typer.Argument(help="A run folder made by candor
 def _awake() -> Iterator[None]:
     """Keep a Mac awake while candor works. caffeinate stops by itself when candor exits."""
     caffeinate = shutil.which("caffeinate")
-    process = subprocess.Popen([caffeinate, "-i", "-w", str(os.getpid())]) if caffeinate else None
+    process = subprocess.Popen([caffeinate, "-is", "-w", str(os.getpid())]) if caffeinate else None
     try:
         yield
     finally:
@@ -777,8 +777,8 @@ def export_command(
     ] = None,
     name: Annotated[str | None, typer.Option(help="What to call a model given with --outside.")] = None,
 ) -> None:
-    """Merge a trial's edit into the model's weights, then convert and quantise it as the run deploys:
-    the GGUF you run. Measure that exact file before using it, with candor measure --exported. With
+    """Write a trial's edit into a copy of the run's GGUF, quantised as the run deploys: the GGUF you
+    run. Measure that exact file before using it, with candor measure --exported. With
     --outside, a model edited elsewhere is exported the same way, to measure it like for like."""
     console = Console()
     folder = folder.expanduser()
@@ -837,7 +837,7 @@ def export_command(
     else:
         console.print(
             "Measure this file, then compare it with the unedited model, and with the trial as measured "
-            "with adapters to see what merging and quantising changed:"
+            "with adapters to see what writing it into the weights and quantising changed:"
         )
         picked = f"--trial {trial}" + (f" --heretic {heretic}" if heretic is not None else "")
         commands = [

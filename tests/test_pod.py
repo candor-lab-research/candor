@@ -2,11 +2,13 @@
 here, with the pod's /root and /pod-* mapped into a folder, and Runpod's tools are faked."""
 
 import base64
+import contextlib
 import json
 import os
 import re
 import shutil
 import signal
+import stat
 import subprocess
 import sys
 import time
@@ -27,9 +29,17 @@ shift
 command="$*"
 command=${command//\/root\//$FAKEPOD/root/}
 command=${command//\/pod-/$FAKEPOD/pod-}
-cd "$FAKEPOD/root" && exec bash -c "$command"
+cd "$FAKEPOD/root" && HOME="$FAKEPOD/root" exec bash -c "$command"
 """
 SETSID = f"#!{sys.executable}\nimport os, sys\nos.setsid()\nos.execvp(sys.argv[1], sys.argv[1:])\n"
+# uv as its installer leaves it on the pod: it records how it was called, and a sync makes a venv
+# whose python does the same.
+UV = r"""#!/bin/bash
+echo "uv $* in ${PWD#$FAKEPOD}" >>"$CALLS"
+mkdir -p .venv/bin
+printf '#!/bin/bash\necho "python $1 in ${PWD#$FAKEPOD}" >>"$CALLS"\n' >.venv/bin/python
+chmod +x .venv/bin/python
+"""
 
 
 def tool(folder: Path, name: str, text: str) -> None:
@@ -44,8 +54,21 @@ def fake(folder: Path, name: str, works: bool) -> None:
     tool(folder, name, f'#!/bin/bash\necho "{name} $*" >>"$CALLS"\n{end}')
 
 
+def record(folder: Path, name: str) -> None:
+    """A stand-in that records how it was called and does nothing else."""
+    tool(folder, name, f'#!/bin/bash\necho "{name} $*" >>"$CALLS"\n')
+
+
 def calls(folder: Path) -> list[str]:
     return (folder / "calls").read_text().splitlines() if (folder / "calls").exists() else []
+
+
+def until(check, seconds: float = 10) -> None:
+    for _ in range(int(seconds / 0.02)):
+        if check():
+            return
+        time.sleep(0.02)
+    raise AssertionError("never happened")
 
 
 def watch(
@@ -55,8 +78,10 @@ def watch(
     runpodctl: bool = True,
     curl: bool = True,
     seconds: float = 1.0,
+    count: int | None = None,
 ) -> tuple[list[str], str]:
-    """Run the watchdog for a while, checking every 0.05 s; return the calls it made and its deadline."""
+    """Run the watchdog until it has made COUNT calls, or for SECONDS once it has written its deadline,
+    checking every 0.05 s; return the calls it made and its deadline."""
     tools = tmp_path / "tools"
     tools.mkdir()
     fake(tools, "runpodctl", runpodctl)
@@ -76,15 +101,20 @@ def watch(
         env["POD_DELETE_AT"] = str(delete_at)
     process = subprocess.Popen(["bash", str(WATCHDOG)], env=env, stdout=subprocess.DEVNULL)
     try:
-        process.wait(timeout=seconds)
-    except subprocess.TimeoutExpired:
+        if count is None:
+            until(lambda: file.exists() and file.read_text().strip() != "")
+            with contextlib.suppress(subprocess.TimeoutExpired):
+                process.wait(timeout=seconds)
+        else:
+            until(lambda: len(calls(tmp_path)) >= count)
+    finally:
         process.kill()
         process.wait()
     return calls(tmp_path), file.read_text().strip()
 
 
 def test_deletes_the_pod_once_its_deadline_passes(tmp_path):
-    assert watch(tmp_path, int(time.time()) - 1)[0] == ["runpodctl pod delete pod1"]
+    assert watch(tmp_path, int(time.time()) - 1, count=1)[0] == ["runpodctl pod delete pod1"]
 
 
 def test_leaves_the_pod_before_its_deadline_and_records_it(tmp_path):
@@ -97,22 +127,23 @@ def test_a_moved_deadline_wins_either_way(tmp_path):
     (tmp_path / "later").mkdir()
     assert watch(tmp_path / "later", now - 1, deadline=str(now + 3600))[0] == []
     (tmp_path / "sooner").mkdir()
-    assert watch(tmp_path / "sooner", now + 3600, deadline=str(now - 1))[0] == ["runpodctl pod delete pod1"]
+    sooner = watch(tmp_path / "sooner", now + 3600, deadline=str(now - 1), count=1)
+    assert sooner[0] == ["runpodctl pod delete pod1"]
 
 
 @pytest.mark.parametrize("deadline", [None, "12x", "0999999999", "99999999999999999999"])
 def test_a_deadline_that_isnt_plain_seconds_deletes_the_pod(tmp_path, deadline):
     delete_at = int(time.time()) + 3600 if deadline else None
-    assert watch(tmp_path, delete_at, deadline=deadline)[0] == ["runpodctl pod delete pod1"]
+    assert watch(tmp_path, delete_at, deadline=deadline, count=1)[0] == ["runpodctl pod delete pod1"]
 
 
 def test_falls_back_to_the_older_runpodctl_then_the_api(tmp_path):
-    found, _ = watch(tmp_path, int(time.time()) - 1, runpodctl=False)
+    found, _ = watch(tmp_path, int(time.time()) - 1, runpodctl=False, count=3)
     assert found == ["runpodctl pod delete pod1", "runpodctl remove pod pod1", CURL]
 
 
 def test_keeps_trying_until_a_delete_works(tmp_path):
-    found, _ = watch(tmp_path, int(time.time()) - 1, runpodctl=False, curl=False, seconds=3)
+    found, _ = watch(tmp_path, int(time.time()) - 1, runpodctl=False, curl=False, count=6)
     assert found[:6] == ["runpodctl pod delete pod1", "runpodctl remove pod pod1", CURL] * 2
 
 
@@ -146,6 +177,17 @@ class Pod:
             [str(self.script), *args], capture_output=True, text=True, env=self.env, cwd=cwd
         )
 
+    def spawn(self, *args: str, cwd: Path, stderr: Path) -> subprocess.Popen[str]:
+        with stderr.open("w") as out:
+            return subprocess.Popen(
+                [str(self.script), *args],
+                stdout=subprocess.PIPE,
+                stderr=out,
+                text=True,
+                env=self.env,
+                cwd=cwd,
+            )
+
     def boot(self, hours: str = "1", start: str | None = "exec sleep 600") -> None:
         """Start the container as Runpod would, with the command args gives and a fake /start.sh."""
         made = self.run("args", hours)
@@ -166,8 +208,13 @@ class Pod:
         raise AssertionError("the watchdog never started")
 
     def close(self) -> None:
-        if self.container is not None and self.container.poll() is None:
-            os.killpg(self.container.pid, signal.SIGKILL)
+        # A group outlives its leader, and commands started on the pod lead groups of their own.
+        groups = [int(pid.read_text()) for pid in (self.folder / "root" / "logs").glob("*.pid")]
+        if self.container is not None:
+            groups.append(self.container.pid)
+        for group in groups:
+            with contextlib.suppress(ProcessLookupError):
+                os.killpg(group, signal.SIGKILL)
         subprocess.run(["pkill", "-f", str(self.folder)])
 
 
@@ -241,11 +288,13 @@ def test_deadline_refuses_a_pod_without_a_watchdog(pod):
 def test_deadline_notices_the_watchdog_dying_while_the_container_runs(pod):
     pod.boot()
     assert pod.run("deadline").returncode == 0
-    subprocess.run(["pkill", "-f", f"bash {pod.folder}/pod-watchdog.sh"], check=True)
+    # Only the watchdog: the container's own shell names it too, and must keep running.
+    subprocess.run(["pkill", "-fx", f"bash {pod.folder}/pod-watchdog.sh"], check=True)
     time.sleep(0.2)
     made = pod.run("deadline")
     assert made.returncode == 1
     assert "the watchdog isn't running" in made.stderr
+    assert pod.container is not None and pod.container.poll() is None
 
 
 def test_deadline_says_when_deletes_are_failing(pod):
@@ -281,21 +330,55 @@ def test_start_log_and_stop_a_command(pod):
     time.sleep(0.2)
     with pytest.raises(ProcessLookupError):
         os.killpg(group, 0)
+    made = pod.run("stop", "nap")
+    assert made.returncode == 1 and "nap isn't running" in made.stderr
 
 
-def test_wait_keeps_the_mac_awake_until_the_command_ends(pod):
-    pod.boot()
-    (pod.folder / "root" / "candor").mkdir()
-    tool(pod.tools, "caffeinate", '#!/bin/bash\necho "caffeinate $* for $PPID" >>"$CALLS"\n')
-    pod.env["POD_WAIT_INTERVAL"] = "0.05"
-    assert pod.run("start", "nap", "sleep", "1").returncode == 0
-    began = time.time()
-    made = pod.run("wait", "nap")
+@pytest.mark.parametrize("command", [["deadline"], ["start", "nap", "sleep", "1"], ["stop", "nap"]])
+def test_a_pod_out_of_reach_is_reported_as_that(pod, command):
+    tool(pod.tools, "ssh", "#!/bin/bash\nexit 255\n")
+    made = pod.run(*command)
+    assert made.returncode == 1
+    assert "can't reach the pod over SSH" in made.stderr
+
+
+def start(pod: Pod, name: str, *command: str) -> None:
+    """Start COMMAND as NAME, and wait until it leads its own process group, as the real setsid has it
+    do before start returns, or has ended."""
+    made = pod.run("start", name, *command)
     assert made.returncode == 0, made.stderr
-    assert 0.8 < time.time() - began < 5
-    assert "nap has ended" in made.stdout
-    [awake] = [line for line in calls(pod.folder) if line.startswith("caffeinate")]
-    assert re.fullmatch(r"caffeinate -is -w (\d+) for \1", awake)
+    pid = int((pod.folder / "root" / "logs" / f"{name}.pid").read_text())
+
+    def formed() -> bool:
+        try:
+            return os.getpgid(pid) == pid
+        except ProcessLookupError:
+            return True
+
+    until(formed)
+
+
+def started(pod: Pod, *command: str) -> None:
+    """Start COMMAND as nap on a pod with 12 hours left, with waits that check every 0.05 s."""
+    pod.boot(hours="12")
+    (pod.folder / "root" / "candor").mkdir()
+    if not (pod.tools / "caffeinate").exists():
+        tool(pod.tools, "caffeinate", "#!/bin/bash\n")
+    pod.env["POD_WAIT_INTERVAL"] = "0.05"
+    start(pod, "nap", *command)
+
+
+def test_wait_keeps_the_mac_awake_until_the_command_ends(pod, tmp_path):
+    tool(pod.tools, "caffeinate", '#!/bin/bash\necho "caffeinate $*" >>"$CALLS"\n')
+    started(pod, "sleep", "1")
+    waiting = pod.spawn("wait", "nap", cwd=tmp_path, stderr=tmp_path / "errors")
+    out, _ = waiting.communicate(timeout=10)
+    assert waiting.returncode == 0, (tmp_path / "errors").read_text()
+    assert out == "nap exited with 0\n"
+    until(lambda: any(line.startswith("caffeinate") for line in calls(pod.folder)))
+    assert [line for line in calls(pod.folder) if line.startswith("caffeinate")] == [
+        f"caffeinate -is -w {waiting.pid}"
+    ]
 
 
 def test_wait_rides_out_dropped_connections_but_not_a_pod_thats_gone(pod):
@@ -305,7 +388,7 @@ def test_wait_rides_out_dropped_connections_but_not_a_pod_thats_gone(pod):
     pod.env["POD_WAIT_INTERVAL"] = "0.05"
     made = pod.run("wait", "nap")
     assert made.returncode == 1 and "nap was never started" in made.stderr
-    assert pod.run("start", "nap", "sleep", "0").returncode == 0
+    start(pod, "nap", "sleep", "0")
     (pod.tools / "ssh").rename(pod.tools / "reach")
     tries = pod.folder / "tries"
 
@@ -324,6 +407,80 @@ def test_wait_rides_out_dropped_connections_but_not_a_pod_thats_gone(pod):
     drop(5)
     made = pod.run("wait", "nap")
     assert made.returncode == 1 and "hasn't answered 5 times in a row" in made.stderr
+
+
+@pytest.mark.parametrize(("command", "code"), [(["true"], 0), (["bash", "-c", "exit 3"], 3)])
+def test_wait_exits_0_only_if_the_command_did(pod, command, code):
+    started(pod, *command)
+    made = pod.run("wait", "nap")
+    assert made.returncode == (code != 0)
+    assert f"nap exited with {code}" in made.stdout + made.stderr
+
+
+def test_wait_says_when_the_command_was_stopped(pod):
+    started(pod, "sleep", "30")
+    assert pod.run("stop", "nap").returncode == 0
+    made = pod.run("wait", "nap")
+    assert made.returncode == 1 and "nap ended without an exit status" in made.stderr
+
+
+def test_wait_pulls_once_more_at_the_end_and_says_how_the_command_ended_if_it_cant(pod, tmp_path):
+    here = tmp_path / "here"
+    here.mkdir()
+    started(pod, "bash", "-c", "mkdir -p runs/r; echo done >runs/r/b")
+    made = pod.run("wait", "nap", "runs/r", cwd=here)
+    assert made.returncode == 0, made.stderr
+    assert (here / "runs" / "r" / "b").read_text() == "done\n"
+    start(pod, "failed", "bash", "-c", "exit 3")
+    made = pod.run("wait", "failed", "runs/none", cwd=here)
+    assert made.returncode == 1
+    assert "failed exited with 3, but runs/none couldn't be pulled" in made.stderr
+
+
+def test_wait_pulls_as_it_goes_and_rides_out_a_failed_pull(pod, tmp_path):
+    here = tmp_path / "here"
+    here.mkdir()
+    code = pod.folder / "root" / "candor"
+    started(pod, "bash", "-c", "until [ -f go ]; do sleep 0.05; done; echo late >runs/r/b")
+    pod.env["POD_PULL_SECONDS"] = "0"
+    errors = tmp_path / "errors"
+    waiting = pod.spawn("wait", "nap", "runs/r", cwd=here, stderr=errors)
+    try:
+        # Nothing is there to pull yet, which doesn't end the wait.
+        until(lambda: "couldn't pull runs/r this time" in errors.read_text())
+        (code / "runs" / "r").mkdir(parents=True)
+        (code / "runs" / "r" / "a").write_text("early")
+        until(lambda: (here / "runs" / "r" / "a").exists())
+        (code / "go").write_text("")
+        out, _ = waiting.communicate(timeout=10)
+    finally:
+        waiting.kill()
+        waiting.wait()
+    assert waiting.returncode == 0, errors.read_text()
+    assert out == "nap exited with 0\n"
+    assert (here / "runs" / "r" / "b").read_text() == "late\n"
+
+
+def test_wait_pulls_and_stops_as_the_deadline_nears(pod, tmp_path):
+    here = tmp_path / "here"
+    here.mkdir()
+    started(pod, "sleep", "30")
+    (pod.folder / "root" / "candor" / "runs" / "r").mkdir(parents=True)
+    (pod.folder / "root" / "candor" / "runs" / "r" / "a").write_text("kept")
+    pod.env["POD_WARN_SECONDS"] = str(13 * 3600)
+    made = pod.run("wait", "nap", "runs/r", cwd=here)
+    assert made.returncode == 1
+    assert "the watchdog deletes the pod at" in made.stderr and "nap is still running" in made.stderr
+    assert (here / "runs" / "r" / "a").read_text() == "kept"
+    # Far enough away, the deadline doesn't end the wait.
+    pod.env["POD_WARN_SECONDS"] = str(11 * 3600)
+    start(pod, "quick", "true")
+    made = pod.run("wait", "quick", cwd=here)
+    assert made.returncode == 0, made.stderr
+    # A deadline that isn't a time is one the watchdog is deleting the pod over.
+    (pod.folder / "pod-delete-at").write_text("12x\n")
+    made = pod.run("wait", "nap", cwd=here)
+    assert made.returncode == 1 and "the pod's deadline isn't a time ('12x')" in made.stderr
 
 
 def test_push_and_pull_files_and_folders(pod, tmp_path):
@@ -376,7 +533,8 @@ def git(repo: Path, *args: str) -> None:
     subprocess.run(command, check=True, capture_output=True)
 
 
-def test_code_copies_the_working_tree_and_leaves_what_git_ignores(tmp_path):
+def small_repo(tmp_path: Path) -> Path:
+    """A repository of pod.sh, its watchdog, a.py and zzz.py, committed as 'start'."""
     repo = tmp_path / "repo"
     (repo / "scripts" / "pod").mkdir(parents=True)
     shutil.copy(POD, repo / "scripts" / "pod.sh")
@@ -387,12 +545,19 @@ def test_code_copies_the_working_tree_and_leaves_what_git_ignores(tmp_path):
     git(repo, "init", "-q")
     git(repo, "add", ".")
     git(repo, "commit", "-qm", "start")
+    return repo
+
+
+def test_code_copies_the_working_tree_and_leaves_what_git_ignores(tmp_path):
+    repo = small_repo(tmp_path)
     # The last file git lists is gone, which once stopped the copy without a word.
     (repo / "zzz.py").unlink()
     (repo / "new.py").write_text("new")
     (repo / "local.gguf").write_text("ignored")
 
     pod = Pod(tmp_path, script=repo / "scripts" / "pod.sh")
+    (pod.folder / "root" / ".local" / "bin").mkdir(parents=True)
+    tool(pod.folder / "root" / ".local" / "bin", "uv", UV)
     code = pod.folder / "root" / "candor"
     (code / "runs" / "r").mkdir(parents=True)
     (code / "runs" / "r" / "result.json").write_text("kept")
@@ -408,3 +573,57 @@ def test_code_copies_the_working_tree_and_leaves_what_git_ignores(tmp_path):
     assert not (code / "local.gguf").exists()
     assert (code / "runs" / "r" / "result.json").read_text() == "kept"
     assert (code / ".venv").is_dir() and (code / "pushed.gguf").read_text() == "kept"
+    # A new uv.lock comes with the code, so the pod's packages follow it.
+    assert calls(pod.folder) == ["uv sync --frozen --no-dev --quiet in /root/candor"]
+
+
+def test_setup_arms_copies_installs_and_checks_the_gpu(tmp_path):
+    repo = small_repo(tmp_path)
+    pod = Pod(tmp_path, script=repo / "scripts" / "pod.sh")
+    try:
+        token = tmp_path / "home" / ".cache" / "huggingface" / "token"
+        token.parent.mkdir(parents=True)
+        token.write_text("hf_secret")
+        # Nothing goes to a pod the watchdog won't delete.
+        made = pod.run("setup", cwd=repo)
+        assert made.returncode == 1 and "the pod has no deadline" in made.stderr
+        assert sorted(path.name for path in (pod.folder / "root").iterdir()) == []
+
+        pod.boot()
+        tool(tmp_path, "uv", UV)
+        installer = f"mkdir -p ~/.local/bin && cp {tmp_path / 'uv'} ~/.local/bin/uv"
+        tool(pod.tools, "curl", f'#!/bin/bash\necho "curl $*" >>"$CALLS"\necho "{installer}"\n')
+        record(pod.tools, "nvidia-smi")
+        made = pod.run("setup", cwd=repo)
+        assert made.returncode == 0, made.stderr
+        copied = pod.folder / "root" / ".cache" / "huggingface" / "token"
+        assert copied.read_text() == "hf_secret" and stat.S_IMODE(copied.stat().st_mode) == 0o600
+        assert (pod.folder / "root" / "candor" / "a.py").read_text() == "a.py"
+        installed, *checked = calls(pod.folder)
+        assert installed.startswith("curl -LsSf https://astral.sh/uv/")
+        assert checked == [
+            "uv sync --frozen --no-dev --quiet in /root/candor",
+            "nvidia-smi --query-gpu=name,driver_version,memory.total --format=csv,noheader",
+            "python -c in /root/candor",
+        ]
+    finally:
+        pod.close()
+
+
+def test_code_refuses_while_a_command_is_running(tmp_path):
+    repo = small_repo(tmp_path)
+    pod = Pod(tmp_path, script=repo / "scripts" / "pod.sh")
+    (pod.folder / "root" / ".local" / "bin").mkdir(parents=True)
+    tool(pod.folder / "root" / ".local" / "bin", "uv", UV)
+    (pod.folder / "root" / "logs").mkdir()
+    job = subprocess.Popen(["sleep", "30"], start_new_session=True)
+    try:
+        (pod.folder / "root" / "logs" / "nap.pid").write_text(f"{job.pid}\n")
+        made = pod.run("code", cwd=repo)
+        assert made.returncode == 1 and "nap still running on the pod" in made.stderr
+        assert not (pod.folder / "root" / "candor").exists()
+    finally:
+        job.kill()
+        job.wait()
+    made = pod.run("code", cwd=repo)
+    assert made.returncode == 0, made.stderr

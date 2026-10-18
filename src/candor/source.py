@@ -71,13 +71,26 @@ def local_headers(folder: Path) -> dict[str, dict[str, Any]]:
     return headers
 
 
-def tensor_shapes(model: str, revision: str | None = None) -> dict[str, list[int]]:
-    """Every tensor's shape, read from the safetensors headers only."""
+def tensor_headers(model: str, revision: str | None = None) -> dict[str, dict[str, Any]]:
+    """Every tensor's dtype and shape, read from the safetensors headers only."""
     if not is_local(model):
         metadata = get_safetensors_metadata(model, revision=revision)
         return {
-            name: list(info.shape)
+            name: {"dtype": info.dtype, "shape": list(info.shape)}
             for file in metadata.files_metadata.values()
             for name, info in file.tensors.items()
         }
-    return {name: info["shape"] for name, info in local_headers(Path(model).expanduser()).items()}
+    return local_headers(Path(model).expanduser())
+
+
+def tensor_shapes(model: str, revision: str | None = None) -> dict[str, list[int]]:
+    """Every tensor's shape, read from the safetensors headers only."""
+    return {name: info["shape"] for name, info in tensor_headers(model, revision).items()}
+
+
+def float_type(model: str, revision: str | None = None) -> str:
+    """The GGUF type a model converts to without rounding: F16 when every weight matrix is stored
+    as F16, otherwise BF16, which also holds the range of F32 weights."""
+    headers = tensor_headers(model, revision).values()
+    stored = {info["dtype"] for info in headers if len(info["shape"]) > 1}
+    return "F16" if stored == {"F16"} else "BF16"

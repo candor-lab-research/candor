@@ -25,6 +25,7 @@ from candor.run import RunError
 from candor.search import Score, Search
 from candor.targets import Writer
 
+from .test_files import recorded_syncs
 from .tiny_gguf import END_THINK
 from .tiny_run import (
     ALWAYS_THINKING_TEMPLATE,
@@ -180,6 +181,14 @@ def test_more_trials_carry_on_the_same_search(tiny):
     tiny.settings.search.trials_per_scope = 2
     Search(tiny).search(4)
     assert len(finished(tiny)) == 4
+
+
+def test_a_searchs_record_and_progress_are_on_the_disk_once_written(tiny, monkeypatch):
+    small(tiny, trials=1)
+    tiny.settings.search.report_every = 1
+    synced = recorded_syncs(monkeypatch)
+    Search(tiny).search(1)
+    assert {"inputs.json", "progress.json"} <= {name for name, _ in synced}
 
 
 def test_a_search_without_its_record_is_refused(tiny):

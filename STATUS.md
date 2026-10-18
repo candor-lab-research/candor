@@ -45,13 +45,14 @@ thinking on (next, e.g. Qwen3.8-27B). A 9B model must not take days.
   `results/phase-4-k2-horizon-7b.md`.
 - 20 ideas from arXiv are ranked in `results/new-features.md`.
 - The repository review (2026-10-18): 24 work packages in the order agreed
-  (`results/evidence-2026-10-18/repo-review.md`). Steps 1 (faster tests, one server launch) and 2
+  (`results/evidence-2026-10-18/repo-review.md`). Steps 1 (faster tests, one server launch), 2
   (the thinking check, measurements that can't pair stale labels, intervals in `compare`, findings
-  corrected) done; step 3, 27B cost and safety: packages 6-10 done (3b in review), 14 and 17 next.
+  corrected) and 3 (27B cost and safety: packages 6-10, 14 and 17) done; step 4, the one
+  measurements change before any 27B reference, next.
 
 ## Next
 
-1. The repository review's steps 3-5, then the phase-end discussion: where to go next, from
+1. The repository review's steps 4-5, then the phase-end discussion: where to go next, from
    `results/findings.md`, `results/new-features.md` (chiefly the search's cost for 27B) and the
    review's 11 method questions, including how to score Qwen3.8-27B thinking off; no method
    changes until agreed.

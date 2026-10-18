@@ -426,8 +426,31 @@ def test_a_thinking_model_of_36_layers_scored_with_adapters_of_its_own_starts_th
     assert all(path.exists() for path in adapters)
 
 
+def test_a_thinking_model_of_64_layers_with_3_targets_a_layer_starts_through_links_by_number(tmp_path):
+    # Per-layer and one-layer direction sets at both places directions are read (68), and 17 more from
+    # candor score, each with 3 edit targets in each of 64 layers: 16,320 adapters.
+    root = tmp_path / "runs" / "r"
+    adapters = [
+        root / "adapters" / f"set-{s}" / f"blk.{layer}.{target}.weight.gguf"
+        for s in range(85)
+        for layer in range(64)
+        for target in ("attn_output", "ffn_down", "ssm_out")
+    ]
+    binary = stub(
+        tmp_path, f'printf "%s\\n" "$@" > "{tmp_path}/args"\nls | wc -l > "{tmp_path}/links"\nexit 1'
+    )
+    s = LlamaServer(binary, tmp_path / "model.gguf", tmp_path / "server.log", adapters)
+    with pytest.raises(ServerError, match="exited with code 1"):
+        s.start()
+    args = (tmp_path / "args").read_text().splitlines()
+    listed = args[args.index("--lora") + 1]
+    assert len(listed.encode()) < MAX_ARGUMENT
+    assert listed.split(",") == [str(i) for i in range(len(adapters))]
+    assert int((tmp_path / "links").read_text()) == len(adapters)
+
+
 def test_more_adapters_than_one_argument_holds_even_by_number_are_refused(tmp_path):
-    adapters = [tmp_path / "set" / f"{i:05d}-{'x' * 40}.gguf" for i in range(12000)]
+    adapters = [tmp_path / "set" / f"{i:05d}-{'x' * 40}.gguf" for i in range(24000)]
     s = LlamaServer(tmp_path / "llama-server", tmp_path / "model.gguf", tmp_path / "server.log", adapters)
     with pytest.raises(ServerError, match="more than Linux allows in one argument"):
         s.start()
@@ -547,6 +570,24 @@ def test_a_failure_stops_the_requests_still_queued(monkeypatch):
     assert len(sent) <= 4
 
 
+def test_a_failed_batch_of_first_tokens_stops_every_request_of_it(monkeypatch):
+    s = LlamaServer(LLAMA_SERVER, Path("model.gguf"), Path("server.log"), parallel=2)
+    given = []
+
+    def complete(payload, requests=None):
+        given.append(requests)
+        if len(given) == 2:
+            raise ServerError("injected")
+        time.sleep(0.05)
+        return {}
+
+    monkeypatch.setattr(s, "_complete", complete)
+    with pytest.raises(ServerError, match="injected"):
+        s._complete_all([{}] * 4)
+    # One set of requests for the batch, stopped, so the one still running is closed.
+    assert given[0] is not None and all(requests is given[0] for requests in given) and given[0].stopped
+
+
 # Sampling that keeps every token, so seeds decide the answers.
 SAMPLED = {"temperature": 1.0, "top_k": 0, "top_p": 1.0, "min_p": 0.0}
 NEWLINE = len(SPECIAL) + 0x0A
@@ -556,6 +597,38 @@ THINKING_PROMPTS = [[*p, THINKING_TOKENS.index(THINK), NEWLINE] for p in PROMPTS
 def one_slot(folder: Path, model: str) -> LlamaServer:
     """A server answering one prompt at a time, so no other answer in the batch can tip a near tie."""
     return LlamaServer(LLAMA_SERVER, folder / model, folder / "server.log", parallel=1, context_per_slot=96)
+
+
+@pytest.mark.parametrize("batch", ["generate", "thoughts"])
+def test_a_server_stopped_while_answering_stops_at_once(tmp_path, monkeypatch, batch):
+    # Big enough that a long answer takes seconds.
+    weights = random_weights(hidden=512, ffn=2048, layers=8)
+    write_model(tmp_path / "slow.gguf", weights, context=8192, thinking=True)
+    s = LlamaServer(
+        LLAMA_SERVER, tmp_path / "slow.gguf", tmp_path / "server.log", parallel=2, context_per_slot=8192
+    )
+    real_terminate, real_complete = engine.terminate, s._complete
+    monkeypatch.setattr(engine, "terminate", lambda process: real_terminate(process, timeout=10))
+    sent = []
+
+    def complete(payload, requests=None):
+        sent.append(payload)
+        if len(sent) == 2:
+            # Stopped, as by Ctrl-C, while the other answer is well under way.
+            time.sleep(0.5)
+            raise KeyboardInterrupt
+        return real_complete(payload, requests)
+
+    monkeypatch.setattr(s, "_complete", complete)
+    long = Thinking(THINK, END_THINK, END_THINK, THINK, 6000, "")
+    with pytest.raises(KeyboardInterrupt), s:
+        if batch == "generate":
+            s.generate(PROMPTS[:2], 6000)
+        else:
+            s.thoughts(PROMPTS[:2], engine.GREEDY, [0, 0], long)
+    # llama-server waits for the answer it is working on to be closed before it stops: not killed
+    # after the wait, as it would be were that answer still open.
+    assert s.process is not None and s.process.returncode == 0
 
 
 def test_sampled_answers_repeat_with_their_seeds(files):

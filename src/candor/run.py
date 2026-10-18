@@ -13,7 +13,6 @@ import fcntl
 import hashlib
 import json
 import math
-import os
 import shutil
 from collections.abc import Callable, Iterator, Sequence
 from contextlib import contextmanager
@@ -32,6 +31,7 @@ from . import checks, config, convert, directions, residuals, source, targets, t
 from .adapters import write_adapter
 from .edit import RowNorm, edit_factors, rank_one
 from .engine import LLAMA_CPP_RELEASE, LlamaServer, Thinking
+from .files import sync, write_atomic
 from .judge import normalise
 from .weights import ModelFiles
 
@@ -78,7 +78,7 @@ STAGES = {
     "adapters": 1,
     "measurements": 1,
     "scores": 1,
-    "exports": 2,
+    "exports": 3,
     "directions_answering.pt": 1,
     "thinking": 1,
 }
@@ -112,28 +112,6 @@ def read_record(record: Path) -> Any:
         return json.loads(record.read_text())
     except (OSError, UnicodeDecodeError, json.JSONDecodeError):
         return None
-
-
-def _flush(descriptor: int) -> None:
-    """On macOS a plain fsync can leave data in the drive's cache; F_FULLFSYNC waits for the disk."""
-    if hasattr(fcntl, "F_FULLFSYNC"):
-        try:
-            fcntl.fcntl(descriptor, fcntl.F_FULLFSYNC)
-            return
-        except OSError:
-            pass
-    os.fsync(descriptor)
-
-
-def sync(path: Path) -> None:
-    """Flush a file, or every file in a folder, and the folder entries, to the disk."""
-    files = [path] if path.is_file() else [p for p in path.rglob("*") if p.is_file()]
-    for item in [*files, *{path.parent, *(f.parent for f in files)}]:
-        descriptor = os.open(item, os.O_RDONLY)
-        try:
-            _flush(descriptor)
-        finally:
-            os.close(descriptor)
 
 
 def load_prompts(spec: config.PromptSet) -> list[str]:
@@ -288,11 +266,7 @@ class Run:
         _remove(output)
         sync(partial)
         partial.rename(output)
-        written = record.with_name(record.name + ".building")
-        written.write_text(json.dumps(self._with_code(output, inputs), sort_keys=True))
-        sync(written)
-        written.rename(record)
-        sync(record)
+        write_atomic(record, json.dumps(self._with_code(output, inputs), sort_keys=True))
 
     # Model
 
@@ -335,7 +309,12 @@ class Run:
         cache = next(p for p in [cache, *cache.parents] if p.exists())
         what = "downloading the model"
         if not self.path("gguf").exists() and cache.stat().st_dev == self.folder.stat().st_dev:
-            needed += self._room(1, True, self._model_without_download)
+            # A 16-bit deployment needs no copy beyond the converted one when it is the model's own type.
+            deployed = self.settings.deployment.quantization
+            quantized = deployed not in ("F16", "BF16") or deployed != source.float_type(
+                self._model_without_download, model.revision
+            )
+            needed += self._room(1, quantized, self._model_without_download)
             what = "downloading and converting the model"
         free = shutil.disk_usage(cache).free
         if free < needed:
@@ -644,9 +623,13 @@ class Run:
             self.path("thinking", f"{key}.json"),
             self.path("private", "thinking", f"{key}.json"),
         )
+        sampled = {name: private.with_name(f"{key}.{name}.json") for name in KL_SETS}
         if record.exists():
             made = json.loads(record.read_text())
             if private.exists() and digest(traces := json.loads(private.read_text())) == made["traces"]:
+                # Sets kept along the way that a stop after the record, or a pull, left behind.
+                for path in sampled.values():
+                    path.unlink(missing_ok=True)
                 return traces
             raise RunError(
                 f"the unedited model's thinking that KL is read after is missing or changed in "
@@ -657,38 +640,45 @@ class Run:
         settings = self.settings
         ids = self.prompt_ids()
         _, quantized = self.gguf()
-        self.report("Thinking with the unedited model, to read KL where its answers start")
-        room = max(len(p) for name in KL_SETS for p in ids[name]) + self.thinking_room() + 8
-        traces: dict[str, list[list[int] | None]] = {}
-        slots, setting = settings.slots.thinking, "slots.thinking in candor.toml"
-        with self.server(quantized, context_per_slot=room, parallel=slots, slots_setting=setting) as server:
-            thinking = self.thinking(server)
-            assert thinking is not None
-            end = server.token_of(thinking.end)
-            for name in KL_SETS:
-                prompts = ids[name]
-                done = every_tenth(
-                    self.report, f"Thought through {name.replace('_', ' ')} prompts", len(prompts)
-                )
-                thoughts = server.thoughts(
-                    prompts, self.sampling(), seeds(settings.sampling.seed, len(prompts)), thinking, done
-                )
-                traces[name] = [
-                    None if thought is None else prompt + thought + _after(closed, end)
-                    for prompt, thought, closed in zip(prompts, thoughts, ids[name + ANSWERING], strict=True)
-                ]
-                if not any(traces[name]):
-                    raise RunError(
-                        f"the unedited model's thinking didn't end by itself on any of the {len(prompts)} "
-                        f"{name.replace('_', ' ')} prompts, so KL can't be read after it; raise "
-                        "deployment.thinking_budget"
-                    )
+        # Each set is kept as soon as it is sampled, so an interruption loses only the set it stopped.
         private.parent.mkdir(parents=True, exist_ok=True)
-        building = private.with_name(f"{private.name}.building")
-        building.write_text(json.dumps(traces))
-        sync(building)
-        building.replace(private)
-        sync(private)
+        traces = {name: json.loads(path.read_text()) for name, path in sampled.items() if path.exists()}
+        if traces:
+            sets = " and ".join(name.replace("_", " ") for name in traces)
+            self.report(f"Reusing the unedited model's thinking on the {sets} prompts, sampled before")
+        if missing := [name for name in KL_SETS if name not in traces]:
+            self.report("Thinking with the unedited model, to read KL where its answers start")
+            room = max(len(p) for name in KL_SETS for p in ids[name]) + self.thinking_room() + 8
+            slots, setting = settings.slots.thinking, "slots.thinking in candor.toml"
+            with self.server(
+                quantized, context_per_slot=room, parallel=slots, slots_setting=setting
+            ) as server:
+                thinking = self.thinking(server)
+                assert thinking is not None
+                end = server.token_of(thinking.end)
+                for name in missing:
+                    prompts = ids[name]
+                    done = every_tenth(
+                        self.report, f"Thought through {name.replace('_', ' ')} prompts", len(prompts)
+                    )
+                    thoughts = server.thoughts(
+                        prompts, self.sampling(), seeds(settings.sampling.seed, len(prompts)), thinking, done
+                    )
+                    traces[name] = [
+                        None if thought is None else prompt + thought + _after(closed, end)
+                        for prompt, thought, closed in zip(
+                            prompts, thoughts, ids[name + ANSWERING], strict=True
+                        )
+                    ]
+                    if not any(traces[name]):
+                        raise RunError(
+                            f"the unedited model's thinking didn't end by itself on any of the "
+                            f"{len(prompts)} {name.replace('_', ' ')} prompts, so KL can't be read after it; "
+                            "raise deployment.thinking_budget"
+                        )
+                    write_atomic(sampled[name], json.dumps(traces[name]))
+        traces = {name: traces[name] for name in KL_SETS}
+        write_atomic(private, json.dumps(traces))
         made = {
             "traces": digest(traces),
             "kept": {name: sum(trace is not None for trace in traces[name]) for name in KL_SETS},
@@ -697,6 +687,8 @@ class Run:
         partial = record.with_name(f"{record.name}.building")
         partial.write_text(json.dumps(made))
         self.commit(partial, record, self._thinking_inputs())
+        for path in sampled.values():
+            path.unlink()
         return traces
 
     def chats(self, prompts: list[str]) -> list[list[dict[str, str]]]:
@@ -726,12 +718,13 @@ class Run:
                 raise RunError(f"llama-server's ids for the {name} prompts don't match its chat endpoint")
 
     def _check_lengths(self, ids: dict[str, list[list[int]]]) -> None:
-        """Prompts the model answers must fit with whole thinking and a whole answer; the rest need room
-        for one token."""
+        """Prompts the model answers must fit with whole thinking and a whole answer, and those KL is read
+        on with whole thinking and one token; the rest need room for one token."""
         limit, thinking = self.context_limit, self.thinking_room()
         if not limit:
             return
-        room = {name: tokens + thinking for name, tokens in self.answer_tokens.items()}
+        room = {name: thinking + 1 for name in KL_SETS}
+        room |= {name: tokens + thinking for name, tokens in self.answer_tokens.items()}
         too_long = {name: sum(len(p) + room.get(name, 1) > limit for p in ids[name]) for name in PROMPT_SETS}
         if any(too_long.values()):
             counts = ", ".join(f"{count} {name}" for name, count in too_long.items() if count)
@@ -834,12 +827,31 @@ class Run:
         }
         return self.path(f"directions{closed}.pt"), inputs
 
+    def check_residuals(self) -> None:
+        """Whether this machine can read the model's residuals, checked up front so a model it can't
+        isn't downloaded and converted first. Directions already read, as on a pod, need nothing, but
+        directions lost after they were read are refused (see _check_directions_kept)."""
+        self._check_directions_kept()
+        if not self.path("directions.pt").exists():
+            self.check_memory()
+
+    def _check_directions_kept(self) -> None:
+        for answering in self.positions:
+            path = self.path(f"directions{ANSWERING if answering else ''}.pt")
+            if record_of(path).exists() and not path.exists():
+                raise RunError(
+                    f"{path.name} is missing but its record isn't, and residuals read again, on another "
+                    "machine above all, wouldn't give exactly the directions the adapters and searches here "
+                    "were built from: restore it, or build the run afresh in a new folder"
+                )
+
     def directions(self, answering: bool = False) -> torch.Tensor:
         """One refusal direction per residual index, from transformers fed the run's exact prompt ids:
         read at the end of each prompt or, with answering, where a thinking model's answer starts after
         an empty thinking block. A thinking model's are read at both in one pass."""
         if answering not in self.positions:
             raise RunError("only a thinking model has directions where its answer starts")
+        self._check_directions_kept()
         plans = {position: self._direction_plan(position) for position in self.positions}
         self.inputs["directions"] = digest(plans[False][1])
         if True in plans:
@@ -1016,10 +1028,7 @@ class Run:
         matching their settings are reused."""
         with self.locked():
             self.check_remote_code()
-            # Checked again before reading residuals; up front only so a model this machine can't
-            # read isn't downloaded and converted first. Directions read on a pod skip it.
-            if not self.path("directions.pt").exists():
-                self.check_memory()
+            self.check_residuals()
             made = self.adapters()
             ids = json.loads(self.path("prompts.json").read_text())
             kept = self.thinking_traces() if self.settings.deployment.think_close else {}

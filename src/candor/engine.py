@@ -168,15 +168,15 @@ class LlamaServer:
 
     def _lora_list(self) -> str:
         """Every adapter in the one --lora argument llama.cpp wants, as a comma-separated list of their
-        names in the server's folder, which keeps it short, as Linux limits the argument's length. Each
-        is quoted, so a comma in a folder name can't split it."""
+        names in the server's folder, which keeps it short, as Linux limits the argument's length."""
         return ",".join(map(_quoted, self.names))
 
     def _link(self) -> None:
-        """Run the server in a temporary folder of links to the adapters, named by number, for adapters
-        whose paths pass Linux's limit even from the folder holding them all, as a thinking model of 36
-        layers' do once candor score adds its own. No adapter is renamed."""
-        names = [f"{i}.gguf" for i in range(len(self.adapters))]
+        """Run the server in a temporary folder of links to the adapters, named by number alone, for
+        adapters whose paths pass Linux's limit even from the folder holding them all, as a thinking
+        model of 36 layers' do once candor score adds its own. llama.cpp reads an adapter whatever its
+        file is called. No adapter is renamed."""
+        names = [str(i) for i in range(len(self.adapters))]
         size = len(",".join(map(_quoted, names)).encode())
         if size >= MAX_ARGUMENT:
             raise ServerError(
@@ -266,16 +266,22 @@ class LlamaServer:
         self, payloads: list[dict[str, Any]], done: Callable[[], None] | None = None
     ) -> list[dict[str, Any]]:
         """Every payload's result, in order. done is called as each one finishes."""
-        return self._all([partial(self._complete, payload) for payload in payloads], done)
+        requests = Requests()
+        return self._all(
+            [partial(self._complete, payload, requests) for payload in payloads], done, requests=requests
+        )
 
     def _all[T](
         self,
         work: Sequence[Callable[[], T]],
         done: Callable[[], None] | None = None,
         each: Callable[[int, T], None] | None = None,
+        requests: Requests | None = None,
     ) -> list[T]:
         """Every piece of work's result, in order, as many at once as the server has slots. As each one
-        finishes, done is called, and each with its place and its result."""
+        finishes, done is called, and each with its place and its result. The work's requests, when
+        given, are stopped if anything fails: llama-server told to stop waits for every request it is
+        answering to close first."""
         results: list[Any] = [None] * len(work)
         pool = ThreadPoolExecutor(self.parallel)
         try:
@@ -291,6 +297,8 @@ class LlamaServer:
             # A failed request or a signal stops the rest at once, rather than sending every one still
             # queued before the server can be stopped.
             pool.shutdown(wait=False, cancel_futures=True)
+            if requests:
+                requests.stop()
             raise
         pool.shutdown()
         return results
@@ -356,11 +364,12 @@ class LlamaServer:
         with each prompt's seed. As each one finishes, done is called, and each with its place and
         the answer."""
         lora = self.lora(scales)
+        requests = Requests()
         work = [
-            partial(self._answer_one, prompt, max_tokens, lora, sampling, seed, thinking)
+            partial(self._answer_one, prompt, max_tokens, lora, sampling, seed, thinking, requests)
             for prompt, seed in zip(prompts, seeds or [0] * len(prompts), strict=True)
         ]
-        return self._all(work, done, each)
+        return self._all(work, done, each, requests)
 
     def answers(
         self,
@@ -436,16 +445,16 @@ class LlamaServer:
         the model didn't end its thinking by itself: its budget ran out and it was made to stop, or it
         never closed it."""
         lora = self.lora(None)
+        requests = Requests()
 
         def one(prompt: list[int], seed: int) -> list[int] | None:
             thought, closed, made_to_stop = self._think(
-                prompt, {**sampling, "seed": seed, "lora": lora}, thinking
+                prompt, {**sampling, "seed": seed, "lora": lora}, thinking, requests
             )
             return thought if closed and not made_to_stop else None
 
-        return self._all(
-            [partial(one, prompt, seed) for prompt, seed in zip(prompts, seeds, strict=True)], done
-        )
+        work = [partial(one, prompt, seed) for prompt, seed in zip(prompts, seeds, strict=True)]
+        return self._all(work, done, requests=requests)
 
     def _think(
         self,
@@ -582,8 +591,8 @@ class LlamaServer:
 
 
 def _quoted(field: str) -> str:
-    """A field of a llama.cpp comma-separated list, kept whole whatever commas or quotes it holds."""
-    return '"' + field.replace('"', '""') + '"'
+    """A field of a llama.cpp comma-separated list, quoted only if a comma or quote in it needs it."""
+    return '"' + field.replace('"', '""') + '"' if "," in field or '"' in field else field
 
 
 def _answer_seconds(tokens: int) -> float:
