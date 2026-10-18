@@ -57,6 +57,7 @@ FAILED_CHECK, COULD_NOT_INSPECT = 1, 3
 # rich otherwise looks back only 30 seconds.
 DAY = 24 * 3600
 GIB = 2**30
+WITHOUT_TOOLS = " (drop --mcp, or put CANDOR_MCP= before the command, to serve without tools)"
 
 Row = tuple[str, str, str]
 
@@ -842,14 +843,20 @@ def serve_command(
         int, typer.Option(min=1, max=65535, help="The port for the chat page and the API.")
     ] = 8080,
     context: Annotated[
-        int, typer.Option(min=256, help="Tokens of context, at most the model's own limit.")
-    ] = 16384,
+        int | None,
+        typer.Option(
+            min=256,
+            help="Tokens of context, at most the model's own limit. \\[default: 16384, or 32768 with tools]",
+        ),
+    ] = None,
     mcp: Annotated[
         Path | None,
         typer.Option(
+            envvar="CANDOR_MCP",
             help="A file of MCP servers in Cursor's format (llama-server's --mcp-servers-config) whose "
-            "tools, such as a sandbox or web search, the model can call from the chat page. Their "
-            "descriptions then reach the model too, so it no longer runs exactly as measured."
+            "tools, such as a sandbox or web search, the model can call from the chat page; CANDOR_MCP "
+            "set to one gives every serve its tools, and set empty, none. Their descriptions then reach "
+            "the model too, so it no longer runs exactly as measured.",
         ),
     ] = None,
 ) -> None:
@@ -864,7 +871,7 @@ def serve_command(
     if mcp is not None:
         mcp = mcp.expanduser().resolve()
         if not mcp.is_file():
-            raise typer.BadParameter(f"{mcp} is not a file", param_hint="--mcp")
+            raise typer.BadParameter(f"{mcp} is not a file{WITHOUT_TOOLS}", param_hint="--mcp or CANDOR_MCP")
 
     def report(message: str) -> None:
         console.print(f"[dim]{escape(message)}[/]")
@@ -889,6 +896,8 @@ def serve_command(
                 name = edit.name
                 with run.locked():
                     model = export.built(run, edit)
+            # Tool calls and the pages they return fill a chat's context fast.
+            context = context or (32768 if mcp else 16384)
             limit = run.context_limit
             context = min(context, limit) if limit else context
             args = serve.arguments(run, model, port, context, mcp)
@@ -911,7 +920,7 @@ def serve_command(
                 console.print(serve.sample(run, port), markup=False, highlight=False)
                 tools = serve.mcp_tools(port) if mcp else []
                 if mcp and not tools:
-                    raise serve.ServeError(f"no MCP server in {mcp} listed a tool; see {log}")
+                    raise serve.ServeError(f"no MCP server in {mcp} listed a tool; see {log}{WITHOUT_TOOLS}")
                 console.print(
                     "In the chat page's Settings, then in a new chat (a chat keeps the settings it began "
                     "with):"

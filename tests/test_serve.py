@@ -172,6 +172,33 @@ def test_serve_offers_the_tools_of_mcp_servers_and_stops_if_none_start(tiny, tmp
     assert missing.exit_code == 2 and "is not a file" in missing.output
 
 
+def test_candor_mcp_gives_every_serve_tools_and_more_context(tiny, tmp_path, monkeypatch, stopped_by_ctrl_c):
+    (tmp_path / "one.py").write_text(ONE_TOOL_SERVER)
+    one = {"command": sys.executable, "args": [str(tmp_path / "one.py")]}
+    (tmp_path / "mcp.json").write_text(json.dumps({"mcpServers": {"one": one}}))
+    monkeypatch.setattr(Run, "context_limit", None)
+    serving = ["serve", str(cli_folder(tiny)), "--port", str(free_port())]
+    tools = CliRunner(env={"COLUMNS": "250", "CANDOR_MCP": str(tmp_path / "mcp.json")}).invoke(app, serving)
+    assert tools.exit_code == 0, tools.output
+    assert f"--mcp-servers-config {tmp_path / 'mcp.json'}" in tools.output
+    assert "32768 tokens of context" in tools.output
+    # Set empty, it serves as measured.
+    none = CliRunner(env={"COLUMNS": "250", "CANDOR_MCP": ""}).invoke(app, serving)
+    assert none.exit_code == 0, none.output
+    assert "--mcp-servers-config" not in none.output and "turn off every tool" in none.output
+    assert "16384 tokens of context" in none.output
+    chosen = CliRunner(env={"COLUMNS": "250", "CANDOR_MCP": str(tmp_path / "mcp.json")}).invoke(
+        app, [*serving, "--context", "4096"]
+    )
+    assert chosen.exit_code == 0 and "4096 tokens of context" in chosen.output, chosen.output
+    moved = CliRunner(env={"COLUMNS": "1000", "CANDOR_MCP": str(tmp_path / "moved.json")}).invoke(
+        app, serving
+    )
+    assert moved.exit_code == 2 and "put CANDOR_MCP= before the command" in moved.output
+    shown = CliRunner(env={"COLUMNS": "250"}).invoke(app, ["serve", "--help"])
+    assert "[default: 16384, or 32768 with tools]" in shown.output and "[env var: CANDOR_MCP]" in shown.output
+
+
 def test_the_server_renders_with_the_runs_chat_template_settings(tiny, tmp_path, stopped_by_ctrl_c):
     effort = "effort={{ reasoning_effort | default('high') }}\n"
     write_model(tmp_path / "tiny.gguf", random_weights(), chat_template=effort + TEMPLATE)

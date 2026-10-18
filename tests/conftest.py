@@ -23,3 +23,9 @@ def tiny_llama() -> LlamaForCausalLM:
 @pytest.fixture
 def tiny(tmp_path, monkeypatch):
     return tiny_run(tmp_path, monkeypatch)
+
+
+@pytest.fixture(autouse=True)
+def no_tools_from_the_shell(monkeypatch):
+    """A CANDOR_MCP set where the tests run would give every serve tools."""
+    monkeypatch.delenv("CANDOR_MCP", raising=False)

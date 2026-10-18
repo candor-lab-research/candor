@@ -197,9 +197,11 @@ uv run candor serve runs/rude --trial 37                       # chat with it in
   chat page (`--port`, 8080) until Ctrl-C; the server's log goes to `private/`.
   `--mcp FILE` gives the model the tools of the MCP servers in FILE (llama-server's
   `--mcp-servers-config`, in Cursor's format), such as a sandbox or web search: serve lists the tools
-  that started and says to keep them on, and the page asks before each call. Their descriptions reach
-  the model too, so it then no longer runs exactly as measured; a long chat with tools wants a larger
-  `--context`.
+  that started and says to keep them on, and the page asks before each call. `CANDOR_MCP` set to a
+  file in your shell gives every serve its tools; `CANDOR_MCP=` before a command serves without them.
+  Their descriptions reach the model too, so it then no longer runs exactly as measured. With tools
+  the context is 32,768 tokens rather than 16,384, as tool calls and the pages they return fill it
+  (at most the model's own; `--context` sets it).
 - Reading residuals needs the model in 16 bits on the GPU. `run` checks this before downloading or
   converting anything: rude-llama fits on an 18 GB Mac; Qwen3.5-9B and K2-Horizon need a pod.
 

@@ -802,3 +802,9 @@ export). 205 and 114 tie at 3 harmful refused, so the lower KL decides: 205. Tri
 the first to keep weights apart (2 as Q8_0); its file measured as its adapters did. `runs/k2` is on
 the Mac, checked against the pod, and the pod deleted (50.0 h, about $29.50). Next: the user's
 test (step 6). Numbers in the results file.
+
+### candor serve: tools in every session (the user, 2026-10-18)
+
+The user wants every chat with a model to have their web and sandbox tools. `--mcp` now defaults to
+`CANDOR_MCP`, set in the user's shell to `~/Desktop/tune/tools/mcp.json`; with tools the context
+is 32,768 tokens. `CANDOR_MCP=` before a command serves as measured, without them.
