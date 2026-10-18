@@ -808,3 +808,8 @@ test (step 6). Numbers in the results file.
 The user wants every chat with a model to have their web and sandbox tools. `--mcp` now defaults to
 `CANDOR_MCP`, set in the user's shell to `~/Desktop/tune/tools/mcp.json`; with tools the context
 is 32,768 tokens. `CANDOR_MCP=` before a command serves as measured, without them.
+
+### Phase 4, step 6: the user's test of trial 205 passed (2026-10-18)
+
+The user chatted with trial 205's shipped file in llama-server on the Mac, with their web and
+sandbox tools, and is happy with the model. The release decision remains theirs.
