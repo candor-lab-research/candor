@@ -24,10 +24,13 @@ def device_and_dtype() -> tuple[str, torch.dtype]:
 
 def protect_memory() -> None:
     """Defaults that stop PyTorch on an Apple GPU taking more memory than the machine has, which
-    freezes it, and a loader deadlock on Metal. Must run before the first model is loaded."""
+    freezes it, and a loader deadlock on Metal; and that let PyTorch give a freed model's memory back
+    to CUDA, which it otherwise keeps (all of a 27B's 50 GiB, measured), so a llama-server started next
+    can't have it. Must run before the first model is loaded."""
     os.environ.setdefault("PYTORCH_MPS_HIGH_WATERMARK_RATIO", "0.7")
     os.environ.setdefault("PYTORCH_MPS_LOW_WATERMARK_RATIO", "0.6")
     os.environ.setdefault("HF_DEACTIVATE_ASYNC_LOAD", "1")
+    os.environ.setdefault("PYTORCH_CUDA_ALLOC_CONF", "expandable_segments:True")
 
 
 def memory_budget(device: str) -> int | None:

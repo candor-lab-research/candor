@@ -1,4 +1,5 @@
 import math
+import os
 
 import pytest
 import torch
@@ -17,6 +18,15 @@ def test_a_watermark_of_0_leaves_what_the_apple_gpu_is_recommended_to_take(monke
     # PyTorch reads 0 as no limit, and its out-of-memory message suggests it.
     monkeypatch.setenv("PYTORCH_MPS_HIGH_WATERMARK_RATIO", "0.0")
     assert memory_budget("mps") == 1000
+
+
+def test_pytorch_may_give_a_freed_models_cuda_memory_back_unless_told_otherwise(monkeypatch):
+    monkeypatch.delenv("PYTORCH_CUDA_ALLOC_CONF", raising=False)
+    residuals.protect_memory()
+    assert os.environ["PYTORCH_CUDA_ALLOC_CONF"] == "expandable_segments:True"
+    monkeypatch.setenv("PYTORCH_CUDA_ALLOC_CONF", "max_split_size_mb:512")
+    residuals.protect_memory()
+    assert os.environ["PYTORCH_CUDA_ALLOC_CONF"] == "max_split_size_mb:512"
 
 
 def test_a_model_falls_short_of_a_gpu_by_its_16_bit_weights_and_a_tenth(monkeypatch):
