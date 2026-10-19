@@ -41,7 +41,6 @@ def test_a_thinking_off_search_shows_no_thinking_it_didnt_do(tiny, monkeypatch):
     result = CliRunner(env={"COLUMNS": "200"}).invoke(app, ["search", str(folder)])
     assert result.exit_code == 0, result.output
     assert "reached the search's budget" not in result.output
-    assert "after an empty thinking block" in result.output
 
 
 def test_a_multiple_is_shown_once_where_its_strengths_differ_only_by_rounding():
@@ -207,6 +206,24 @@ def test_the_check_starts_afresh_when_what_it_depends_on_changes(tiny, monkeypat
     calls.clear()
     proxy.check(tiny)
     assert calls == []
+
+
+def test_a_check_kept_while_the_search_read_kl_beside_the_answer_start_carries_on_as_it_was(
+    tiny, monkeypatch
+):
+    thinks_through(monkeypatch)
+    thinking(tiny)
+    count = fixed(monkeypatch)
+    calls = faked(monkeypatch, {False: list(range(count)), True: [n + 1 for n in range(count)]})
+    checked = proxy.check(tiny)
+    path = tiny.path("proxy", "scores.json")
+    saved = json.loads(path.read_text())
+    for mode in ("off", "on", "repeat"):
+        for score in saved[mode].values():
+            score |= {"kl_thinking": 0.5, "kl_empty": 0.25}
+    path.write_text(json.dumps(saved))
+    calls.clear()
+    assert proxy.check(tiny) == checked and calls == []
 
 
 def test_a_check_of_named_trials_carries_on_only_for_the_same_ones_and_keeps_the_default_check(

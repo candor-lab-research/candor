@@ -112,14 +112,9 @@ class Score:
     # Harmful prompts judged: all of them, unless the trial was stopped early.
     judged: int
     # A thinking model's thinking on the prompts judged: its mean length in tokens, and how many
-    # answers reached the budget, so the model was made to stop thinking and answer; and KL read where
-    # the thinking starts, to see whether it tells edits apart as KL at the answer start does.
+    # answers reached the budget, so the model was made to stop thinking and answer.
     thinking: float = 0.0
     forced: int = 0
-    kl_thinking: float | None = None
-    # KL where the answer starts after an empty thinking block, as heretic read it, kept beside the KL
-    # after the unedited model's own thinking, which the search aims at.
-    kl_empty: float | None = None
 
 
 @dataclass(frozen=True)
@@ -455,8 +450,6 @@ def _score(trial: FrozenTrial) -> Score:
         attrs["judged"],
         attrs.get("thinking", 0.0),
         attrs.get("forced", 0),
-        attrs.get("kl_thinking"),
-        attrs.get("kl_empty"),
     )
 
 
@@ -781,14 +774,6 @@ def _rebuilding(inputs: dict[str, Any]) -> dict[str, Any]:
     return {"adapters": inputs.get("adapters"), "code": {"edits": 1, **code}}
 
 
-def _beside(run: Run, ids: dict[str, list[list[int]]]) -> dict[str, list[list[int]]]:
-    """For a thinking model, the harmless test prompts KL is read on beside the KL the search aims at:
-    where the thinking starts, and where the answer starts after an empty thinking block."""
-    if not run.settings.deployment.think_close:
-        return {}
-    return {"kl_thinking": ids["harmless_test"], "kl_empty": ids["harmless_test" + ANSWERING]}
-
-
 def trial_edit(run: Run, number: int) -> Edit:
     """A finished trial of this run's search, by the number the search shows. Its edit can only be
     rebuilt as it was scored while the run's directions and adapters are the ones the search used."""
@@ -875,7 +860,7 @@ class Search:
                 self._moved_machine(studies)
                 adapters = run.adapters()
                 files = [path for made in adapters.values() for path in made.values()]
-                with self._scorer(quantized, files, ids, harmless, _beside(run, ids), kept=True) as scorer:
+                with self._scorer(quantized, files, ids, harmless, kept=True) as scorer:
                     first = studies[SCOPES[0]]
                     base = first.user_attrs.get("base_refusals")
                     if base is None:
@@ -961,14 +946,7 @@ class Search:
         made = [self._edit_files(edit, adapters) for edit in edits] if run.linear else []
         files = [path for found in [*adapters.values(), *made] for path in found.values()]
         with self._scorer(
-            quantized,
-            list(dict.fromkeys(files)),
-            ids,
-            harmless,
-            _beside(run, ids),
-            thinks,
-            seed,
-            beside_search,
+            quantized, list(dict.fromkeys(files)), ids, harmless, thinks, seed, beside_search
         ) as scorer:
             base_refusals = scorer.score({}, read_kl=False).refusals if base else None
             scores = []
@@ -1030,17 +1008,15 @@ class Search:
         files: list[Path],
         ids: dict[str, list[list[int]]],
         harmless: list[list[int]],
-        beside: dict[str, list[list[int]]],
         thinks: bool | None = None,
         seed: int | None = None,
         kept: bool = False,
     ) -> Iterator["_Scorer"]:
-        """A scorer on llama-server with these adapters loaded, and the judge, for the test prompts; it
-        also reads KL on the harmless prompts beside, by the name of the score that keeps it. A thinking
-        model thinks when thinks is True, by default as the search's trials do, and otherwise answers
-        greedily after an empty thinking block. seed replaces the sampling seed. With kept, the unedited
-        model's first tokens are kept in the search's folder, and read again only when what they are
-        read from or the machine changes."""
+        """A scorer on llama-server with these adapters loaded, and the judge, for the test prompts. A
+        thinking model thinks when thinks is True, by default as the search's trials do, and otherwise
+        answers greedily after an empty thinking block. seed replaces the sampling seed. With kept, the
+        unedited model's first tokens are kept in the search's folder, and read again only when what
+        they are read from or the machine changes."""
         run, settings = self.run, self.run.settings
         thinks = self.thinks if thinks is None else thinks
         closed = bool(settings.deployment.think_close) and not thinks
@@ -1049,9 +1025,8 @@ class Search:
         budget = settings.scoring.thinking_budget
         tokens = settings.scoring.closed_answer_tokens if closed else settings.scoring.answer_tokens
         answer = tokens if closed else tokens + run.thinking_room(budget)
-        reads = [p for prompts in [harmless, *beside.values()] for p in prompts]
         # A slot holds one request at a time: an answer to a harmful prompt, or a KL read of one token.
-        room = max(max(map(len, harmful)) + answer, max(map(len, reads)) + 1) + 8
+        room = max(max(map(len, harmful)) + answer, max(map(len, harmless)) + 1) + 8
         slots, setting = self.slots, "slots.search in candor.toml"
 
         def server_with(adapters: list[Path]) -> LlamaServer:
@@ -1081,12 +1056,12 @@ class Search:
                 "KV cache": settings.deployment.kv_cache,
                 "slots": slots,
                 "KL tokens": settings.scoring.kl_tokens,
-                "prompts": digest([harmless, beside]),
+                "prompts": digest(harmless),
                 "machine": run.machine(),
             }
             # Kept only beside a search.
             folder = self.folder if kept and self.folder.is_dir() else None
-            base = _base_reads(server, harmless, beside, settings.scoring.kl_tokens, folder, read_from)
+            base = _base_reads(server, harmless, settings.scoring.kl_tokens, folder, read_from)
             scorer = _Scorer(
                 server,
                 guard,
@@ -1095,7 +1070,6 @@ class Search:
                 harmless,
                 settings.scoring.kl_tokens,
                 answering,
-                beside,
                 server_with,
                 base,
             )
@@ -1451,27 +1425,22 @@ class Search:
 def _base_reads(
     server: LlamaServer,
     harmless: list[list[int]],
-    beside: dict[str, list[list[int]]],
     kl_tokens: int,
     folder: Path | None,
     read_from: dict[str, Any],
-) -> tuple[list[dict[int, float]], dict[str, list[dict[int, float]]]]:
-    """The unedited model's first tokens on the KL prompts and those beside. Given a search's folder,
-    those read there before from the same inputs on the same machine are used again, so every session
-    of the search sets its trials against the same ones, and those read now are kept there."""
+) -> list[dict[int, float]]:
+    """The unedited model's first tokens on the KL prompts. Given a search's folder, those read there
+    before from the same inputs on the same machine are used again, so every session of the search sets
+    its trials against the same ones, and those read now are kept there."""
     path = folder / "base-first-tokens" / f"{digest(read_from)}.json" if folder else None
     if path and path.exists():
-        saved = json.loads(path.read_text())
-        return [_read(top) for top in saved["kl"]], {
-            name: [_read(top) for top in found] for name, found in saved["beside"].items()
-        }
+        return [_read(top) for top in json.loads(path.read_text())["kl"]]
     base = server.top_logprobs(harmless, kl_tokens)
-    others = {name: server.top_logprobs(prompts, kl_tokens) for name, prompts in beside.items()}
     if path:
         path.parent.mkdir(exist_ok=True)
         # In the order read, so KL sums them as it did.
-        write_atomic(path, json.dumps({"read from": read_from, "kl": base, "beside": others}))
-    return base, others
+        write_atomic(path, json.dumps({"read from": read_from, "kl": base}))
+    return base
 
 
 def _read(top: dict[str, float]) -> dict[int, float]:
@@ -1501,15 +1470,13 @@ class _Scorer:
         harmless: list[list[int]],
         kl_tokens: int,
         answering: _Answering,
-        beside: dict[str, list[list[int]]],
         server_with: Callable[[list[Path]], LlamaServer],
-        base: tuple[list[dict[int, float]], dict[str, list[dict[int, float]]]],
+        base: list[dict[int, float]],
     ):
         self.server, self.guard, self.texts = server, guard, texts
         self.server_with = server_with
         self.harmful, self.harmless, self.kl_tokens = harmful, harmless, kl_tokens
-        self.answering, self.beside = answering, beside
-        self.base, self.base_beside = base
+        self.answering, self.base = answering, base
 
     def load(self, adapters: list[Path]) -> None:
         """Restart the server with these adapters: an edit that isn't linear in strength has one built for
@@ -1564,12 +1531,4 @@ class _Scorer:
             return Score(refusals, keyword_refusals, unlabelled, math.inf, judged, thought / judged, forced)
         top = self.server.top_logprobs(self.harmless, self.kl_tokens, scales)
         divergence = kl.mean_from_top(self.base, top)
-        beside = {
-            name: kl.mean_from_top(
-                self.base_beside[name], self.server.top_logprobs(prompts, self.kl_tokens, scales)
-            )
-            for name, prompts in self.beside.items()
-        }
-        return Score(
-            refusals, keyword_refusals, unlabelled, divergence, judged, thought / judged, forced, **beside
-        )
+        return Score(refusals, keyword_refusals, unlabelled, divergence, judged, thought / judged, forced)

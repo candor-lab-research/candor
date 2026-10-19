@@ -14,7 +14,7 @@ import json
 import math
 import statistics
 from collections.abc import Sequence
-from dataclasses import asdict, dataclass, replace
+from dataclasses import asdict, dataclass, fields, replace
 from typing import Any
 
 from .files import write_atomic
@@ -165,7 +165,7 @@ def check(run: Run, chosen: Sequence[int] = ()) -> Check:
             if scores.base_refusals is not None:
                 saved["base"][mode] = scores.base_refusals
                 _save(run, saved, name)
-        on = [Score(**saved["on"][str(i)]) for i in range(len(made))]
+        on = [_score(saved["on"][str(i)]) for i in range(len(made))]
         repeated = min(range(len(made)), key=lambda i: (on[i].refusals, on[i].kl))
         if not saved["repeat"]:
             run.report(f"Scoring {made[repeated].name} again with another seed")
@@ -174,9 +174,16 @@ def check(run: Run, chosen: Sequence[int] = ()) -> Check:
             ).edits[0]
             saved["repeat"] = {str(repeated): asdict(again)}
             _save(run, saved, name)
-    off = [Score(**saved["off"][str(i)]) for i in range(len(made))]
+    off = [_score(saved["off"][str(i)]) for i in range(len(made))]
     index, repeat = next(iter(saved["repeat"].items()))
-    return Check(made, trials, factors, off, on, saved["base"], int(index), Score(**repeat))
+    return Check(made, trials, factors, off, on, saved["base"], int(index), _score(repeat))
+
+
+def _score(saved: dict[str, Any]) -> Score:
+    """A score as the check keeps it. One kept while the search also read KL where the thinking starts
+    and after an empty thinking block holds those too, which nothing reads now."""
+    names = {field.name for field in fields(Score)}
+    return Score(**{name: value for name, value in saved.items() if name in names})
 
 
 def _inputs(

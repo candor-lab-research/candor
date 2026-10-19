@@ -116,8 +116,9 @@ uv run candor                                                  # or all of it fr
   KL is read where the answer starts after the unedited model's own thinking, leaving out prompts
   whose thinking ran out its budget. That thinking is sampled once for each set of settings and
   kept, never sampled over, since sampling it again wouldn't give the same (`thinking/`; the
-  thinking itself only as token ids in `private/`). KL after an empty thinking block, as heretic
-  read it, and where the thinking starts are kept beside it.
+  thinking itself only as token ids in `private/`). `measure` also reads KL after an empty thinking
+  block, as heretic read it, and where the thinking starts; the search reads neither, since none of
+  its choices use them.
 - Answers are greedy unless `[sampling]` says otherwise. Set it to the settings you chat with, such as
   a thinking model card's recommended ones: the search, measurements and `serve` then all sample
   that way, each prompt with a seed of its own that is the same for every edit, so two edits are

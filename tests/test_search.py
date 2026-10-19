@@ -17,13 +17,13 @@ from optuna.study import StudyDirection
 from optuna.trial import FixedTrial, TrialState
 from typer.testing import CliRunner
 
-from candor import cli, config, proxy, run, search
+from candor import cli, config, menu, proxy, run, search
 from candor.cli import app
 from candor.engine import GREEDY, Answer, LlamaServer
 from candor.judge import is_refusal
 from candor.kernel import Kernel
 from candor.measure import Edit, Measurement, edit_adapters
-from candor.run import RunError
+from candor.run import Run, RunError
 from candor.search import Score, Search
 from candor.targets import Writer
 
@@ -820,7 +820,7 @@ def test_scoring_stops_at_the_end_of_the_chunk_that_goes_over(tiny, monkeypatch)
         stopped = scorer.score({}, stop_above=1)
         assert (stopped.refusals, stopped.judged, asked) == (2, 2, [2])
         # A trial stopped on its refusals can't win, so its KL is never read.
-        assert math.isinf(stopped.kl) and stopped.kl_thinking is None and whole.kl == 0.0 and not read
+        assert math.isinf(stopped.kl) and whole.kl == 0.0 and not read
         labels[:] = [True, True, True]
         assert math.isinf(scorer.score({}, read_kl=False).kl) and not read
         # One stopped on its thinking reads it: it could count once search.max_budget_hits rises.
@@ -837,7 +837,7 @@ def test_scoring_stops_at_the_end_of_the_chunk_that_goes_over(tiny, monkeypatch)
 def scorer_inputs(tiny):
     ids = tiny.prompt_ids()
     _, quantized = tiny.gguf()
-    return quantized, [], ids, ids["harmless_test"], {}
+    return quantized, [], ids, ids["harmless_test"]
 
 
 def test_the_search_shows_time_left_from_every_trial_of_the_session(tiny, monkeypatch):
@@ -1538,18 +1538,20 @@ def test_the_search_scores_a_thinking_model_at_its_own_budget_with_the_same_seed
     Search(tiny).search(2)
     assert {args[5].budget for args in asked} == {6} and all(args[4] == asked[0][4] for args in asked)
     assert all(args[3]["temperature"] == 1.0 for args in asked)
-    ids = tiny.prompt_ids()
-    # The unedited model's first tokens: after its own thinking, where it starts, after an empty block.
-    assert first_tokens[:3] == [
-        tiny.kl_ids(ids, "harmless_test"),
-        ids["harmless_test"],
-        ids["harmless_test" + run.ANSWERING],
-    ]
+    # The unedited model's first tokens and each trial's are read only after the unedited model's own
+    # thinking, where the search aims.
+    kl_prompts = tiny.kl_ids(tiny.prompt_ids(), "harmless_test")
+    assert len(first_tokens) == 3 and all(prompts == kl_prompts for prompts in first_tokens)
     inputs = json.loads(tiny.path("search", "inputs.json").read_text())
     assert inputs["thinking"]["budget"] == 6 and inputs["sampling"]["temperature"] == 1.0
-    scores = [search._score(trial) for trial in finished(tiny)]
+    trials = finished(tiny)
+    assert not any({"kl_thinking", "kl_empty"} & set(trial.user_attrs) for trial in trials)
+    scores = [search._score(trial) for trial in trials]
     assert sum(score.thinking for score in scores) > 0 and all(0 <= s.forced <= s.judged for s in scores)
-    assert all(score.kl_thinking is not None and score.kl_empty is not None for score in scores)
+    first_tokens.clear()
+    # An edit scored beside the search reads its own, against the search's kept unedited ones.
+    Search(tiny).score([search.recorded_edit(tiny, 1)], base=False)
+    assert first_tokens == [kl_prompts]
     folder = on_disk(tiny)
     shown = flat(
         CliRunner(env={"COLUMNS": "200"}).invoke(app, ["search", str(folder), "--trials", "1"]).output
@@ -1557,12 +1559,6 @@ def test_the_search_scores_a_thinking_model_at_its_own_budget_with_the_same_seed
     assert (
         "tokens per answer on average across trials" in shown and "reached the search's budget of 6" in shown
     )
-    for where in (
-        "where the answer starts after the unedited model's own thinking, which the search aims at",
-        "after an empty thinking block",
-        "where the thinking starts",
-    ):
-        assert where in shown
 
 
 def test_a_thinking_search_draws_where_each_trial_reads_its_directions(tiny, monkeypatch):
@@ -2070,6 +2066,44 @@ def test_a_search_killed_while_widening_loses_and_repeats_no_trial(tiny, monkeyp
         assert not {search._key(t.system_attrs["fixed_params"]) for t in waiting} & set(done)
 
 
+@dataclasses.dataclass(frozen=True)
+class ReadBeside(Score):
+    """A trial's score as candor kept it while the search also read KL where the thinking starts and
+    after an empty thinking block."""
+
+    kl_thinking: float | None = None
+    kl_empty: float | None = None
+
+
+def test_a_search_whose_trials_read_kl_beside_the_answer_start_carries_on_and_shows_as_before(
+    tiny, monkeypatch
+):
+    thinks_through(monkeypatch)
+    folder = cli_run(thinking(tiny))
+    runner = CliRunner(env={"COLUMNS": "200"})
+    scripted(
+        monkeypatch,
+        [
+            Score(3, 0, 0, 0.0, 3),
+            ReadBeside(1, 0, 0, 0.2, 3, 9.0, 0, 0.3, 0.1),
+            ReadBeside(2, 0, 0, 0.4, 3, 9.0, 0, 0.5, 0.3),
+        ],
+    )
+    assert runner.invoke(app, ["search", str(folder), "--trials", "2"]).exit_code == 0
+    scripted(monkeypatch, [Score(0, 0, 0, 0.1, 3, 9.0, 0), Score(1, 0, 0, 0.05, 3, 9.0, 0)])
+    result = runner.invoke(app, ["search", str(folder)])
+    assert result.exit_code == 0, result.output
+    shown = flat(result.output)
+    assert "tokens per answer on average across trials" in shown and "KL across trials" not in shown
+    searched = Run.open(folder, lambda _: None)
+    found = search.load(searched)
+    assert found is not None
+    assert ["kl_empty" in t.user_attrs for t in found.trials.values()] == [True, True, False, False]
+    assert [search.searched_score(found, number).kl for number in found.trials] == [0.2, 0.4, 0.1, 0.05]
+    picks = menu.picks(searched, found, set(found.trials))
+    assert sorted(p.candidate.trial for p in picks) == [1, 2, 3, 4] and len(menu.rows(picks, {})) == 4
+
+
 def test_a_thinking_search_with_thinking_off_answers_greedily_after_an_empty_block(tiny, monkeypatch):
     thinks_through(monkeypatch)
     small(thinking(tiny, budget=8))
@@ -2092,10 +2126,10 @@ def test_a_thinking_search_with_thinking_off_answers_greedily_after_an_empty_blo
     ids = tiny.prompt_ids()
     assert all(args[0] == ids["harmful_test" + run.ANSWERING] for args in asked)
     assert all(args[1] == 12 and args[3] == GREEDY and args[5] is None for args in asked)
-    # KL is still read where the answer starts after the unedited model's own thinking.
-    assert first_tokens[0] == tiny.kl_ids(ids, "harmless_test")
+    # KL is still read only where the answer starts after the unedited model's own thinking.
+    assert first_tokens and all(prompts == tiny.kl_ids(ids, "harmless_test") for prompts in first_tokens)
     scores = [search._score(trial) for trial in finished(tiny)]
-    assert all(s.thinking == 0 and s.forced == 0 and s.kl_thinking is not None for s in scores)
+    assert all(s.thinking == 0 and s.forced == 0 for s in scores)
     inputs = json.loads(tiny.path("search", "inputs.json").read_text())
     assert inputs["trials think"] == "off" and inputs["answer length with thinking off"] == 12
     # A search scored with thinking off isn't carried on as one that thinks.

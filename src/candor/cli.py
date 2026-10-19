@@ -1129,30 +1129,17 @@ def _thinking_summary(console: Console, run: Run, found: search.Found) -> None:
     """How long the trials' answers thought, to choose the budget a search of a thinking model scores
     at."""
     scores = [search.searched_score(found, number) for number in found.trials]
-    if not scores:
-        return
     # A search scored with thinking off has no thinking to show.
-    if search.Search(run).thinks:
-        judged = sum(score.judged for score in scores)
-        means = sorted(score.thinking for score in scores)
-        budget = run.settings.scoring.thinking_budget or run.settings.deployment.thinking_budget
-        console.print(
-            f"Thinking: {means[0]:.0f} to {means[-1]:.0f} tokens per answer on average across trials "
-            f"(median {statistics.median(means):.0f}); {sum(s.forced for s in scores)} of {judged} answers "
-            f"reached the search's budget of {budget} and were made to stop."
-        )
-    read = [
-        (s.kl, s.kl_empty, s.kl_thinking)
-        for s in scores
-        if s.kl_empty is not None and s.kl_thinking is not None
-    ]
-    if read:
-        after, empty, start = (f"{min(kls):.4f} to {max(kls):.4f}" for kls in zip(*read, strict=True))
-        console.print(
-            f"KL across trials: {after} where the answer starts after the unedited model's own thinking, "
-            f"which the search aims at; {empty} after an empty thinking block; {start} where the thinking "
-            "starts."
-        )
+    if not scores or not search.Search(run).thinks:
+        return
+    judged = sum(score.judged for score in scores)
+    means = sorted(score.thinking for score in scores)
+    budget = run.settings.scoring.thinking_budget or run.settings.deployment.thinking_budget
+    console.print(
+        f"Thinking: {means[0]:.0f} to {means[-1]:.0f} tokens per answer on average across trials "
+        f"(median {statistics.median(means):.0f}); {sum(s.forced for s in scores)} of {judged} answers "
+        f"reached the search's budget of {budget} and were made to stop."
+    )
 
 
 def _trials(numbers: list[int]) -> str:
