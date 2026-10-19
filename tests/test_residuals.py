@@ -1,5 +1,6 @@
 import math
 import os
+from unittest import mock
 
 import pytest
 import torch
@@ -20,13 +21,19 @@ def test_a_watermark_of_0_leaves_what_the_apple_gpu_is_recommended_to_take(monke
     assert memory_budget("mps") == 1000
 
 
-def test_pytorch_may_give_a_freed_models_cuda_memory_back_unless_told_otherwise(monkeypatch):
-    monkeypatch.delenv("PYTORCH_CUDA_ALLOC_CONF", raising=False)
-    residuals.protect_memory()
-    assert os.environ["PYTORCH_CUDA_ALLOC_CONF"] == "expandable_segments:True"
-    monkeypatch.setenv("PYTORCH_CUDA_ALLOC_CONF", "max_split_size_mb:512")
-    residuals.protect_memory()
-    assert os.environ["PYTORCH_CUDA_ALLOC_CONF"] == "max_split_size_mb:512"
+@pytest.mark.parametrize("own", [None, "PYTORCH_CUDA_ALLOC_CONF", "PYTORCH_ALLOC_CONF"])
+def test_pytorch_may_give_a_freed_models_cuda_memory_back_unless_told_otherwise(own):
+    with mock.patch.dict(os.environ):
+        for name in ("PYTORCH_CUDA_ALLOC_CONF", "PYTORCH_ALLOC_CONF"):
+            os.environ.pop(name, None)
+        if own:
+            os.environ[own] = "max_split_size_mb:512"
+        residuals.protect_memory()
+        if own:
+            assert os.environ[own] == "max_split_size_mb:512"
+            assert set(os.environ) & {"PYTORCH_CUDA_ALLOC_CONF", "PYTORCH_ALLOC_CONF"} == {own}
+        else:
+            assert os.environ["PYTORCH_CUDA_ALLOC_CONF"] == "expandable_segments:True"
 
 
 def test_a_model_falls_short_of_a_gpu_by_its_16_bit_weights_and_a_tenth(monkeypatch):

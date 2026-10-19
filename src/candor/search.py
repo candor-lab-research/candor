@@ -52,8 +52,7 @@ from optuna.storages import JournalStorage
 from optuna.storages.journal import JournalFileBackend
 from optuna.trial import BaseTrial, FrozenTrial, TrialState
 
-from . import config, kl, residuals, toolchain
-from .edit import full_device
+from . import config, kl, toolchain
 from .engine import GREEDY, LlamaServer, Thinking
 from .files import write_atomic
 from .judge import Guard, is_refusal, judged_refusal, read_verdict
@@ -1010,11 +1009,9 @@ class Search:
         strength has one adapter built for it, in folder, and the server is restarted with it."""
         if self.run.linear:
             return self._scales(edit, self._edit_files(edit, adapters))
-        # Built with the server stopped, as building it may take the GPU, whose memory is given back
-        # before the server starts again.
+        # Built with the server stopped, as building it may take the GPU.
         scorer.server.stop()
         path, _ = self.run.edit_adapter(folder, edit)
-        residuals.free_memory(full_device())
         scorer.load([path])
         return {path: 1.0}
 

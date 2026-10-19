@@ -12,10 +12,10 @@ import torch
 from safetensors.torch import load_file, save_file
 from typer.testing import CliRunner
 
-from candor import convert, export, measure, run, search
+from candor import convert, export, measure, residuals, run, search
 from candor.cli import app
 from candor.convert import quantize as real_quantize
-from candor.edit import RowNorm, rank_one
+from candor.edit import RowNorm, full_device, rank_one
 from candor.kernel import Kernel
 from candor.measure import Edit, Measurement
 from candor.run import Run, RunError
@@ -83,6 +83,15 @@ def test_a_full_edit_ships_the_adapter_it_was_scored_with(tiny, converting, answ
             torch.testing.assert_close(stored[f"{name}.lora_b"] @ stored[f"{name}.lora_a"], b @ a)
         else:
             assert f"{name}.lora_a" not in stored
+
+
+def test_a_full_change_gives_the_gpus_memory_back_before_a_server_needs_it(tiny, converting, monkeypatch):
+    thinking(tiny)
+    tiny.settings.edit.row_norm = "full"
+    freed = []
+    monkeypatch.setattr(residuals, "free_memory", freed.append)
+    tiny.changes(replace(EDIT, name="trial-full"))
+    assert freed == [full_device()]
 
 
 def test_an_edit_read_where_the_answer_starts_ships_that_direction(tiny, converting):

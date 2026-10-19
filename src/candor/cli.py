@@ -37,7 +37,7 @@ from rich.table import Table
 from transformers import AutoTokenizer
 from transformers.utils import logging as transformers_logging
 
-from . import checks, config, export, measure, proxy, search, serve, source, targets
+from . import checks, config, export, measure, proxy, residuals, search, serve, source, targets
 from .convert import ConversionError
 from .engine import LLAMA_CPP_RELEASE, ServerError, terminate
 from .run import PROMPT_SETS, Run, RunError, duration, every_tenth
@@ -78,6 +78,7 @@ def main(context: typer.Context) -> None:
     hub_logging.set_verbosity_error()
     transformers_logging.disable_progress_bar()
     optuna.logging.set_verbosity(optuna.logging.WARNING)
+    residuals.protect_memory()
     if context.invoked_subcommand is not None:
         return
     if not _in_a_terminal():

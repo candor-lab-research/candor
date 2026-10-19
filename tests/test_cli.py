@@ -7,6 +7,7 @@ import subprocess
 import sys
 from pathlib import Path
 from types import SimpleNamespace
+from unittest import mock
 
 import pytest
 import torch
@@ -56,6 +57,14 @@ def model_folder(
 
 def run(folder):
     return CliRunner(env={"COLUMNS": "250"}).invoke(app, ["inspect", str(folder)])
+
+
+def test_candor_sets_how_pytorch_uses_the_gpu_before_any_command_can(tmp_path):
+    with mock.patch.dict(os.environ):
+        os.environ.pop("PYTORCH_CUDA_ALLOC_CONF", None)
+        os.environ.pop("PYTORCH_ALLOC_CONF", None)
+        CliRunner().invoke(app, ["upgrade", str(tmp_path / "no-run")])
+        assert os.environ["PYTORCH_CUDA_ALLOC_CONF"] == "expandable_segments:True"
 
 
 def test_inspect_passes_a_llama_style_model_and_warns_about_heretic(tmp_path):
