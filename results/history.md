@@ -987,3 +987,12 @@ findings fixed with tests that fail without them.
   server once it has dropped the answer; production keeps its 60 s wait and kill (STATUS).
 
 905 tests pass.
+
+### The K2/Qwen pod checks: the 8B judge and row normalisation (2026-10-19)
+
+One A40 pod, 2 h 39 min, about $1.57 (`evidence-2026-10-19/pod-checks.md`). Qwen3Guard-Gen-8B
+judged the stored K2 and Qwen held-out answers again: it agrees with the 4B, and against both the
+0.6B under-counts refusals on edited models; every K2 finalist stays within the harmful bar under
+the 0.6B and the 8B, so no decision changes. K2's 205 and Qwen's 175 scored twice each with "full"
+and "pre": no difference by candor's tie test, and on Qwen "pre" may raise KL a little. Nothing
+argues for leaving "full"; the 27B's weight gap is screened in the pilot. The pod was deleted.

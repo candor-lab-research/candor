@@ -160,11 +160,12 @@ the size of the edit, which is what the two modes change, Qwen is at about 1% an
   review's 1-26% for concentrated directions wasn't tested.
 
 Verdict: the weights don't settle it, and K2 differs most. Decide the 27B default on behaviour:
-score one finalist both ways (K2 205, Qwen 175) at the same seed and slots (unchecked: whether
-candor accepts a "pre" copy of a search made under "full"), or run the short pre-against-full pair
-from the same Sobol starts on the 27B pilot; both are pod jobs, for the user. Before either, the
-same gap computed on the 27B's weights over a sweep of strengths (minutes, on the CPU) shows which
-model it resembles.
+score one finalist both ways (K2 205, Qwen 175) at the same seed and slots, or run the short
+pre-against-full pair from the same Sobol starts on the 27B pilot; both are pod jobs, for the user.
+Before either, the same gap computed on the 27B's weights over a sweep of strengths (minutes, on the
+CPU) shows which model it resembles.
+
+Scored both ways on a pod, 2026-10-19: `pod-checks.md`. The 27B's weight gap is for the pilot.
 
 ## F104: the judge on edited models
 
@@ -211,3 +212,5 @@ against ground truth, and a bigger judge of its family finds more refusals there
 ground truth. Options: the 8B at 16 bits on a pod for the disagreements (about $1-2), or a judge
 from another family; and, for the 27B rule, whether a finalist must pass under two judges or the
 second's count is reported beside the first.
+
+The 8B judged them on a pod, 2026-10-19: `pod-checks.md`.

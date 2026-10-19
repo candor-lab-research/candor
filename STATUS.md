@@ -46,7 +46,8 @@ thinking on (next, e.g. Qwen3.8-27B). A 9B model must not take days.
 - The repository review (2026-10-18, `results/evidence-2026-10-18/repo-review.md`): all 24
   packages done but package 11 (with the 27B pilot) and three items left with reasons (history).
 - Evidence for the discussion (2026-10-19): `results/evidence-2026-10-19/method-evidence.md` (the
-  upstream check, six method questions) and `cost-27b.md`.
+  upstream check, six method questions), `cost-27b.md` and `pod-checks.md` (the 8B judge and row
+  normalisation: no decision changes).
 
 ## Next
 
@@ -56,11 +57,10 @@ thinking on (next, e.g. Qwen3.8-27B). A 9B model must not take days.
    (history). Next in it: the thinking-off search with a per-model proxy check (F55) and the method
    questions left; no other method changes until agreed. Package 11 (the answer reusing its
    thinking's cache) changes draws, so it is timed in the 27B pilot, before the 27B reference.
-2. Approved: one A40 pod to judge K2's and Qwen's held-out answers with Qwen3Guard-Gen-8B and to
-   score one finalist each with both row normalisations, quoted after timing the first units; then
-   the 27B pilot (about $7-8), quoted from its first units. The code for 27B (a second judge, the
-   beside reads out of the search, per-prompt KL with ties shown, 200 KL tokens from `init`) is in
-   (history).
+2. Approved, next: the 27B pilot (about $7-8 on an A40 and an 80 GB card; what it measures:
+   `results/evidence-2026-10-19/cost-27b.md`, plus the row-norm weight screen), quoted from its
+   first units; then the gate is set again. The code for 27B (a second judge, the beside reads out
+   of the search, per-prompt KL with ties shown, 200 KL tokens from `init`) is in (history).
 3. Phase 4, later: low effort's two closes; Uno not now. The budget limit
    (`search.max_budget_hits`, on K2 from trial 138) costs no measurable hits on the simulator and
    stays on (results file, step 5).

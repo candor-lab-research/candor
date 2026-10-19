@@ -76,15 +76,16 @@ entry is corrected, dropped or overturned is in CLAUDE.md ("Finished, dropped an
   by keywords against 33+ by a judge, Qwen3.8-27B 0 against 30.5% (DreamFast;
   `evidence-2026-10-14/ara.md`). candor decides on the judge.
 - **A bigger judge finds more refusals on edited models.** [Measured: K2-Horizon-7B and Qwen3.5-9B,
-  7 edited and 2 unedited held-out sets of 288, Qwen3Guard-Gen-4B at Q8_0] It calls 19 refusals
-  against the 0.6B's 8 on K2 and 69 against 44 on Qwen; the 0.6B finds 6 of the 4B's 19 and 31 of 69
-  (kappa 0.44 and 0.52), mostly on heretic's Trial 161 and K2's 114. Those refusals mostly run to
-  the 256-token answer limit. Of the 156 that keywords call refusals and the 0.6B doesn't, it calls
-  9. No decision changed, but K2's 114 went from 3 to 9 against a bar of 10. The 0.6B's recall on
-  edited models is unchecked against ground truth. (`evidence-2026-10-19/method-evidence.md`, F104)
-  [Hypothesis] Test: the 8B at 16 bits, or a judge of another family, on the disagreements. Since
-  2026-10-19 a new run's finalists and reference are also judged by the 8B (`measure.second_judge`),
-  and the 27B's harmful bar holds under both.
+  7 edited and 2 unedited held-out sets of 288, Qwen3Guard-Gen-4B at Q8_0 and 8B at bf16] On edited
+  models the 4B calls 19 refusals and the 8B 20 against the 0.6B's 8 on K2, and 69 and 71 against 44
+  on Qwen (0.6B against 8B: McNemar p 0.0075 and 0.00014); the 4B and 8B agree (kappa 0.71 and
+  0.77). Most are on heretic's Trial 161 and K2's 114, and mostly run to the 256-token answer limit.
+  Of the 156 that keywords call refusals and the 0.6B doesn't, the 4B calls 9. No decision changed,
+  but K2's 114 is at 9 of 288 under both bigger judges against a bar of 10. All three judges are one
+  family, so none is ground truth. (`evidence-2026-10-19/method-evidence.md` F104, `pod-checks.md`)
+  Since 2026-10-19 a new run's finalists and reference are also judged by the 8B
+  (`measure.second_judge`), and the 27B's harmful bar holds under both. [Hypothesis] The family
+  itself may under-count; test: a judge of another family on the edited held-out answers.
 - **The best public Qwen3.5-9B edit's 0/400 may not be as used.** [Published, with caveats]
   DreamFast judged trohrbaugh's heretic edit (`Qwen3.5-9B-heretic-v2`) at 0 of 400 HarmBench
   refusals, GSM8K 87.64 to 85.97; its report notes a 2,048-token cap and truncated thinking. Edited
@@ -170,8 +171,12 @@ entry is corrected, dropped or overturned is in CLAUDE.md ("Finished, dropped an
   "pre". (`evidence-2026-10-14/data-report.md`) [Measured: the 6 K2 and Qwen finalists rebuilt both
   ways] The two differ by a median 1.0% of the edit on Qwen and 4.1% on K2 (0.025% and 0.13% of the
   weight), mostly rows rescaled off the direction; for down projections larger at low strength,
-  K2's attention high at any strength; neither keeps row lengths. Only scoring edits both ways can
-  settle it. (`evidence-2026-10-19/method-evidence.md`)
+  K2's attention high at any strength; neither keeps row lengths.
+  (`evidence-2026-10-19/method-evidence.md`) [Measured: K2 205 and Qwen 175, each scored twice both
+  ways on one A40] On a fixed edit candor's tie test finds no difference on either, nor any in
+  refusals; on Qwen pre may raise KL a little (p 0.07), the way the "full"-tuned strengths lean.
+  Whether "pre" searches better still rests on the one Qwen pair.
+  (`evidence-2026-10-19/pod-checks.md`)
 - **Per-layer edits press the 3.0 ceiling on attention.** [Measured: Qwen3.5-9B, one search] Every
   per-layer best puts attention at 2.9-3.0, so a better per-layer edit may lie beyond it. (step 6)
 - **Refusals fall gradually as strength rises; there is no cliff.** [Measured: 8 searches on 3
@@ -181,9 +186,12 @@ entry is corrected, dropped or overturned is in CLAUDE.md ("Finished, dropped an
   by `candor proxy`, same prompts, slots and file, another session, 6 on another A40 pod] A median
   3.4%, at most 25.5% (at KL 0.005): 9 of 18 beyond the 3% within which `candor score` takes a
   repeat as the same score. rude-llama's one greedy repeat was within 0.3% (`phase-2-rude-llama.md`,
-  the search fix). (`evidence-2026-10-19/method-evidence.md`, F117) [Hypothesis] About 11% with a
-  0.002 floor fits all 18 (fitted on them), and a repeat stays within a refusal; test: score one K2
-  trial twice at its slots and compare per-prompt KL.
+  the search fix). (`evidence-2026-10-19/method-evidence.md`, F117) [Measured: K2 205 and Qwen 175,
+  two repeats each on one pod, each score in its own session, same seed and slots] Repeats moved KL
+  6.6% and 8.5% on K2 and 2.7% and 0.9% on Qwen, all ties by candor's per-prompt test and all
+  within the fitted 11%; but K2's refusals moved by 2 of 100 (3 to 1), so a repeat doesn't always
+  stay within a refusal. With the unedited thinking sampled afresh and the code of 2026-10-19, KL
+  moved from the search's record by K2 +10% and Qwen -12%. (`evidence-2026-10-19/pod-checks.md`)
 - **Small KL gaps between trials are noise.**
   [Measured: K2-Horizon-7B and Qwen3.5-9B, 10 pairs of measured finalists, about 300 held-out
   prompts] At 100 test prompts the SE of a KL difference is an estimated 9-32% of the KL (scaled by
