@@ -30,7 +30,7 @@ from huggingface_hub import constants, snapshot_download
 from . import checks, config, convert, directions, residuals, source, targets, toolchain
 from .adapters import write_adapter
 from .edit import RowNorm, edit_factors, rank_one
-from .engine import LLAMA_CPP_RELEASE, LlamaServer, Thinking
+from .engine import LLAMA_CPP_RELEASE, LlamaServer, Thinking, seed_for
 from .files import sync, write_atomic
 from .judge import normalise
 from .weights import ModelFiles
@@ -57,8 +57,6 @@ CLOSED_SETS = ("harmful", "harmless", *KL_SETS, "harmful_test")
 ANSWERING = "_answering"
 # The names of a thinking model's adapter sets read where the answer starts begin with this.
 ANSWER_SETS = "answer-"
-# A sampled answer's seed is never llama.cpp's "pick one at random".
-RANDOM_SEED = 2**32 - 1
 DATE_PROBE = "31 Dec 1999"
 CHECKED_PER_SET = 3
 # The slot of the server that tokenizes the prompts, which also checks a few of them against the chat
@@ -66,23 +64,27 @@ CHECKED_PER_SET = 3
 TOKENIZING_SLOT = 2048
 # The version of each stage's code, in stage order. Bump a stage's number in any commit that changes
 # the results it builds. Each record holds the numbers of its own stage and every stage before it, so
-# results built by older code are rebuilt along with everything after them. scores holds the adapters
-# candor score builds for edits the search has none for, and exports the GGUFs candor export ships.
-# Stages added later go last, so adding one rebuilds nothing already made: a thinking model's directions
-# where its answer starts, and its unedited thinking, after which KL is read. Each of those holds the
-# numbers of the stages in DEPENDS rather than of every stage before it.
+# results built by older code are rebuilt along with everything after them, unless DEPENDS names the
+# stages it is built from. scores holds the adapters candor score builds for edits the search has none
+# for, and exports the GGUFs candor export ships; neither is built from a measurement. Stages added later
+# go last, so adding one rebuilds nothing already made: a thinking model's directions where its answer
+# starts, and its unedited thinking, after which KL is read.
 STAGES = {
     "gguf": 1,
     "prompts.json": 1,
     "directions.pt": 1,
     "adapters": 1,
-    "measurements": 1,
+    "measurements": 2,
     "scores": 1,
     "exports": 3,
     "directions_answering.pt": 1,
-    "thinking": 1,
+    "thinking": 2,
 }
+# The stages an edit is built from.
+EDITED = ("gguf", "prompts.json", "directions.pt", "adapters")
 DEPENDS = {
+    "scores": EDITED,
+    "exports": EDITED,
     "directions_answering.pt": ("gguf", "prompts.json", "directions.pt"),
     "thinking": ("gguf", "prompts.json"),
 }
@@ -135,8 +137,7 @@ def load_prompts(spec: config.PromptSet) -> list[str]:
 def seeds(seed: int, count: int) -> list[int]:
     """A seed of its own for each of count prompts, made from seed: the same prompt always gets the
     same one, whatever edit answers it."""
-    made = (hashlib.sha256(f"{seed}:{i}".encode()).digest() for i in range(count))
-    return [int.from_bytes(digest[:4]) % RANDOM_SEED for digest in made]
+    return [seed_for(seed, str(i)) for i in range(count)]
 
 
 def _after(closed: list[int], end: int) -> list[int]:

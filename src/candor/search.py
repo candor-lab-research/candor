@@ -56,7 +56,7 @@ from .files import write_atomic
 from .judge import Guard, is_refusal, judged_refusal, read_verdict
 from .kernel import Kernel
 from .measure import Edit, edit_adapters
-from .run import ANSWER_SETS, ANSWERING, STAGES, Run, RunError, answering, digest, duration, seeds
+from .run import ANSWER_SETS, ANSWERING, EDITED, STAGES, Run, RunError, answering, digest, duration, seeds
 
 # Harmful prompts judged at a time, so a trial that can't win stops early. The server answers the
 # next ones meanwhile.
@@ -65,7 +65,11 @@ CHUNK = 8
 CANDIDATES = 128
 # The version of what a trial's score means. Bump it in any commit that changes a score the sampler or
 # the choice of edits reads, so an older search isn't carried on as if it were the same.
-VERSION = 2
+VERSION = 3
+# The version of how a trial's settings make its edit. Bump it in any commit that changes the edit a
+# finished trial is rebuilt as, so its edit is never measured or exported unlike the one scored. A
+# search recorded before there was one holds none, which counts as 1.
+EDITS = 1
 PER_LAYER, ONE_LAYER = "per layer", "one layer"
 # The kinds of edit, in the order they take turns.
 SCOPES = (ONE_LAYER, PER_LAYER)
@@ -623,8 +627,9 @@ def progress_lines(report: dict[str, Any]) -> list[str]:
 
 
 def _changed(before: dict[str, Any], now: dict[str, Any], keys: Iterable[str] | None = None) -> list[str]:
+    """What differs, by name: the code shows as candor's."""
     keys = before.keys() | now.keys() if keys is None else keys
-    return sorted(key for key in keys if before.get(key) != now.get(key))
+    return sorted("candor code" if key == "code" else key for key in keys if before.get(key) != now.get(key))
 
 
 def _study_name(scope: str, widenings: int) -> str:
@@ -720,8 +725,26 @@ def _rebuilt_from(run: Run) -> dict[str, Any]:
     return {
         # A model that doesn't think reads at one position, recorded as before there were two.
         "adapters": digest(made[0] if len(made) == 1 else made),
-        "code": {**{stage: STAGES[stage] for stage in list(STAGES)[:4]}, "search": VERSION},
+        "code": _code(),
     }
+
+
+def _code() -> dict[str, int]:
+    """The code a search's trials are scored by, as its record holds it."""
+    return {**{stage: STAGES[stage] for stage in EDITED}, "search": VERSION, "edits": EDITS}
+
+
+def older(folder: Path) -> bool:
+    """Whether the search in a run folder was scored by other code than candor's now, so it can't be
+    carried on."""
+    record = folder / "search" / "inputs.json"
+    return record.exists() and json.loads(record.read_text()).get("code") != _code()
+
+
+def _rebuilding(inputs: dict[str, Any]) -> dict[str, Any]:
+    """What a search's record says its trials' edits are rebuilt from: not what their scores mean."""
+    code = {stage: number for stage, number in inputs.get("code", {}).items() if stage != "search"}
+    return {"adapters": inputs.get("adapters"), "code": {"edits": 1, **code}}
 
 
 def _beside(run: Run, ids: dict[str, list[list[int]]]) -> dict[str, list[list[int]]]:
@@ -745,7 +768,7 @@ def trial_edit(run: Run, number: int) -> Edit:
     if not (folder / "inputs.json").exists():
         raise RunError(f"{folder} holds a search with no record of its settings")
     before = json.loads((folder / "inputs.json").read_text())
-    if changed := _changed(before, now, ["adapters", "code"]):
+    if changed := _changed(_rebuilding(before), _rebuilding(now)):
         raise RunError(
             f"the search was made with different {' and '.join(changed)} from this run's now, so its "
             "trials can't be rebuilt as they were scored"

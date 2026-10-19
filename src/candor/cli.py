@@ -692,7 +692,9 @@ def measure_command(
                     run.settings.deployment.think_close,
                 )
             elif trial is not None:
-                edit = search.trial_edit(run, trial)
+                # The export holds the edit, so the trial needn't be rebuildable as scored; the
+                # export itself is checked against the run as it is now.
+                edit = search.recorded_edit(run, trial) if exported else search.trial_edit(run, trial)
             measurement = measure.Measurement(
                 run, edit, name, slots, limit, progress, exported, seed, outside
             )

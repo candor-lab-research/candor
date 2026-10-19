@@ -112,9 +112,7 @@
    "directions.pt": 1,
    "exports": 3,
    "gguf": 1,
-   "measurements": 1,
-   "prompts.json": 1,
-   "scores": 1
+   "prompts.json": 1
   },
   "directions": "fixed",
   "edit": {
@@ -174,7 +172,7 @@
    "adapters": 1,
    "directions.pt": 1,
    "gguf": 1,
-   "measurements": 1,
+   "measurements": 2,
    "prompts.json": 1
   },
   "edit": null,
@@ -182,6 +180,7 @@
    "answer_tokens": 16,
    "ids": "c0f27aa1be0a7b77",
    "kv_cache": "f16",
+   "measuring": 2,
    "model": "f0a6bb396bd1b915"
   },
   "slots": 8
@@ -192,7 +191,7 @@
    "adapters": 1,
    "directions.pt": 1,
    "gguf": 1,
-   "measurements": 1,
+   "measurements": 2,
    "prompts.json": 1
   },
   "counting": 2,
@@ -206,7 +205,7 @@
    "adapters": 1,
    "directions.pt": 1,
    "gguf": 1,
-   "measurements": 1,
+   "measurements": 2,
    "prompts.json": 1
   },
   "edit": null,
@@ -215,6 +214,7 @@
    "ids": "d9ec503c266804a1",
    "kl_tokens": 20,
    "kv_cache": "f16",
+   "measuring": 2,
    "model": "f0a6bb396bd1b915"
   },
   "slots": 8
@@ -225,7 +225,7 @@
    "adapters": 1,
    "directions.pt": 1,
    "gguf": 1,
-   "measurements": 1,
+   "measurements": 2,
    "prompts.json": 1
   },
   "counting": 2,
@@ -239,7 +239,7 @@
    "adapters": 1,
    "directions.pt": 1,
    "gguf": 1,
-   "measurements": 1,
+   "measurements": 2,
    "prompts.json": 1
   },
   "edit": null,
@@ -247,6 +247,7 @@
    "answer_tokens": 16,
    "ids": "71d22faa2c0ffce6",
    "kv_cache": "f16",
+   "measuring": 2,
    "model": "f0a6bb396bd1b915"
   },
   "slots": 8
@@ -256,7 +257,7 @@
    "adapters": 1,
    "directions.pt": 1,
    "gguf": 1,
-   "measurements": 1,
+   "measurements": 2,
    "prompts.json": 1
   },
   "direction_layer": 0.4,
@@ -286,7 +287,7 @@
    "adapters": 1,
    "directions.pt": 1,
    "gguf": 1,
-   "measurements": 1,
+   "measurements": 2,
    "prompts.json": 1
   },
   "edit": {
@@ -317,6 +318,7 @@
    "answer_tokens": 16,
    "ids": "c0f27aa1be0a7b77",
    "kv_cache": "f16",
+   "measuring": 2,
    "model": "f0a6bb396bd1b915"
   },
   "slots": 8
@@ -327,7 +329,7 @@
    "adapters": 1,
    "directions.pt": 1,
    "gguf": 1,
-   "measurements": 1,
+   "measurements": 2,
    "prompts.json": 1
   },
   "counting": 2,
@@ -341,7 +343,7 @@
    "adapters": 1,
    "directions.pt": 1,
    "gguf": 1,
-   "measurements": 1,
+   "measurements": 2,
    "prompts.json": 1
   },
   "edit": {
@@ -373,6 +375,7 @@
    "ids": "d9ec503c266804a1",
    "kl_tokens": 20,
    "kv_cache": "f16",
+   "measuring": 2,
    "model": "f0a6bb396bd1b915"
   },
   "slots": 8
@@ -383,7 +386,7 @@
    "adapters": 1,
    "directions.pt": 1,
    "gguf": 1,
-   "measurements": 1,
+   "measurements": 2,
    "prompts.json": 1
   },
   "counting": 2,
@@ -397,7 +400,7 @@
    "adapters": 1,
    "directions.pt": 1,
    "gguf": 1,
-   "measurements": 1,
+   "measurements": 2,
    "prompts.json": 1
   },
   "edit": {
@@ -428,6 +431,7 @@
    "answer_tokens": 16,
    "ids": "71d22faa2c0ffce6",
    "kv_cache": "f16",
+   "measuring": 2,
    "model": "f0a6bb396bd1b915"
   },
   "slots": 8
@@ -513,9 +517,10 @@
   "code": {
    "adapters": 1,
    "directions.pt": 1,
+   "edits": 1,
    "gguf": 1,
    "prompts.json": 1,
-   "search": 2
+   "search": 3
   },
   "judge": [
    "Qwen/Qwen3Guard-Gen-0.6B",

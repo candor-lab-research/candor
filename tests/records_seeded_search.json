@@ -1,0 +1,478 @@
+{
+ "asked": [
+  [
+   null,
+   null
+  ],
+  [
+   null,
+   null
+  ],
+  [
+   null,
+   null
+  ],
+  [
+   2,
+   null
+  ],
+  [
+   3,
+   null
+  ],
+  [
+   2,
+   null
+  ],
+  [
+   2,
+   null
+  ],
+  [
+   2,
+   null
+  ],
+  [
+   2,
+   null
+  ],
+  [
+   2,
+   null
+  ],
+  [
+   2,
+   null
+  ],
+  [
+   2,
+   null
+  ],
+  [
+   2,
+   null
+  ]
+ ],
+ "names": [
+  "candor: one layer",
+  "candor: one layer, widened 1",
+  "candor: per layer"
+ ],
+ "recorded": {
+  "direction_layer": [
+   0.4,
+   0.9
+  ],
+  "edge_strength": [
+   0.0,
+   1.0
+  ],
+  "max_refusals": 2,
+  "peak_layer": [
+   0.6,
+   1.0
+  ],
+  "reach": [
+   0.01,
+   0.6
+  ],
+  "seed": 3,
+  "startup_per_scope": 1,
+  "stop_early": true,
+  "strength": [
+   0.8,
+   1.5
+  ],
+  "widest_strength": [
+   0.5,
+   3.0
+  ]
+ },
+ "studies": {
+  "one layer": [
+   "candor: one layer, widened 1",
+   {
+    "base_refusals": 1,
+    "widened": [
+     [
+      2,
+      0.5,
+      1.5
+     ]
+    ]
+   }
+  ],
+  "per layer": [
+   "candor: per layer",
+   {}
+  ]
+ },
+ "trials": [
+  [
+   {
+    "attn.edge_strength": 0.6734554171562195,
+    "attn.peak_layer": 0.9084209203720093,
+    "attn.reach": 0.6,
+    "attn.strength": 0.9947620928287506,
+    "direction_layer": 1,
+    "mlp.edge_strength": 0.07899843156337738,
+    "mlp.peak_layer": 0.9734281063079834,
+    "mlp.reach": 0.6,
+    "mlp.strength": 0.8304374378174544,
+    "position": "think start"
+   },
+   {
+    "forced": 2,
+    "judged": 3,
+    "keyword_refusals": 0,
+    "kl": 0.032,
+    "kl_empty": null,
+    "kl_thinking": null,
+    "number": 1,
+    "refusals": 2,
+    "stopped": false,
+    "thinking": 20.0,
+    "unlabelled": 0,
+    "violation": -0.5
+   },
+   [
+    -0.5
+   ]
+  ],
+  [
+   {
+    "attn.edge_strength": 0.128215029835701,
+    "attn.peak_layer": 0.7683321952819824,
+    "attn.reach": 0.6,
+    "attn.strength": 1.1825926184654236,
+    "mlp.edge_strength": 0.31818050146102905,
+    "mlp.peak_layer": 0.8030370950698853,
+    "mlp.reach": 0.6,
+    "mlp.strength": 1.0491438657045364,
+    "position": "think start"
+   },
+   {
+    "forced": 3,
+    "judged": 3,
+    "keyword_refusals": 0,
+    "kl": 0.10300000000000001,
+    "kl_empty": null,
+    "kl_thinking": null,
+    "number": 2,
+    "refusals": 3,
+    "stopped": false,
+    "thinking": 30.0,
+    "unlabelled": 0,
+    "violation": 0.5
+   },
+   [
+    0.5
+   ]
+  ],
+  [
+   {
+    "attn.edge_strength": 0.7183163913068038,
+    "attn.peak_layer": 0.8411158029847854,
+    "attn.reach": 0.6,
+    "attn.strength": 1.1387083018640438,
+    "direction_layer": 1,
+    "mlp.edge_strength": 0.19686610061672163,
+    "mlp.peak_layer": 0.9469833740779182,
+    "mlp.reach": 0.6,
+    "mlp.strength": 0.9400773601408384,
+    "position": "think start"
+   },
+   {
+    "forced": 0,
+    "judged": 3,
+    "keyword_refusals": 0,
+    "kl": 0.064,
+    "kl_empty": null,
+    "kl_thinking": null,
+    "number": 3,
+    "refusals": 0,
+    "stopped": false,
+    "thinking": 40.0,
+    "unlabelled": 0,
+    "violation": -2.5
+   },
+   [
+    -2.5
+   ]
+  ],
+  [
+   {
+    "attn.edge_strength": 0.21167255891781028,
+    "attn.peak_layer": 0.8002847532299864,
+    "attn.reach": 0.6,
+    "attn.strength": 1.1602506539244306,
+    "mlp.edge_strength": 0.34516172798339617,
+    "mlp.peak_layer": 0.7677827388099464,
+    "mlp.reach": 0.6,
+    "mlp.strength": 0.9802679712934064,
+    "position": "think start"
+   },
+   {
+    "forced": 1,
+    "judged": 3,
+    "keyword_refusals": 0,
+    "kl": 0.025,
+    "kl_empty": null,
+    "kl_thinking": null,
+    "number": 4,
+    "refusals": 1,
+    "stopped": false,
+    "thinking": 50.0,
+    "unlabelled": 0,
+    "violation": -1.5
+   },
+   [
+    -1.5
+   ]
+  ],
+  [
+   {
+    "attn.edge_strength": 0.15953533351421356,
+    "attn.peak_layer": 0.6519515931606292,
+    "attn.reach": 0.6,
+    "attn.strength": 1.1620615720748901,
+    "direction_layer": 1,
+    "mlp.edge_strength": 0.46988731622695923,
+    "mlp.peak_layer": 0.7897131681442261,
+    "mlp.reach": 0.6,
+    "mlp.strength": 0.5939932391047478,
+    "position": "think start"
+   },
+   {
+    "forced": 2,
+    "judged": 3,
+    "keyword_refusals": 0,
+    "kl": 0.096,
+    "kl_empty": null,
+    "kl_thinking": null,
+    "number": 5,
+    "refusals": 2,
+    "stopped": false,
+    "thinking": 60.0,
+    "unlabelled": 0,
+    "violation": -0.5
+   },
+   [
+    -0.5
+   ]
+  ],
+  [
+   {
+    "attn.edge_strength": 0.5447621806760119,
+    "attn.peak_layer": 0.8409586661745055,
+    "attn.reach": 0.6,
+    "attn.strength": 1.3348652958948846,
+    "mlp.edge_strength": 0.680375045344566,
+    "mlp.peak_layer": 0.6233051568282573,
+    "mlp.reach": 0.6,
+    "mlp.strength": 0.8379497016402616,
+    "position": "think start"
+   },
+   {
+    "forced": 1,
+    "judged": 1,
+    "keyword_refusals": 0,
+    "kl": 0.057,
+    "kl_empty": null,
+    "kl_thinking": null,
+    "number": 6,
+    "refusals": 3,
+    "stopped": true,
+    "thinking": 70.0,
+    "unlabelled": 0,
+    "violation": 6.5
+   },
+   [
+    6.5
+   ]
+  ],
+  [
+   {
+    "attn.edge_strength": 0.03663834556937218,
+    "attn.peak_layer": 0.8532132625579834,
+    "attn.reach": 0.6,
+    "attn.strength": 0.7897123694419861,
+    "direction_layer": 0,
+    "mlp.edge_strength": 0.026021629571914673,
+    "mlp.peak_layer": 0.9960178136825562,
+    "mlp.reach": 0.6,
+    "mlp.strength": 1.042199969291687,
+    "position": "answer start"
+   },
+   {
+    "forced": 0,
+    "judged": 3,
+    "keyword_refusals": 0,
+    "kl": 0.018000000000000002,
+    "kl_empty": null,
+    "kl_thinking": null,
+    "number": 7,
+    "refusals": 0,
+    "stopped": false,
+    "thinking": 80.0,
+    "unlabelled": 0,
+    "violation": -2.5
+   },
+   [
+    -2.5
+   ]
+  ],
+  [
+   {
+    "attn.edge_strength": 0.3225486623064453,
+    "attn.peak_layer": 0.9822778316857618,
+    "attn.reach": 0.6,
+    "attn.strength": 1.006454740529176,
+    "mlp.edge_strength": 0.059165469419256544,
+    "mlp.peak_layer": 0.7784619758614517,
+    "mlp.reach": 0.6,
+    "mlp.strength": 0.9104345634769009,
+    "position": "think start"
+   },
+   {
+    "forced": 1,
+    "judged": 3,
+    "keyword_refusals": 0,
+    "kl": 0.089,
+    "kl_empty": null,
+    "kl_thinking": null,
+    "number": 8,
+    "refusals": 1,
+    "stopped": false,
+    "thinking": 90.0,
+    "unlabelled": 0,
+    "violation": -1.5
+   },
+   [
+    -1.5
+   ]
+  ],
+  [
+   {
+    "attn.edge_strength": 0.09614044874738872,
+    "attn.peak_layer": 0.8827948914609453,
+    "attn.reach": 0.6,
+    "attn.strength": 0.8147319986594893,
+    "direction_layer": 0,
+    "mlp.edge_strength": 0.016198939860286574,
+    "mlp.peak_layer": 0.9042645319458036,
+    "mlp.reach": 0.6,
+    "mlp.strength": 0.7719494330336498,
+    "position": "answer start"
+   },
+   {
+    "forced": 2,
+    "judged": 3,
+    "keyword_refusals": 0,
+    "kl": 0.05,
+    "kl_empty": null,
+    "kl_thinking": null,
+    "number": 9,
+    "refusals": 2,
+    "stopped": false,
+    "thinking": 100.0,
+    "unlabelled": 0,
+    "violation": -0.5
+   },
+   [
+    -0.5
+   ]
+  ],
+  [
+   {
+    "attn.edge_strength": 0.044881517288476835,
+    "attn.peak_layer": 0.9012967182563463,
+    "attn.reach": 0.6,
+    "attn.strength": 1.0886599614466985,
+    "mlp.edge_strength": 0.9301870577831854,
+    "mlp.peak_layer": 0.779942209188683,
+    "mlp.reach": 0.6,
+    "mlp.strength": 1.0353948153965291,
+    "position": "think start"
+   },
+   {
+    "forced": 1,
+    "judged": 1,
+    "keyword_refusals": 0,
+    "kl": 0.011,
+    "kl_empty": null,
+    "kl_thinking": null,
+    "number": 10,
+    "refusals": 3,
+    "stopped": true,
+    "thinking": 110.0,
+    "unlabelled": 0,
+    "violation": 6.5
+   },
+   [
+    6.5
+   ]
+  ],
+  [
+   {
+    "attn.edge_strength": 0.008938237315964603,
+    "attn.peak_layer": 0.8702009912774825,
+    "attn.reach": 0.6,
+    "attn.strength": 0.880818359964551,
+    "direction_layer": 0,
+    "mlp.edge_strength": 0.43810505545564116,
+    "mlp.peak_layer": 0.9342885424232502,
+    "mlp.reach": 0.6,
+    "mlp.strength": 1.2704640776793104,
+    "position": "answer start"
+   },
+   {
+    "forced": 0,
+    "judged": 3,
+    "keyword_refusals": 0,
+    "kl": 0.082,
+    "kl_empty": null,
+    "kl_thinking": null,
+    "number": 11,
+    "refusals": 0,
+    "stopped": false,
+    "thinking": 120.0,
+    "unlabelled": 0,
+    "violation": -2.5
+   },
+   [
+    -2.5
+   ]
+  ],
+  [
+   {
+    "attn.edge_strength": 0.09298527529826184,
+    "attn.peak_layer": 0.6050542360325284,
+    "attn.reach": 0.6,
+    "attn.strength": 1.0890222189344063,
+    "mlp.edge_strength": 0.5000224310491248,
+    "mlp.peak_layer": 0.6412126369127088,
+    "mlp.reach": 0.6,
+    "mlp.strength": 0.8224236919274618,
+    "position": "think start"
+   },
+   {
+    "forced": 1,
+    "judged": 3,
+    "keyword_refusals": 0,
+    "kl": 0.043,
+    "kl_empty": null,
+    "kl_thinking": null,
+    "number": 12,
+    "refusals": 1,
+    "stopped": false,
+    "thinking": 130.0,
+    "unlabelled": 0,
+    "violation": -1.5
+   },
+   [
+    -1.5
+   ]
+  ]
+ ]
+}

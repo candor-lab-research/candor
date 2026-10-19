@@ -3,6 +3,7 @@
 Generated text is handed back to the caller. Nothing here prints or logs it.
 """
 
+import hashlib
 import http.client
 import json
 import os
@@ -101,6 +102,15 @@ GREEDY = {"temperature": 0.0}
 # The most tokens a model whose thinking budget ran out may take to finish a character it is part way
 # through; llama-server waits as long as it takes, but a character takes at most 4 bytes.
 UNFINISHED_CHARACTER = 8
+# A sampled answer's seed is never llama.cpp's "pick one at random".
+RANDOM_SEED = 2**32 - 1
+
+
+def seed_for(seed: int, request: str) -> int:
+    """A seed of its own made from seed, for one of the requests seed belongs to. llama-server starts
+    its random draws again at every request, so a request after a thinking sent with the thinking's
+    seed would draw its tokens with the numbers the thinking drew its first ones with."""
+    return int.from_bytes(hashlib.sha256(f"{seed}:{request}".encode()).digest()[:4]) % RANDOM_SEED
 
 
 class LlamaServer:
@@ -418,7 +428,8 @@ class LlamaServer:
     ) -> Answer:
         """One answer. A thinking model thinks until it ends its thinking or its budget makes it stop,
         then answers in a request of its own, so the answer's length is limited apart from the
-        thinking's. With requests, requests.stop() ends it, as no one wants the answer any more."""
+        thinking's; each request after the thinking has a seed of its own (see seed_for). With requests,
+        requests.stop() ends it, as no one wants the answer any more."""
         settings = {**sampling, "seed": seed, "lora": lora}
         if thinking is None:
             payload = {"prompt": prompt, "n_predict": max_tokens, **settings}
@@ -428,7 +439,12 @@ class LlamaServer:
         if not closed:
             # The model ended without closing its thinking, so it never answered.
             return Answer("", 0, False, len(thought))
-        payload = {"prompt": prompt + thought, "n_predict": max_tokens, **settings}
+        payload = {
+            "prompt": prompt + thought,
+            "n_predict": max_tokens,
+            **settings,
+            "seed": seed_for(seed, "answer"),
+        }
         result = self._checked(payload, self._complete(payload, requests))
         finished = result["stop_type"] != "limit"
         return Answer(result["content"], result["tokens_predicted"], finished, len(thought) - 1, made_to_stop)
@@ -488,7 +504,8 @@ class LlamaServer:
         if thought and not self._whole(thought[-1]):
             # Finished in one request, so its tokens are drawn one after another as the server's
             # would be, and cut after the first whole one.
-            more, stop = self._thought(prompt + thought, UNFINISHED_CHARACTER, settings, thinking, requests)
+            finishing = {**settings, "seed": seed_for(settings["seed"], "finish")}
+            more, stop = self._thought(prompt + thought, UNFINISHED_CHARACTER, finishing, thinking, requests)
             # The server keeps the token that ended the model's turn, last.
             drawn = more[:-1] if stop == "eos" else more
             for i, token in enumerate(drawn):

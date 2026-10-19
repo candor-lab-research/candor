@@ -6,6 +6,7 @@ import json
 import math
 import re
 import shutil
+from pathlib import Path
 
 import optuna
 import pytest
@@ -38,6 +39,9 @@ from .tiny_run import (
     thinks_through,
 )
 
+# How a seeded search drew, recorded and told the sampler its trials, as candor did before
+# search.max_budget_hits existed.
+SEEDED = Path(__file__).parent / "records_seeded_search.json"
 CHANGES = [
     (lambda s, m: setattr(s.deployment, "quantization", "Q8_0"), "model file"),
     (lambda s, m: setattr(s.edit, "row_norm", "none"), "adapters"),
@@ -50,7 +54,8 @@ CHANGES = [
     (lambda s, m: setattr(s.search, "strength", (0.9, 1.4)), "search settings"),
     (lambda s, m: setattr(s.search, "widest_strength", (0.5, 2.0)), "search settings"),
     (lambda s, m: setattr(s.slots, "search", 3), "slots"),
-    (lambda s, m: m.setattr(search, "VERSION", search.VERSION + 1), "code"),
+    (lambda s, m: m.setattr(search, "VERSION", search.VERSION + 1), "candor code"),
+    (lambda s, m: m.setattr(search, "EDITS", search.EDITS + 1), "candor code"),
     (lambda s, m: m.setattr(optuna, "__version__", "9.9.9"), "Optuna"),
 ]
 
@@ -437,6 +442,27 @@ def test_a_trial_isnt_rebuilt_from_other_directions_or_adapters(tiny):
     tiny.settings.edit.row_norm = "none"
     with pytest.raises(RunError, match="made with different adapters from this run's now"):
         search.trial_edit(tiny, 1)
+
+
+def test_a_trial_is_rebuilt_from_a_search_whose_scores_meant_something_else(tiny, monkeypatch):
+    small(tiny)
+    Search(tiny).search(1)
+    assert not search.older(tiny.folder)
+    # As a search recorded before rebuilding a trial's edit had a version of its own, by candor whose
+    # scores meant something else.
+    record = tiny.path("search", "inputs.json")
+    made = json.loads(record.read_text())
+    del made["code"]["edits"]
+    record.write_text(json.dumps(made))
+    monkeypatch.setattr(search, "VERSION", search.VERSION + 1)
+    found = search.load(tiny)
+    assert found is not None
+    number = next(iter(found.trials))
+    assert search.older(tiny.folder)
+    assert search.trial_edit(tiny, number) == search.recorded_edit(tiny, number)
+    monkeypatch.setattr(search, "EDITS", search.EDITS + 1)
+    with pytest.raises(RunError, match="made with different candor code from this run's now, so its trials"):
+        search.trial_edit(tiny, number)
 
 
 def silent(monkeypatch):
@@ -2303,7 +2329,7 @@ def test_with_max_budget_hits_unset_a_seeded_search_draws_records_and_tells_the_
         "names": sorted(optuna.get_all_study_names(search._storage(tiny.path("search")))),
     }
     assert sum(t.user_attrs["stopped"] for t in found.trials.values()) == 2 and found.strength
-    assert run.digest(record) == "8b011795c1be9ae0"
+    assert json.loads(json.dumps(record)) == json.loads(SEEDED.read_text())
 
 
 def thinking_search(tiny, monkeypatch, hits, trials=3):

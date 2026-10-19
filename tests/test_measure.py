@@ -293,6 +293,32 @@ def test_measurements_with_other_settings_are_not_compared(tiny):
     assert measure.compare(first, Measurement(tiny, None, "again", slots=2).measure())
 
 
+def test_measurements_by_other_measuring_code_are_measured_again_and_not_compared(tiny, monkeypatch):
+    before = Measurement(tiny, None, "base").measure()
+    monkeypatch.setitem(run.STAGES, "measurements", run.STAGES["measurements"] + 1)
+    answered = counting_answers(monkeypatch)
+    after = Measurement(tiny, None, "base").measure()
+    assert answered == [3, 3, 3]
+    with pytest.raises(RunError, match="a setting or candor's measuring changed between them"):
+        measure.compare(before, after)
+
+
+def test_what_older_measuring_code_measured_is_kept_under_a_name_of_its_own(tiny, monkeypatch):
+    older = Measurement(tiny, None, "base").measure()
+    version = run.STAGES["measurements"]
+    monkeypatch.setitem(run.STAGES, "measurements", version + 1)
+    Measurement(tiny, None, "base").measure()
+    assert measure.load(tiny, f"base-measuring-{version}") == older
+    assert tiny.path("private", "measurements", f"base-measuring-{version}").is_dir()
+    assert measure.measured_by(tiny.path("measurements", "base")) == version + 1
+    # Never measured over, even when that name is taken.
+    monkeypatch.setitem(run.STAGES, "measurements", version + 2)
+    tiny.path("measurements", f"base-measuring-{version + 1}").mkdir()
+    with pytest.raises(RunError, match=f"base-measuring-{version + 1} is taken"):
+        Measurement(tiny, None, "base").measure()
+    assert measure.measured_by(tiny.path("measurements", "base")) == version + 1
+
+
 def test_a_measurement_answers_slots_measure_at_once_unless_given_another_number(tiny, monkeypatch):
     started = []
     real = LlamaServer.start
@@ -451,6 +477,9 @@ def test_a_heretic_study_needs_a_trial():
         ("Answer: 41, though 42 was close", 42, False),
         ("No idea", 42, False),
         ("Answer: -2.5", -2.5, True),
+        ("Answer: \\boxed{18}\nCheck: 18 + 2 = 20", 18, True),
+        ("She spent more than she had.\nAnswer: -$5", -5, True),
+        ("A loss of -$5", -5, True),
     ],
 )
 def test_maths_answers_are_read_from_the_stated_answer_or_the_last_number(answer, gold, correct):
@@ -460,6 +489,7 @@ def test_maths_answers_are_read_from_the_stated_answer_or_the_last_number(answer
 def test_a_cut_off_answer_counts_only_if_it_stated_its_answer():
     assert not measure.is_correct("18 + 24 = 42. So the total is", 42, finished=False)
     assert measure.is_correct("So 42.\nAnswer: 42\nTo check, 6 times", 42, finished=False)
+    assert measure.is_correct("So 42.\nAnswer: \\boxed{42}\nTo check, 6 times", 42, finished=False)
 
 
 def test_gsm8k_answers_give_their_final_number():

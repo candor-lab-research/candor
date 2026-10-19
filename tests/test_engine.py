@@ -513,6 +513,16 @@ def answered(payload):
     }
 
 
+def test_a_model_that_doesnt_think_answers_with_its_prompts_seed(monkeypatch):
+    s = LlamaServer(LLAMA_SERVER, Path("model.gguf"), Path("server.log"), parallel=2)
+    sent = []
+    monkeypatch.setattr(
+        s, "_complete", lambda payload, requests=None: sent.append(payload) or answered(payload)
+    )
+    s.generate([[1], [2]], 4, sampling={"temperature": 1.0}, seeds=[5, 6])
+    assert sorted(payload["seed"] for payload in sent) == [5, 6]
+
+
 def test_answers_come_in_order_and_closing_early_cancels_those_not_started(monkeypatch):
     s = LlamaServer(LLAMA_SERVER, Path("model.gguf"), Path("server.log"), parallel=2)
     sent, done = [], []
@@ -758,7 +768,9 @@ def test_the_answer_goes_on_from_where_the_thinking_ended(monkeypatch):
     assert first["n_predict"] == 49 and first["stop"] == [END_THINK]
     assert not any(key.startswith("reasoning_budget") for key in first)
     assert then["prompt"] == [1, 2, 5, 6, 99] and then["n_predict"] == 9
-    assert first["seed"] == then["seed"] == 3 and first["temperature"] == then["temperature"] == 1.0
+    # The thinking draws with the prompt's seed and the answer with one of its own, made from it.
+    assert first["seed"] == 3 and then["seed"] == engine.seed_for(3, "answer")
+    assert first["temperature"] == then["temperature"] == 1.0
 
 
 def test_thinking_made_to_stop_by_its_budget_is_reported(monkeypatch):
@@ -817,6 +829,7 @@ def test_a_model_part_way_through_a_character_at_its_budget_finishes_it_first(mo
     s, asked = thinking_server(monkeypatch, thought, answer, more, broken=frozenset({7, 11}))
     assert s.generate([[1]], 9, thinking=thinking) == [Answer("late", 2, False, 7, True)]
     assert [a["n_predict"] for a in asked] == [3, engine.UNFINISHED_CHARACTER, 9]
+    assert [a["seed"] for a in asked] == [0, engine.seed_for(0, "finish"), engine.seed_for(0, "answer")]
     assert asked[1]["prompt"] == [1, 5, 6, 7] and asked[2]["prompt"] == [1, 5, 6, 7, 11, 12, 8, 9, 99]
     # A model that closes its thinking while it finishes the character closed it itself.
     closing = {"tokens": [11, 99], "content": "", "stop_type": "word"}
@@ -829,10 +842,56 @@ def test_a_model_part_way_through_a_character_at_its_budget_finishes_it_first(mo
     assert made.forced and made.thinking == 3 + engine.UNFINISHED_CHARACTER + 2
 
 
+def test_the_unedited_thinking_finishes_a_character_with_a_seed_of_its_own(monkeypatch):
+    # The unedited thinking KL is read after is kept under a key that holds STAGES["thinking"], so a
+    # change to what these requests ask for must bump it.
+    thinking = Thinking(THINK, END_THINK, END_THINK, THINK, 3, "stop")
+    thought = {"tokens": [5, 6, 7], "content": "", "stop_type": "limit"}
+    closing = {"tokens": [11, 99], "content": "", "stop_type": "word"}
+    s, asked = thinking_server(monkeypatch, thought, None, closing, broken=frozenset({7, 11}))
+    assert s.thoughts([[1]], SAMPLED, [3], thinking) == [[5, 6, 7, 11, 99]]
+    assert [(a["prompt"], a["n_predict"], a["seed"]) for a in asked] == [
+        ([1], 3, 3),
+        ([1, 5, 6, 7], engine.UNFINISHED_CHARACTER, 1557406095),
+    ]
+
+
 def test_each_prompt_has_a_seed_of_its_own_that_never_changes():
     # A resumed search records only the base seed, so the seeds made from it must never change.
     assert run_seeds(0, 3) == [2893166218, 4011020074, 2468915676]
     assert run_seeds(1, 2) == [2791857979, 3602223452]
+    # Nor may the seeds of the requests after a thinking.
+    assert engine.seed_for(3, "answer") == 235297619 and engine.seed_for(3, "finish") == 1557406095
+
+
+def test_an_answer_draws_afresh_rather_than_as_its_thinking_did(tmp_path, monkeypatch):
+    # Every token of this model reads the same, so the odds of its next token never change, and what
+    # it draws depends only on a request's random numbers.
+    weights = random_weights()
+    weights["token_embd.weight"][:] = weights["token_embd.weight"][0]
+    write_model(tmp_path / "same.gguf", weights, thinking=True)
+    thinking = Thinking(THINK, END_THINK, END_THINK, THINK, 12, "")
+    with one_slot(tmp_path, "same.gguf") as s:
+        real, drawn = s._complete, []
+
+        def complete(payload, requests=None):
+            result = real({**payload, "return_tokens": True}, requests)
+            drawn.append(result["tokens"])
+            return result
+
+        # llama-server starts a request's random numbers again from its seed, so two requests with one
+        # seed draw alike whatever their prompts.
+        same = [
+            real({"prompt": prompt, "n_predict": 12, "seed": 3, "return_tokens": True, **SAMPLED})["tokens"]
+            for prompt in (PROMPTS[0], PROMPTS[1] + PROMPTS[2])
+        ]
+        assert same[0] == same[1]
+        monkeypatch.setattr(s, "_complete", complete)
+        for seed in range(4):
+            drawn.clear()
+            s.generate([THINKING_PROMPTS[0]], 12, sampling=SAMPLED, seeds=[seed], thinking=thinking)
+            thought, answer = drawn[0], drawn[-1]
+            assert len(drawn) > 1 and answer[: len(thought)] != thought[: len(answer)]
 
 
 def test_a_request_no_one_wants_any_more_is_dropped_at_once(files, tmp_path):

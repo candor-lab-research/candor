@@ -1,6 +1,7 @@
 """candor's menus, driven by a scripted set of answers, and their questions by keys in a terminal."""
 
 import io
+import json
 from collections.abc import Callable
 from pathlib import Path
 from typing import Any
@@ -13,7 +14,7 @@ from prompt_toolkit.output import DummyOutput
 from rich.console import Console
 from typer.testing import CliRunner
 
-from candor import cli, config, measure, menu, search
+from candor import cli, config, measure, menu, run, search
 from candor.menu import BACK, Menus, Option, Questions, Status
 from candor.run import Run
 from candor.search import Search
@@ -82,12 +83,15 @@ def a_run(root: Path, name: str = "run", source: str | None = None) -> Path:
     return root / name
 
 
-def measured(folder: Path, *names: str) -> None:
-    """Finished measurements, judged too, as far as their files go."""
+def measured(folder: Path, *names: str, code: int | None = None) -> None:
+    """Finished measurements, judged too, as far as their files go, made by this version of the
+    measuring code: candor's now unless given."""
     for name in names:
         (folder / "measurements" / name).mkdir(parents=True)
         for file in measure.FINISHED:
             (folder / "measurements" / name / file).write_text("{}")
+        made = {"code": {"measurements": code or run.STAGES["measurements"]}}
+        run.record_of(folder / "measurements" / name / "maths.json").write_text(json.dumps(made))
 
 
 def test_a_runs_status_is_read_from_its_files(tmp_path):
@@ -353,6 +357,42 @@ def test_a_trials_row_fits_80_columns_at_its_widest():
     assert all(len(line) <= 77 for line in lines)
     assert lines[0] == "600  per layer, answer  100 refused  KL 0.1235  over cap  ✓ export measured"
     assert "stopped early, 7 refused of 8" in lines[1]
+
+
+def test_a_search_scored_by_an_older_candor_isnt_offered_to_carry_on(searched, monkeypatch):
+    run, _ = searched
+    run.settings.search.trials_per_scope = 5
+    (run.folder / config.FILE).write_text(config.render(run.settings, "made by a test"))
+    assert not menu.status(run.folder).older
+    monkeypatch.setattr(search, "VERSION", search.VERSION + 1)
+    older = menu.status(run.folder)
+    assert older.older and older.trials < older.target
+    menus = Menus(Scripted(), Console(file=io.StringIO()), run.folder.parent)
+    assert menus._next(older, "base") == "base"
+    asked, shown = run_menus(run.folder.parent, run.folder, BACK, "quit")
+    assert asked.options(run.folder.name)["search"].disabled == "scored by an older candor"
+    assert "scored by an older candor" in shown
+
+
+def test_measurements_by_older_measuring_code_are_marked_and_the_unedited_model_measured_again(
+    searched, monkeypatch
+):
+    run_, found = searched
+    number = menu.picks(run_, found, set())[0].candidate.trial
+    measured(run_.folder, "base-slots-28", "base-slots-28-first-16", code=1)
+    measured(run_.folder, f"trial-{number}-exported-slots-28", "base-slots-28-first-8")
+    status = menu.status(run_.folder)
+    assert status.older_measured == {"base-slots-28", "base-slots-28-first-16"}
+    menus = Menus(Scripted(), Console(file=io.StringIO()), run_.folder.parent)
+    assert menus._next(status, "base-slots-28") == "base"
+    answers = ["look", BACK, "trials", number, "measure", BACK, BACK, BACK, BACK]
+    asked, shown = run_menus(run_.folder.parent, run_.folder, *answers, "quit")
+    assert asked.options(run_.folder.name)["base"].title.endswith("✓ measured by an older candor   ← next")
+    assert asked.options("Which measurement?")["base-slots-28"].title == "base-slots-28   by an older candor"
+    assert asked.options(f"Trial {number}")["compare"].disabled == "measured by different versions of candor"
+    assert "2 by an older candor" in shown
+    # A quick measurement is offered only as long as one of the unedited model's it can pair with.
+    assert list(asked.options(f"Measure trial {number}")) == ["every", 8, BACK]
 
 
 def test_a_trial_is_measured_exported_and_chatted_with_under_the_runs_names(searched, monkeypatch):

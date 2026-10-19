@@ -6,7 +6,7 @@ import os
 import re
 import shlex
 import subprocess
-from collections.abc import Callable
+from collections.abc import Callable, Set
 from dataclasses import dataclass
 from functools import partial
 from pathlib import Path
@@ -154,6 +154,11 @@ class Status:
     target: int
     measurements: list[str]
     exports: list[int]
+    # Whether its search was scored by older code, so its trials can be measured and exported but no
+    # more added.
+    older: bool = False
+    # Its measurements made by older measuring code.
+    older_measured: frozenset[str] = frozenset()
 
     @property
     def model(self) -> str:
@@ -195,6 +200,13 @@ def measurements_of(folder: Path) -> list[str]:
     return sorted(names, key=lambda name: (not name.startswith("base"), _number(name) or 0, name))
 
 
+def older_of(folder: Path, names: list[str]) -> set[str]:
+    """Those of the run's measurements made by older measuring code, which compare won't pair with
+    one made now."""
+    now = measure.STAGES["measurements"]
+    return {name for name in names if measure.measured_by(folder / "measurements" / name) != now}
+
+
 def exports_of(folder: Path) -> list[int]:
     """The trials whose GGUF candor export made is here."""
     root = folder / "exports"
@@ -215,12 +227,14 @@ def status(folder: Path) -> Status:
     if settings.deployment.think_close:
         built["thinking"] = any((folder / "thinking").glob("*.json"))
     found = problem = None
+    older = False
     try:
         found = search.load(Run(folder, settings, report=lambda _: None))
         if found:
             # Read once here, so a search an older candor made fails here and not in the menu.
             for scope in search.SCOPES:
                 search.best_so_far(found, scope, settings.search)
+            older = search.older(folder)
     except RunError as error:
         found, problem = None, f"the search can't be read: {error}"
     except Exception as error:
@@ -231,7 +245,10 @@ def status(folder: Path) -> Status:
     trials = sum(min(kinds.count(scope), share) for scope in search.SCOPES)
     target = len(search.SCOPES) * share
     measured, exported = measurements_of(folder), exports_of(folder)
-    return Status(folder, settings, problem, built, found, trials, target, measured, exported)
+    older_measured = frozenset(older_of(folder, measured))
+    return Status(
+        folder, settings, problem, built, found, trials, target, measured, exported, older, older_measured
+    )
 
 
 def runs_in(root: Path) -> list[Status]:
@@ -376,10 +393,16 @@ class Menus:
             options: list[Option | None] = [
                 Option("Prepare" + _done(found.prepared, "built"), "run"),
                 Option(
-                    "Search" + (f"   {found.trials}/{found.target} trials" if found.trials else ""), "search"
+                    "Search" + (f"   {found.trials}/{found.target} trials" if found.trials else ""),
+                    "search",
+                    "scored by an older candor" if found.older else None,
                 ),
                 Option("Trials…", "trials", None if searched else "nothing searched yet"),
-                Option("Measure the unedited model" + _done(base in found.measurements, "measured"), "base"),
+                Option(
+                    "Measure the unedited model"
+                    + _done(base in found.measurements, _by(base, found.older_measured)),
+                    "base",
+                ),
                 Option(
                     "Compare two measurements…",
                     "compare",
@@ -410,9 +433,9 @@ class Menus:
             elif chosen == "base":
                 self.measure(run, found.measurements, None, exported=False)
             elif chosen == "compare":
-                self.compare(folder, found.measurements)
+                self.compare(folder, found.measurements, found.older_measured)
             elif chosen == "look":
-                self.look(run, found.measurements)
+                self.look(run, found.measurements, found.older_measured)
             elif chosen == "chat":
                 self.chat(folder, found)
             elif chosen == "settings":
@@ -423,9 +446,9 @@ class Menus:
         model here, and needs none to carry its search on there."""
         if not found.prepared and not found.trials:
             return "run"
-        if found.trials < found.target:
+        if found.trials < found.target and not found.older:
             return "search"
-        if base not in found.measurements:
+        if base not in found.measurements or base in found.older_measured:
             return "base"
         return "trials"
 
@@ -456,11 +479,16 @@ class Menus:
                 if (pick := search.best_so_far(found.found, scope, settings.search))
             ]
             searched = f"{found.trials} of {found.target} trials"
+            if found.older:
+                searched += ", scored by an older candor"
             table.add_row("Search", escape("\n".join([searched, *best])))
         if found.measurements:
             shown = found.measurements[:MEASUREMENTS_SHOWN]
             more = len(found.measurements) - len(shown)
-            table.add_row("Measured", escape(", ".join(shown) + (f" and {more} more" if more else "")))
+            listed = ", ".join(shown) + (f" and {more} more" if more else "")
+            if older := len(found.older_measured):
+                listed += f"\n{'all' if older == len(found.measurements) else older} by an older candor"
+            table.add_row("Measured", escape(listed))
         if found.exports:
             table.add_row("Exports", escape(", ".join(f"trial {n}" for n in found.exports)))
         if found.problem:
@@ -510,16 +538,25 @@ class Menus:
         self.console.print(Text(f"Trial {number}: {direction}, {shown}", style="dim"))
         while True:
             measured = measurements_of(folder)
+            older = older_of(folder, measured)
             exported = number in exports_of(folder)
+            if not {base, export} <= set(measured):
+                apart = "measure both first"
+            elif measure.measured_by(folder / "measurements" / base) != measure.measured_by(
+                folder / "measurements" / export
+            ):
+                apart = "measured by different versions of candor"
+            else:
+                apart = None
             options: list[Option | None] = [
-                Option("Measure it with adapters" + _done(adapters in measured, "measured"), "measure"),
-                Option("Export it, as the GGUF you run" + _done(exported, "exported here"), "export"),
-                Option("Measure its export" + _done(export in measured, "measured"), "measure export"),
                 Option(
-                    "Compare its export with the unedited model",
-                    "compare",
-                    None if {base, export} <= set(measured) else "measure both first",
+                    "Measure it with adapters" + _done(adapters in measured, _by(adapters, older)), "measure"
                 ),
+                Option("Export it, as the GGUF you run" + _done(exported, "exported here"), "export"),
+                Option(
+                    "Measure its export" + _done(export in measured, _by(export, older)), "measure export"
+                ),
+                Option("Compare its export with the unedited model", "compare", apart),
                 Option("Chat with its export", "chat", None if exported else "no export of it here"),
                 RULE,
                 Option("Back", BACK),
@@ -550,7 +587,14 @@ class Menus:
         what = "the unedited model" if trial is None else f"trial {trial}" + ("'s export" if exported else "")
         # A quick measurement pairs only with one of the unedited model's that is as long.
         base = _measured_as(run, None, False)
-        limits = sorted({int(m[1]) for name in measured if (m := re.fullmatch(rf"{base}-first-(\d+)", name))})
+        older = older_of(run.folder, measured)
+        limits = sorted(
+            {
+                int(m[1])
+                for name in measured
+                if (m := re.fullmatch(rf"{base}-first-(\d+)", name)) and (trial is None or name not in older)
+            }
+        )
         pairs = "as" if trial is None else "to pair with"
         quick = [Option(f"The first {n} of each set, {pairs} {base}-first-{n}", n) for n in limits] or [
             Option(f"The first {QUICK} of each set, to try it and time it", QUICK)
@@ -572,15 +616,15 @@ class Menus:
             run, name, args, partial(cli.measure_command, folder, trial=trial, limit=limit, exported=exported)
         )
 
-    def compare(self, folder: Path, names: list[str]) -> None:
-        options = [Option(n, n) for n in names]
+    def compare(self, folder: Path, names: list[str], older: frozenset[str]) -> None:
+        options = [Option(_older_shown(n, older), n) for n in names]
         chosen = self.ask.choose_two("Compare which two? A is the higher one", options)
         if chosen:
             first, second = chosen
             self.call(["compare", str(folder), first, second], partial(cli.compare, folder, first, second))
 
-    def look(self, run: Run, names: list[str]) -> None:
-        options: list[Option | None] = [Option(n, n) for n in names]
+    def look(self, run: Run, names: list[str], older: frozenset[str]) -> None:
+        options: list[Option | None] = [Option(_older_shown(n, older), n) for n in names]
         name = self.ask.choose("Which measurement?", [*options, RULE, Option("Back", BACK)])
         if name in (None, BACK):
             return
@@ -691,6 +735,15 @@ def _command(args: list[str]) -> str:
 
 def _done(done: bool, what: str) -> str:
     return f"   ✓ {what}" if done else ""
+
+
+def _by(name: str, older: Set[str]) -> str:
+    """How a measurement is marked done: measured, or measured by older code."""
+    return "measured by an older candor" if name in older else "measured"
+
+
+def _older_shown(name: str, older: Set[str]) -> str:
+    return f"{name}   by an older candor" if name in older else name
 
 
 def _measured_as(run: Run, trial: int | None, exported: bool) -> str:

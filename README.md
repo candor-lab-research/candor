@@ -111,7 +111,7 @@ uv run candor                                                  # or all of it fr
   vocabulary. llama-server can't do that for a request with a thinking budget, so candor holds the
   model to its budget itself, token for token as the server's own budget does (checked against it).
   Draws for a seed differ from sampling on the CPU, so a measurement made before 2026-10-14 pairs
-  with a later one prompt by prompt, not draw by draw.
+  with one made up to 2026-10-18 prompt by prompt, not draw by draw.
 - For a thinking model, refusal directions are read both where the thinking starts and where the
   answer starts after an empty thinking block, and the search chooses between them for each trial.
   KL is read where the answer starts after the unedited model's own thinking, leaving out prompts
@@ -122,8 +122,10 @@ uv run candor                                                  # or all of it fr
 - Answers are greedy unless `[sampling]` says otherwise. Set it to the settings you chat with, such as
   a thinking model card's recommended ones: the search, measurements and `serve` then all sample
   that way, each prompt with a seed of its own that is the same for every edit, so two edits are
-  still compared prompt by prompt. `measure --seed N` samples with other draws, to see how much
-  sampling alone moves the counts.
+  still compared prompt by prompt. A thinking model's answer, asked for after its thinking, gets a
+  seed of its own made from its prompt's, since llama-server starts its random draws again at every
+  request. `measure --seed N` samples with other draws, to see how much sampling alone moves the
+  counts.
 - `init` runs the same checks and refuses a model candor can't edit. `candor.toml` holds every
   setting the run uses, each explained by a comment; edit it freely, and every later command checks
   it. Hugging Face models and the prompt datasets are pinned to the commits that were checked, and
@@ -147,7 +149,11 @@ uv run candor                                                  # or all of it fr
 - `compare A B` pairs two measurements prompt by prompt: each count, the change with a 95% interval
   (Bonett and Price's for paired counts; for KL a studentised bootstrap over the prompts), how many
   prompts went each way, and the exact McNemar p-value; and the slots and seeds where they differ.
-  Measuring the same edit twice with different `--slots` shows what batching noise alone does.
+  Measuring the same edit twice with different `--slots` shows what batching noise alone does. It
+  refuses two measurements made by different versions of candor's measuring: those made before
+  2026-10-19 drew a thinking model's answer with its thinking's seed and misread maths answers written
+  `\boxed{18}` or `-$5`. Measuring again under the name of one made by older code keeps the old one
+  as `NAME-measuring-N`.
 - `search` tries edits of the shape heretic searches, in two kinds searched apart that take turns:
   every layer reading one layer's refusal direction, and each layer reading its own
   (`search.trials_per_scope`, 300 each). Each kind starts from 20 evenly spread trials, then

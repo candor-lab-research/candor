@@ -891,3 +891,27 @@ runs with how far each has got, shows a run's panel (model, stages built, the se
 measurements, exports) and its actions, starting on the step it is ready for, and runs the same
 commands, each shown first. Jobs that can take hours can instead be shown as `scripts/pod.sh`
 commands. Built on questionary, which heretic also uses. Reviewed twice; 853 tests pass.
+
+### Repository review step 4: the answer's own seed, one measurements change (the user, 2026-10-19)
+
+Package 3, done before any 27B reference so references are measured again only once.
+- llama-server starts its random draws again at every request, so a thinking model's answer, sent
+  with its thinking's seed, drew token k with the number that drew thinking token k. The answer, and
+  the request that finishes a half-written character at the budget, now get seeds of their own made
+  from the prompt's; the thinking keeps the prompt's. Checked on llama-server with a model whose odds
+  never change: one seed draws alike whatever the prompt, and the answer no longer repeats its
+  thinking.
+- Maths answers written `\boxed{18}` are read as stated, and `-$5` as -5.
+- Measurements are now version 2, the unedited thinking version 2 and the search version 3.
+  `compare` refuses to pair a measurement with one made by other measuring code, and the menus mark
+  those made before. Measuring again under an older one's name keeps it as `NAME-measuring-1`, so the
+  references the phase 2-4 results rest on are never measured over. Exports and the adapters `candor score` builds no longer record the
+  measurements' version, so later measurement changes leave them current (those built before are
+  rebuilt once). Rebuilding a trial's edit has a version of its own, so the searches' trials can
+  still be measured and exported, but the searches can't be carried on (the menus say so).
+- Before a pod quote on K2 or Qwen: the unedited thinking is sampled again on the first measurement,
+  and the unedited model is measured again before a new measurement is compared with it.
+- The cache-reuse speed-up (package 11) also changes draws; it needs a timed pilot, so it waits for
+  the 27B pilot, before the 27B reference.
+
+Reviewed three times; 868 tests pass.

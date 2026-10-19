@@ -90,6 +90,14 @@ entry is corrected rather than deleted when later evidence changes it.
   with two seeds and 0 of 288 held-out as used, at KL 0.059 (steps 5-7). On K2 every finalist, and
   both kinds' bests, read there (`phase-4-k2-horizon-7b.md`, step 5). [Published] They worked on
   Qwen3-8B (arXiv 2507.03167).
+- **Until 2026-10-19 every sampled thinking-on answer replayed its thinking's random draws.**
+  [Measured: llama-server b11524 on test models; the effect on counts a Hypothesis] llama-server
+  starts its random numbers again at each request, and the answer was sent with the thinking's seed,
+  so its token k was drawn with the number that drew thinking token k: the review found 300 of 300
+  draws in the same slice of the odds, against 45 of 300 with another seed. The effect on counts is
+  unmeasured, probably small, and shared by both sides of every pair. Each answer now has its own
+  seed, and `compare` refuses to pair older measurements with newer ones; measuring one reference
+  both ways would size it. (`evidence-2026-10-18/repo-review.md`, package 3)
 
 ## The search
 

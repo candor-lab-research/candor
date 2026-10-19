@@ -47,24 +47,25 @@ thinking on (next, e.g. Qwen3.8-27B). A 9B model must not take days.
 - The repository review (2026-10-18): 24 work packages in the order agreed
   (`results/evidence-2026-10-18/repo-review.md`). Steps 1 (faster tests, one server launch), 2
   (the thinking check, measurements that can't pair stale labels, intervals in `compare`, findings
-  corrected) and 3 (27B cost and safety: packages 6-10, 14 and 17) done; step 4, the one
-  measurements change before any 27B reference, next.
+  corrected), 3 (27B cost and safety: packages 6-10, 14 and 17) and 4 (the answer's own seed and the
+  maths reading, in one measurements change, 2026-10-19) done; step 5, the rest, next.
 - `candor` alone opens menus over the runs and their commands (the user, 2026-10-18; README, Use).
 
 ## Next
 
-1. The repository review's steps 4-5, then the phase-end discussion: where to go next, from
+1. The repository review's step 5, then the phase-end discussion: where to go next, from
    `results/findings.md`, `results/new-features.md` (chiefly the search's cost for 27B) and the
    review's 11 method questions, including how to score Qwen3.8-27B thinking off; no method
-   changes until agreed.
+   changes until agreed. The answer reusing its thinking's cache (package 11) changes draws too, so
+   its timed pilot belongs in the 27B pilot, before the 27B reference is measured.
 2. Phase 4, later: low effort's two closes; Uno not now. The budget limit
    (`search.max_budget_hits`, on K2 from trial 138) costs no measurable hits on the simulator and
    stays on (results file, step 5).
 3. Not blocking, each when there is a reason:
    - speed: 64 slots (15% faster than 32), weights cached on the GPU for "full" trials, the proxy's
      adapters loaded into one server;
-   - measurements before 2026-10-14 pair with later ones by prompt, not by draw (sampling moved to
-     the GPU);
+   - a reference measured before 2026-10-19 is measured again before a new measurement is compared
+     with it (`compare` refuses the pair; README);
    - the search scoring on the base it ships, edited tensors at Q8_0 too (only where quantisation
      loses edits, as on rude-llama), and whether it should score more prompts (per-layer refusals
      and layer-14 KL didn't hold on rude-llama's held-out prompts);

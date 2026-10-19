@@ -12,7 +12,7 @@ import torch
 from safetensors.torch import load_file, save_file
 from typer.testing import CliRunner
 
-from candor import config, convert, export, measure, run
+from candor import config, convert, export, measure, run, search
 from candor.cli import app
 from candor.convert import check_targets
 from candor.convert import quantize as real_quantize
@@ -24,7 +24,7 @@ from candor.run import Run, RunError
 from .test_engine import LLAMA_SERVER
 from .test_measure import EDIT
 from .test_run import TEMPLATE
-from .test_search import write_journal
+from .test_search import small, write_journal
 from .tiny_gguf import HIDDEN, random_weights, write_model
 from .tiny_run import HF_NAMES, THINKING_TEMPLATE, thinking
 
@@ -199,6 +199,51 @@ def test_an_exported_measurement_is_redone_when_the_export_code_changes(tiny, co
     export.export(tiny, EDIT)
     after = Measurement(tiny, EDIT, "merged", exported=True).measure()
     assert kl_between(before, after) > 1e-3
+
+
+def test_an_export_and_a_scored_edit_are_kept_when_only_the_measuring_code_changes(
+    tiny, converting, monkeypatch
+):
+    shipped = export.export(tiny, EDIT)
+    edit = Edit("other", 0.6, EDIT.kernels)
+    scored = tiny.path("scores", "layer-0.6")
+    measure.edit_adapters(tiny, edit, scored)
+    monkeypatch.setitem(run.STAGES, "measurements", run.STAGES["measurements"] + 1)
+    assert export.export(tiny, EDIT) == shipped and len(converting) == 1
+    Measurement(tiny, EDIT, "merged", exported=True, limit=1).measure()
+    # Neither is built from a measurement, so neither holds its code's version.
+    for record in [run.record_of(shipped), *scored.glob("*.inputs.json")]:
+        assert "measurements" not in json.loads(record.read_text())["code"]
+
+
+def test_an_older_measurement_stays_where_it_is_until_something_can_be_measured_in_its_place(
+    tiny, converting, monkeypatch
+):
+    export.export(tiny, EDIT)
+    Measurement(tiny, EDIT, "merged", exported=True, limit=1).measure()
+    version = run.STAGES["measurements"]
+    monkeypatch.setitem(run.STAGES, "measurements", version + 1)
+    monkeypatch.setitem(run.STAGES, "exports", run.STAGES["exports"] + 1)
+    with pytest.raises(RunError, match="no export matching"):
+        Measurement(tiny, EDIT, "merged", exported=True, limit=1).measure()
+    assert measure.measured_by(tiny.path("measurements", "merged")) == version
+    assert not tiny.path("measurements", f"merged-measuring-{version}").exists()
+
+
+def test_a_trials_export_is_measured_after_its_edit_can_no_longer_be_rebuilt_as_scored(
+    tiny, converting, monkeypatch
+):
+    small(tiny)
+    config.write(tiny.folder.parent, "cli", tiny.settings, "made by a test")
+    folder = str(tiny.folder.parent / "cli")
+    runner = CliRunner(env={"COLUMNS": "200"})
+    assert runner.invoke(app, ["search", folder, "--trials", "2"]).exit_code == 0
+    assert runner.invoke(app, ["export", folder, "--trial", "2"]).exit_code == 0
+    monkeypatch.setattr(search, "EDITS", search.EDITS + 1)
+    rebuilt = runner.invoke(app, ["measure", folder, "--trial", "2", "--limit", "1"])
+    assert rebuilt.exit_code == 1 and "can't be rebuilt as they were scored" in rebuilt.output
+    shipped = runner.invoke(app, ["measure", folder, "--trial", "2", "--exported", "--limit", "1"])
+    assert shipped.exit_code == 0, shipped.output
 
 
 def test_what_killed_exports_left_behind_is_removed_before_the_disk_check(tiny, converting, monkeypatch):

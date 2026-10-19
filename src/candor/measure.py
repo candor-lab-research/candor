@@ -28,6 +28,7 @@ from .kernel import Kernel
 from .run import (
     ANSWERING,
     HELD_OUT,
+    STAGES,
     Run,
     RunError,
     answering,
@@ -52,8 +53,9 @@ SHORT_LABELS = {"harmful_held_out": "Harmful", "harmless_held_out": "Harmless", 
 COUNTING = 2
 # The normal quantile a two-sided 95% interval reaches.
 Z95 = statistics.NormalDist().inv_cdf(0.975)
-# "Answer: $1,234.50" and the like; failing that, an answer's last number is taken as its answer.
-STATED = re.compile(r"answer\W*?\$?\s*(-?\d[\d,]*(?:\.\d+)?)", re.IGNORECASE)
+# "Answer: 1,234.50" and the like, once dollar signs and boxes are left out; failing that, an answer's
+# last number is taken as its answer.
+STATED = re.compile(r"answer\W*?(-?\d[\d,]*(?:\.\d+)?)", re.IGNORECASE)
 NUMBER = re.compile(r"-?\d[\d,]*(?:\.\d+)?")
 
 # Starts a progress bar with a description and a total, and returns what to call as each item is done.
@@ -151,6 +153,8 @@ def gold_number(answer: str) -> float:
 def answered_number(answer: str, finished: bool = True) -> float | None:
     """The stated answer, or the last number of an answer the model finished. An answer cut off before
     stating one has none, since its last number is only part of the working."""
+    # "Answer: \boxed{18}" states 18, and "-$5" is -5.
+    answer = answer.replace("\\boxed{", "").replace("$", "")
     found = STATED.findall(answer) or (NUMBER.findall(answer) if finished else [])
     return float(found[-1].replace(",", "")) if found else None
 
@@ -245,7 +249,6 @@ class Measurement:
             all_ids = run.prompt_ids()
             self.sizes = {name: len(all_ids[name]) for name in SETS}
             ids = {name: all_ids[name][: self.limit] for name in SETS}
-            self.folder.mkdir(parents=True, exist_ok=True)
             model, scales, edit = quantized, {}, None
             if self.outside is not None:
                 model, made_from = export.outside_export(run, self.outside)
@@ -254,8 +257,6 @@ class Measurement:
                 assert self.edit is not None
                 model, made_from = export.exported(run, self.edit)
                 edit = {"exported": digest(made_from)}
-            elif self.edit:
-                scales, edit = self._adapters()
             # For a thinking model, KL is read after the unedited model's own thinking, which every
             # measurement compared with this one must share.
             kl_ids = run.kl_ids(all_ids, "harmless_held_out", self.limit)
@@ -264,6 +265,11 @@ class Measurement:
                     f"the unedited model's thinking ended by itself on none of the first {self.limit} "
                     "held-out harmless prompts, so KL can't be read after it; measure more of them"
                 )
+            # Only once nothing before measuring can fail.
+            self._keep_older()
+            self.folder.mkdir(parents=True, exist_ok=True)
+            if self.edit and not self.exported:
+                scales, edit = self._adapters()
             answered, todo = {}, []
             for name in SETS:
                 inputs = self._answer_inputs(name, ids[name], edit, kl_ids)
@@ -312,6 +318,21 @@ class Measurement:
                     self.guard.close()
         return {name: answered[name] | judged.get(name, {}) for name in SETS}
 
+    def _keep_older(self) -> None:
+        """Keep what older measuring code measured under this name, which no measurement made now can
+        be compared with, under a name of its own rather than measure over it."""
+        version = measured_by(self.folder)
+        if version in (None, STAGES["measurements"]):
+            return
+        kept = f"{self.name}-measuring-{version}"
+        folders = [(self.run.path(*where, self.name), self.run.path(*where, kept)) for where in PLACES]
+        if any(to.exists() for _, to in folders):
+            raise RunError(f"{self.name} was measured by older code and {kept} is taken; move one aside")
+        for at, to in folders:
+            if at.exists():
+                at.rename(to)
+        self.run.report(f"Keeping {self.name}, measured by older code, as {kept}")
+
     def _adapters(self) -> tuple[dict[Path, float], dict[str, Any]]:
         """The edit's own adapters, one per edit target, and the strength each is applied at; or, for an
         edit that isn't linear in strength, one adapter built at its strengths, applied at 1."""
@@ -339,6 +360,8 @@ class Measurement:
             "ids": digest(ids),
             "answer_tokens": run.answer_tokens[name],
             **answering(run.settings),
+            # Measurements by older code drew or read their answers otherwise.
+            "measuring": STAGES["measurements"],
         }
         if name == "harmless_held_out":
             paired["kl_tokens"] = run.settings.scoring.kl_tokens
@@ -607,6 +630,18 @@ def _journal(path: Path) -> list[dict[str, Any]]:
     return found
 
 
+# Where a measurement's numbers and its answers are kept, by its name.
+PLACES = (("measurements",), ("private", "measurements"))
+
+
+def measured_by(folder: Path) -> int | None:
+    """The version of the measuring code that made what a measurement's folder holds, if anything."""
+    for record in sorted(folder.glob("*.inputs.json")):
+        if (version := (read_record(record) or {}).get("code", {}).get("measurements")) is not None:
+            return version
+    return None
+
+
 def seconds(result: dict[str, Any]) -> float:
     """How long a set took to answer and judge."""
     return result["seconds"] + result.get("judge_seconds", 0.0)
@@ -644,7 +679,7 @@ def compare(a: dict[str, dict[str, Any]], b: dict[str, dict[str, Any]]) -> list[
         if a[name]["paired"] != b[name]["paired"]:
             raise RunError(
                 f"the two measurements of the {LABELS[name]} differ in more than the edit and slots: the "
-                "model file, the prompts or a setting changed between them"
+                "model file, the prompts, a setting or candor's measuring changed between them"
             )
         if name in HELD_OUT and a[name]["judge"] != b[name]["judge"]:
             raise RunError(f"the {LABELS[name]} were judged by different judges")
