@@ -189,13 +189,14 @@ def _number(name: str) -> int | None:
     return int(parts[1]) if len(parts) > 1 and parts[0] == "trial" and parts[1].isdigit() else None
 
 
-def measurements_of(folder: Path) -> list[str]:
+def measurements_of(folder: Path, settings: config.RunConfig) -> list[str]:
     """The run's finished measurements, judged too: the unedited model's first, then by trial."""
     root = folder / "measurements"
+    files = measure.finished(settings.measure)
     names = [
         path.name
         for path in (root.iterdir() if root.is_dir() else [])
-        if path.is_dir() and all((path / file).exists() for file in measure.FINISHED)
+        if path.is_dir() and all((path / file).exists() for file in files)
     ]
     return sorted(names, key=lambda name: (not name.startswith("base"), _number(name) or 0, name))
 
@@ -244,7 +245,7 @@ def status(folder: Path) -> Status:
     kinds = [search.scope_of(trial.params) for trial in found.trials.values()] if found else []
     trials = sum(min(kinds.count(scope), share) for scope in search.SCOPES)
     target = len(search.SCOPES) * share
-    measured, exported = measurements_of(folder), exports_of(folder)
+    measured, exported = measurements_of(folder, settings), exports_of(folder)
     older_measured = frozenset(older_of(folder, measured))
     return Status(
         folder, settings, problem, built, found, trials, target, measured, exported, older, older_measured
@@ -504,7 +505,7 @@ class Menus:
     def trials(self, run: Run, found: search.Found) -> None:
         last = None
         while True:
-            measured, exported = measurements_of(run.folder), exports_of(run.folder)
+            measured, exported = measurements_of(run.folder, run.settings), exports_of(run.folder)
             worked_on = {n for n in map(_number, measured) if n is not None} | set(exported)
             listed = picks(run, found, worked_on)
             marks = {p.candidate.trial: _furthest(run, p.candidate.trial, measured, exported) for p in listed}
@@ -537,7 +538,7 @@ class Menus:
         shown = " ".join(scored(score, stopped, within).split())
         self.console.print(Text(f"Trial {number}: {direction}, {shown}", style="dim"))
         while True:
-            measured = measurements_of(folder)
+            measured = measurements_of(folder, run.settings)
             older = older_of(folder, measured)
             exported = number in exports_of(folder)
             if not {base, export} <= set(measured):

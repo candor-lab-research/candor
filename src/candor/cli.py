@@ -410,7 +410,12 @@ def init(
                 if close
                 else config.Slots(),
                 prompts=_pinned(config.Prompts(), PROMPT_SETS),
-                measure=config.Measure(judge_revision=_revision(config.Measure().judge)),
+                scoring=config.Scoring(kl_tokens=config.KL_TOKENS),
+                measure=config.Measure(
+                    judge_revision=_revision(config.Measure().judge),
+                    second_judge=config.SECOND_JUDGE,
+                    second_judge_revision=_revision(config.SECOND_JUDGE),
+                ),
             ),
             header,
             {"inspect.json": json.dumps(record, indent=1)},

@@ -52,11 +52,15 @@ class FakeGuard:
 
     judged: ClassVar[list[int]] = []
     read: ClassVar[list[str]] = []
+    # Each judge loaded and closed, by its model, in order.
+    events: ClassVar[list[tuple[str, str]]] = []
     machine: ClassVar[dict[str, str]] = {"device": "cpu", "dtype": "float32", "torch": "fake"}
 
     def __init__(self, model: str, revision: str | None):
         FakeGuard.judged = []
         FakeGuard.read = []
+        FakeGuard.events.append(("load", model))
+        self.model = model
 
     def replies(self, prompts, answers, batch=16, done=None):
         assert len(prompts) == len(answers)
@@ -68,7 +72,7 @@ class FakeGuard:
         return [REFUSED if i == 0 else ANSWERED for i in range(len(answers))]
 
     def close(self):
-        pass
+        FakeGuard.events.append(("close", self.model))
 
 
 def write_matching_llama(folder):
@@ -120,6 +124,7 @@ def tiny_run(tmp_path, monkeypatch) -> Run:
     monkeypatch.setattr(measure, "load_prompts", fake_prompts)
     monkeypatch.setattr(measure, "Guard", FakeGuard)
     monkeypatch.setattr(search, "Guard", FakeGuard)
+    monkeypatch.setattr(FakeGuard, "events", [])
     folder = tmp_path / "runs" / "tiny"
     folder.mkdir(parents=True)
     return Run(folder, pinned(model), report=lambda _: None)

@@ -147,6 +147,19 @@ def test_chat_template_settings_that_cant_be_passed_on_as_they_are_are_refused(t
         config.load(write_text(tmp_path, text))
 
 
+def test_a_second_judge_reads_back_and_a_file_from_before_it_has_none(tmp_path):
+    written = settings()
+    written.measure.second_judge, written.measure.second_judge_revision = "Qwen/Qwen3Guard-Gen-8B", "abc"
+    config.write(tmp_path, "run", written, "h")
+    assert config.load(tmp_path / "run") == written
+    text = config.render(settings(), "h")
+    for line in ("# second_judge =\n", "# second_judge_revision =\n"):
+        assert line in text
+        text = text.replace(line, "")
+    before = config.load(write_text(tmp_path, text))
+    assert before == settings() and before.measure.second_judge is None
+
+
 def test_a_full_edit_can_be_chosen(tmp_path):
     text = config.render(settings(), "h").replace('row_norm = "pre"', 'row_norm = "full"')
     assert config.load(write_text(tmp_path, text)).edit.row_norm == "full"

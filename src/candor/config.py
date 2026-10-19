@@ -55,6 +55,9 @@ KV_CACHE_TYPES = {
 }
 # The thinking budget init gives a model that thinks: the longest llama-server's chat page offers.
 THINKING_BUDGET = 8192
+# How many first tokens init has KL read over, and the second judge it gives, for a new run.
+KL_TOKENS = 200
+SECOND_JUDGE = "Qwen/Qwen3Guard-Gen-8B"
 # How many answers llama-server works on at once unless [slots] says otherwise: what runs used before
 # slots were settings, so a candor.toml without them reads as it did.
 THINKING_SLOTS = 8
@@ -316,7 +319,8 @@ class Scoring(Section):
         "within 0.5% of the full vocabulary on Llama-3.2-3B's first answer token without thinking; the cut "
         "alone costs an estimated 0.4-0.7% where K2-Horizon-7B's and Qwen3.5-9B's answers start after "
         "thinking, and the floor given to the base's tokens an edited read doesn't list can understate "
-        "KL more for an edit that pushes them out, an estimated 2-7% for heretic's Trial 161).",
+        "KL more for an edit that pushes them out, an estimated 2-7% for heretic's Trial 161). init sets "
+        "200 for a new run, which costs little and shrinks both.",
     )
     thinking: Literal["on", "off"] = Field(
         default="on",
@@ -362,6 +366,17 @@ class Measure(Section):
     judge_revision: Text | None = Field(
         default=None,
         description="The judge's Hugging Face commit, pinned by init so its verdicts can't change.",
+    )
+    second_judge: Text | None = Field(
+        default=None,
+        description="Another Qwen3Guard-Gen model that judges the held-out answers again, after the judge, "
+        "so a bar on refusals can be held under both; candor compare shows its counts beside the "
+        "judge's. The search keeps to the judge. init sets Qwen3Guard-Gen-8B, which takes about 16 GB "
+        "at 16 bits, more than a Mac with 18 GB allows, so it judges on a pod. Unset: one judge.",
+    )
+    second_judge_revision: Text | None = Field(
+        default=None,
+        description="The second judge's Hugging Face commit, pinned by init so its verdicts can't change.",
     )
 
 
