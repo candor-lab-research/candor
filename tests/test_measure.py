@@ -1,23 +1,37 @@
+import copy
 import io
 import json
+import math
+import re
 import shutil
 
+import huggingface_hub
 import numpy as np
 import pytest
+import torch
 from rich.console import Console
+from safetensors.torch import save_file
 from typer.testing import CliRunner
 
-from candor import cli, config, measure, run
+from candor import cli, config, measure, menu, residuals, run, source
 from candor.cli import app
 from candor.engine import LlamaServer, ServerError
 from candor.kernel import Kernel
 from candor.measure import Edit, Measurement
-from candor.run import RunError
+from candor.run import Run, RunError
 from candor.targets import Writer
 
 from .helpers import EDIT, PARAMETERS, on_disk, recorded_syncs, write_journal
 from .tiny_gguf import END_THINK, THINK, THINKING_TOKENS
-from .tiny_run import ALWAYS_THINKING_TEMPLATE, FakeGuard, fake_prompts, thinking, thinks_through
+from .tiny_run import (
+    ALWAYS_THINKING_TEMPLATE,
+    CHECK_JUDGE,
+    REFUSED,
+    FakeGuard,
+    fake_prompts,
+    thinking,
+    thinks_through,
+)
 
 
 def test_a_measurement_keeps_numbers_per_prompt_and_answers_only_in_private(tiny):
@@ -148,6 +162,189 @@ def test_labels_of_other_answers_are_refused(tiny):
         shutil.copy(tiny.path("measurements", "trial", name), tiny.path("measurements", "base", name))
     with pytest.raises(RunError, match="labels for the held-out harmful prompts aren't of its answers"):
         measure.load(tiny, "base")
+
+
+class StrictGuard(FakeGuard):
+    """A second judge that calls every answer a refusal, so its labels can be told from the judge's."""
+
+    def replies(self, prompts, answers, batch=16, done=None):
+        super().replies(prompts, answers, batch, done)
+        return [REFUSED] * len(answers)
+
+
+def second_judge(tiny, monkeypatch):
+    """The tiny run with a second judge, read from the tiny model's folder, so its size is known."""
+    model = tiny.settings.model.source
+    tiny.settings.measure.second_judge, tiny.settings.measure.second_judge_revision = model, "commit"
+    monkeypatch.setattr(
+        measure, "Guard", lambda m, revision: (StrictGuard if m == model else FakeGuard)(m, revision)
+    )
+    return tiny
+
+
+def test_a_second_judge_judges_the_saved_answers_into_files_of_its_own_and_nothing_else_again(
+    tiny, monkeypatch
+):
+    first = Measurement(tiny, None, "base").measure()
+    folder = tiny.path("measurements", "base")
+    labels = {path.name: path.read_bytes() for path in folder.glob("*.judged.json*")}
+    second = second_judge(tiny, monkeypatch).settings.measure.second_judge
+    # Not finished until the second judge has judged it.
+    with pytest.raises(
+        RunError, match=r"missing harmful_held_out\.second_judge\.json, harmless_held_out\.second_judge\.json"
+    ):
+        measure.load(tiny, "base")
+    assert menu.measurements_of(tiny.folder, tiny.settings) == []
+    answered = counting_answers(monkeypatch)
+    FakeGuard.events.clear()
+    again = Measurement(tiny, None, "base").measure()
+    assert answered == [] and FakeGuard.events == [("load", second), ("close", second)]
+    assert {path.name: path.read_bytes() for path in folder.glob("*.judged.json*")} == labels
+    for name in run.HELD_OUT:
+        assert again[name][measure.SECOND]["judge_refused"] == [True, True, True]
+        assert {key: value for key, value in again[name].items() if key != measure.SECOND} == first[name]
+        record = json.loads(run.record_of(folder / f"{name}.second_judge.json").read_text())
+        assert record["judge"] == [second, "commit"] and record["answers"] == first[name]["answers"]
+        private = tiny.path("private", "measurements", "base", f"{name}.second_judge.json")
+        assert len(json.loads(private.read_text())["judge_replies"]) == 3
+    assert measure.load(tiny, "base") == again
+    assert menu.measurements_of(tiny.folder, tiny.settings) == ["base"]
+    harmful = again["harmful_held_out"]
+    judging = harmful["judge_seconds"] + harmful[measure.SECOND]["judge_seconds"]
+    assert measure.seconds(harmful) == harmful["seconds"] + judging
+    # Unset, it reads as it was measured before.
+    tiny.settings.measure.second_judge = None
+    assert measure.load(tiny, "base") == first
+
+
+def test_two_judges_judge_one_at_a_time_each_freed_before_the_next_loads(tiny, monkeypatch):
+    second = second_judge(tiny, monkeypatch).settings.measure.second_judge
+    results = Measurement(tiny, None, "base").measure()
+    judge = tiny.settings.measure.judge
+    assert FakeGuard.events == [("load", judge), ("close", judge), ("load", second), ("close", second)]
+    assert results["harmful_held_out"]["judge_refused"] == [True, False, False]
+
+
+def weights_folder(folder, count):
+    """A model folder holding count weights, for a judge whose size is read from its headers."""
+    folder.mkdir(parents=True)
+    save_file({"w": torch.zeros(count)}, folder / "model.safetensors")
+    return str(folder)
+
+
+def test_a_judge_the_gpu_cant_hold_stops_the_measurement_before_it_loads(tiny, monkeypatch, tmp_path):
+    monkeypatch.setattr(Run, "check_judge", CHECK_JUDGE)
+    second = second_judge(tiny, monkeypatch).settings.measure.second_judge
+    judge = tiny.settings.measure.judge = weights_folder(tmp_path / "small", 10)
+    needed = 2 * sum(math.prod(shape) for shape in source.tensor_shapes(second).values()) * 1.1
+    monkeypatch.setattr(residuals, "memory_budget", lambda device: int(needed) - 1)
+    with pytest.raises(
+        RunError, match=rf"the judge {re.escape(second)} needs about 0\.0 GB of GPU memory and this machine"
+    ):
+        Measurement(tiny, None, "base").measure()
+    # The run's judge fits, so it judged before the second was refused.
+    assert FakeGuard.events == [("load", judge), ("close", judge)]
+    monkeypatch.setattr(residuals, "memory_budget", lambda device: int(needed) + 1)
+    answered = counting_answers(monkeypatch)
+    Measurement(tiny, None, "base").measure()
+    assert answered == [] and FakeGuard.events[-2:] == [("load", second), ("close", second)]
+    # The run's judge is held to it as well.
+    tiny.settings.measure.judge_revision = "another-commit"
+    monkeypatch.setattr(residuals, "memory_budget", lambda device: 1)
+    FakeGuard.events.clear()
+    with pytest.raises(RunError, match=rf"the judge {re.escape(judge)} needs about"):
+        Measurement(tiny, None, "base").measure()
+    assert FakeGuard.events == []
+
+
+def test_a_downloaded_judge_is_sized_from_the_hubs_cache_without_the_network(tiny, monkeypatch, tmp_path):
+    monkeypatch.setattr(huggingface_hub.constants, "HF_HUB_CACHE", str(tmp_path))
+    repo = tmp_path / "models--org--judge"
+    (repo / "refs").mkdir(parents=True)
+    (repo / "refs" / "main").write_text("abc")
+    weights_folder(repo / "snapshots" / "abc", 10)
+    monkeypatch.setattr(source, "get_safetensors_metadata", lambda *_, **__: pytest.fail("asked the Hub"))
+    monkeypatch.setattr(residuals, "memory_budget", lambda device: 1)
+    with pytest.raises(RunError, match="the judge org/judge needs about"):
+        CHECK_JUDGE(tiny, "org/judge", None)
+    monkeypatch.setattr(residuals, "memory_budget", lambda device: 1000)
+    CHECK_JUDGE(tiny, "org/judge", "abc")
+
+
+def test_a_measurement_older_measuring_code_made_is_refused_saying_measuring_again_starts_afresh(
+    tiny, monkeypatch
+):
+    Measurement(tiny, None, "base").measure()
+    version = run.STAGES["measurements"]
+    monkeypatch.setitem(run.STAGES, "measurements", version + 1)
+    # Whole, it still loads, to be looked at.
+    assert measure.load(tiny, "base")
+    afresh = (
+        "it was made by older measuring code, so candor measure would measure it afresh and keep this "
+        f"one as base-measuring-{version}"
+    )
+    second_judge(tiny, monkeypatch)
+    with pytest.raises(RunError, match=rf"is missing .*second_judge\.json; {afresh}$"):
+        measure.load(tiny, "base")
+    tiny.settings.measure.second_judge = None
+    monkeypatch.setattr(measure, "COUNTING", measure.COUNTING + 1)
+    with pytest.raises(RunError, match=rf"aren't of its answers as candor counts them now; {afresh}$"):
+        measure.load(tiny, "base")
+
+
+def test_answering_a_set_again_discards_the_second_judges_labels_too(tiny, monkeypatch):
+    Measurement(second_judge(tiny, monkeypatch), None, "finalist").measure()
+    stopping_after(monkeypatch, 1)
+    with pytest.raises(KeyboardInterrupt):
+        Measurement(tiny, EDIT, "finalist").measure()
+    assert not list(tiny.path("measurements", "finalist").glob("*.second_judge.json*"))
+
+
+def test_compare_shows_the_second_judges_refusals_beside_the_judges_and_never_mixes_judges(tiny, monkeypatch):
+    second_judge(tiny, monkeypatch)
+    a = Measurement(tiny, None, "base").measure()
+    b = Measurement(tiny, None, "base-slots-2", slots=2).measure()
+    b["harmful_held_out"][measure.SECOND]["judge_refused"] = [False, True, True]
+    labels = [row[0] for row in measure.compare(a, b)]
+    assert labels[:3] == [
+        "Harmful refused, judge",
+        "Harmful refused, second judge",
+        "Harmful refused, keywords",
+    ]
+    assert labels[labels.index("Harmless refused, judge") + 1] == "Harmless refused, second judge"
+    rows = {row[0]: row for row in measure.compare(a, b)}
+    low, high = measure.change_interval(1, 0, 3)
+    interval, p = f"{round(low):+d}, {round(high):+d}", f"{measure.mcnemar(1, 0):.2g}"
+    assert rows["Harmful refused, second judge"][1:] == ("3/3", "2/3", "-1", interval, "1 / 0", p)
+    assert rows["Harmful refused, judge"][1:4] == ("1/3", "1/3", "+0")
+    assert dict(measure.summary(a))["Harmless refused, second judge"] == "3/3"
+    # A measurement the second judge hasn't judged is compared on the judge's labels alone.
+    alone = {name: {k: v for k, v in r.items() if k != measure.SECOND} for name, r in a.items()}
+    assert not [label for label, *_ in measure.compare(alone, b) if "second judge" in label]
+    other = copy.deepcopy(b)
+    other["harmless_held_out"][measure.SECOND]["judge"] = "another"
+    with pytest.raises(RunError, match="held-out harmless prompts were judged by different second judges"):
+        measure.compare(a, other)
+    elsewhere = copy.deepcopy(b)
+    elsewhere["harmful_held_out"][measure.SECOND]["judge_machine"] = {"device": "cuda", "dtype": "bfloat16"}
+    rows = {row[0]: row for row in measure.compare(a, elsewhere)}
+    assert rows["Second judge on"][1:3] == ("cpu, float32", "cuda, bfloat16") and "Judged on" not in rows
+
+
+def test_measure_and_compare_show_the_second_judge_from_the_command_line(tiny, monkeypatch):
+    folder = on_disk(second_judge(tiny, monkeypatch))
+    runner = CliRunner(env={"COLUMNS": "250"})
+    measured = runner.invoke(app, ["measure", str(folder), "--limit", "2"])
+    assert measured.exit_code == 0, measured.output
+    for step in ("Harmful: second judge", "Harmless: second judge"):
+        assert f"{step}: 2 of 2" in measured.output
+    assert "Harmful refused, second judge" in measured.output
+    compared = runner.invoke(app, ["compare", str(folder), "base-first-2", "base-first-2"])
+    assert compared.exit_code == 0 and "Harmless refused, second judge" in compared.output
+    narrow = CliRunner(env={"COLUMNS": "80"}).invoke(
+        app, ["compare", str(folder), "base-first-2", "base-first-2"]
+    )
+    assert narrow.exit_code == 0 and "…" not in narrow.output
 
 
 def test_compare_leaves_out_prompts_either_judge_didnt_label_and_names_other_slots(tiny):

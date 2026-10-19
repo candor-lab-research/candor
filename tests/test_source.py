@@ -1,6 +1,7 @@
 import json
 from types import SimpleNamespace
 
+import huggingface_hub
 import pytest
 import torch
 from safetensors.torch import save_file
@@ -15,6 +16,26 @@ def test_shapes_follow_the_index_and_skip_other_weight_files(tmp_path):
     index = {"weight_map": {"a.weight": "model-00001-of-00001.safetensors"}}
     (tmp_path / "model.safetensors.index.json").write_text(json.dumps(index))
     assert tensor_shapes(str(tmp_path)) == {"a.weight": [2, 3]}
+
+
+def test_a_hub_model_is_found_downloaded_in_the_cache_only_once_every_weight_file_is_there(
+    tmp_path, monkeypatch
+):
+    monkeypatch.setattr(huggingface_hub.constants, "HF_HUB_CACHE", str(tmp_path))
+    repo = tmp_path / "models--org--judge"
+    snapshot = repo / "snapshots" / "abc"
+    snapshot.mkdir(parents=True)
+    (repo / "refs").mkdir()
+    (repo / "refs" / "main").write_text("abc")
+    index = {"weight_map": {"a": "model-00001-of-00002.safetensors", "b": "model-00002-of-00002.safetensors"}}
+    (snapshot / source.INDEX).write_text(json.dumps(index))
+    save_file({"a": torch.zeros(2, 3)}, snapshot / "model-00001-of-00002.safetensors")
+    assert source.downloaded("org/judge") is None
+    save_file({"b": torch.zeros(4)}, snapshot / "model-00002-of-00002.safetensors")
+    assert source.downloaded("org/judge") == source.downloaded("org/judge", "abc") == snapshot
+    assert tensor_shapes(str(snapshot)) == {"a": [2, 3], "b": [4]}
+    assert source.downloaded("org/judge", "other") is None
+    assert source.downloaded("org/other") is None and source.downloaded(str(snapshot)) is None
 
 
 def test_hub_shapes_and_float_type_are_read_at_the_pinned_commit(monkeypatch):

@@ -423,21 +423,25 @@ class Run:
             )
 
     def check_memory(self) -> None:
-        """Stop if this machine's GPU can't hold the model for reading residuals: its weights in 16
-        bits, and a tenth more for a batch's activations."""
-        residuals.protect_memory()
+        """Stop if this machine's GPU can't hold the model for reading residuals."""
         device, _ = self._device()
-        budget = residuals.memory_budget(device)
-        if budget is None:
-            return
         model = self.settings.model
-        where = self._model_without_download
-        weights = sum(math.prod(shape) for shape in source.tensor_shapes(where, model.revision).values())
-        needed = 2 * weights * 1.1
-        if needed > budget:
+        if short := residuals.shortfall(self._model_without_download, model.revision, device):
+            needed, budget = short
             raise RunError(
                 f"reading residuals needs about {needed / 1e9:.1f} GB of GPU memory and this machine "
                 f"allows {budget / 1e9:.1f} GB; run it on a pod"
+            )
+
+    def check_judge(self, model: str, revision: str | None) -> None:
+        """Stop before loading a judge this machine's GPU can't hold, as one too big freezes a Mac. A
+        judge already downloaded is sized from the Hub's cache, so judging offline still works."""
+        device, _ = residuals.device_and_dtype()
+        if short := residuals.shortfall(str(source.downloaded(model, revision) or model), revision, device):
+            needed, budget = short
+            raise RunError(
+                f"the judge {model} needs about {needed / 1e9:.1f} GB of GPU memory and this machine "
+                f"allows {budget / 1e9:.1f} GB; judge on a pod, or set a smaller one in [measure]"
             )
 
     # GGUF

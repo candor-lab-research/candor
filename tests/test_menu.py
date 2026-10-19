@@ -87,7 +87,7 @@ def measured(folder: Path, *names: str, code: int | None = None) -> None:
     measuring code: candor's now unless given."""
     for name in names:
         (folder / "measurements" / name).mkdir(parents=True)
-        for file in measure.FINISHED:
+        for file in measure.finished(config.Measure()):
             (folder / "measurements" / name / file).write_text("{}")
         made = {"code": {"measurements": code or run.STAGES["measurements"]}}
         run.record_of(folder / "measurements" / name / "maths.json").write_text(json.dumps(made))

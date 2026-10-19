@@ -212,6 +212,10 @@ def test_init_and_run_prepare_every_stage_resume_and_follow_settings(tmp_path):
     run_folder = tmp_path / "smol"
     created = runner.invoke(app, ["init", "smol", "--model", MODEL, "--runs", str(tmp_path)])
     assert created.exit_code == 0, created.output
+    made = config.load(run_folder)
+    assert made.scoring.kl_tokens == 200 and made.measure.second_judge == config.SECOND_JUDGE
+    pinned = made.measure.second_judge_revision
+    assert pinned and len(pinned) == 40 and made.measure.judge_revision
     first = runner.invoke(app, ["run", str(run_folder)])
     assert first.exit_code == 0, first.output
     assert "60 edit targets" in first.output and "2907 prompts" in first.output
@@ -241,13 +245,18 @@ def test_init_and_run_prepare_every_stage_resume_and_follow_settings(tmp_path):
     assert "Converting" not in changed.output
     assert (run_folder / "gguf" / "model-BF16.gguf").stat().st_mtime_ns == stamps[results[0]]
 
+    # The 8B is too big for a Mac's GPU, so the run's own judge judges a second time.
+    settings = (run_folder / "candor.toml").read_text()
+    (run_folder / "candor.toml").write_text(
+        settings.replace(config.SECOND_JUDGE, made.measure.judge).replace(pinned, made.measure.judge_revision)
+    )
     measured = runner.invoke(app, ["measure", str(run_folder), "--limit", "2"])
     assert measured.exit_code == 0, measured.output
-    assert "Harmful refused, judge" in measured.output
+    assert "Harmful refused, judge" in measured.output and "Harmful refused, second judge" in measured.output
     assert "unlabelled" not in measured.output
     compared = runner.invoke(app, ["compare", str(run_folder), "base-first-2", "base-first-2"])
     assert compared.exit_code == 0, compared.output
-    assert "0.0000" in compared.output
+    assert "0.0000" in compared.output and "Harmless refused, second judge" in compared.output
 
     searched = runner.invoke(app, ["search", str(run_folder), "--trials", "2"])
     assert searched.exit_code == 0, searched.output

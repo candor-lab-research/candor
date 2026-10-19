@@ -1054,6 +1054,7 @@ class Search:
                 quantized, adapters, context_per_slot=room, parallel=slots, slots_setting=setting
             )
 
+        run.check_judge(settings.measure.judge, settings.measure.judge_revision)
         guard = Guard(settings.measure.judge, settings.measure.judge_revision)
         scorer = None
         server = server_with(files)

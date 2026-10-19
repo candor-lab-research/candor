@@ -373,6 +373,20 @@ def test_init_pins_the_prompt_datasets(tmp_path):
     assert judge.judge_revision == "Qwen/Qwen3Guard-Gen-0.6B@commit"
 
 
+def test_init_gives_a_new_run_a_second_judge_pinned(tmp_path):
+    assert init(tmp_path, model_folder(tmp_path)).exit_code == 0
+    judges = config.load(tmp_path / "runs" / "first").measure
+    assert judges.second_judge == "Qwen/Qwen3Guard-Gen-8B"
+    assert judges.second_judge_revision == "Qwen/Qwen3Guard-Gen-8B@commit"
+
+
+def test_init_reads_kl_over_200_tokens_for_a_new_run(tmp_path):
+    assert init(tmp_path, model_folder(tmp_path)).exit_code == 0
+    assert config.load(tmp_path / "runs" / "first").scoring.kl_tokens == 200
+    # What a candor.toml upgraded to hold the setting gets, as runs had before init chose more.
+    assert config.Scoring().kl_tokens == 20
+
+
 def upgrade(folder):
     return CliRunner(env={"COLUMNS": "250"}).invoke(app, ["upgrade", str(folder)])
 

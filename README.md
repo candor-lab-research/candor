@@ -130,7 +130,9 @@ uv run candor                                                  # or all of it fr
   setting the run uses, each explained by a comment; edit it freely, and every later command checks
   it. Hugging Face models and the prompt datasets are pinned to the commits that were checked, and
   local models are stored by their full path. A model that only loads with the Python files it ships
-  (K2-Horizon) gets `trust_remote_code = true`, which runs that code at the pinned commit.
+  (K2-Horizon) gets `trust_remote_code = true`, which runs that code at the pinned commit. A new run
+  also gets a second judge (below) and KL read over the 200 likeliest first tokens
+  (`scoring.kl_tokens`); runs made before keep one judge and 20.
 - `run` resumes where it stopped. Each result in the run folder records what it was built from,
   including the version of candor's code for its stage, so changing a setting or upgrading candor
   rebuilds what it affects and everything after it, and says so.
@@ -146,6 +148,13 @@ uv run candor                                                  # or all of it fr
   replies go only to `private/`. `--limit N` measures the first N prompts of each set and estimates
   the full run's time; a stopped measurement resumes from the last answer it saved; the Mac is kept
   awake. `--name` names it, but never as candor names its own (`base`, `trial-N`, `heretic-N`).
+- `measure.second_judge` (Qwen3Guard-Gen-8B for a new run, pinned) judges each held-out answer again
+  once the judge is done and freed, so the harmful-refusal bar can be held under both; the search
+  keeps to the judge. Its labels, record and replies go in files of their own
+  (`SET.second_judge.json`), so adding it to a finished measurement runs only it. With it set, a
+  measurement isn't finished until it has judged. The 8B takes about 16 GB at 16 bits, so it judges
+  on a pod: `measure` and `search` stop before loading any judge the GPU can't hold, such as the 8B
+  on an 18 GB Mac, sizing one already downloaded from the Hub's cache, so offline runs still judge.
 - `--heretic STUDY.jsonl --trial N` (for `measure`, `score`, `export` and `serve`) rebuilds one of
   heretic's trials with the run's own directions, read with the run's system prompt, not heretic's;
   one that read its directions after the run's own `think_close` is rebuilt with those read where the
@@ -156,13 +165,15 @@ uv run candor                                                  # or all of it fr
 - `compare A B` pairs two measurements prompt by prompt: each count, the change with a 95% interval
   (Bonett and Price's for paired counts; for KL a studentised bootstrap over the prompts), how many
   prompts went each way, and the exact McNemar p-value; and the slots and seeds where they differ.
+  The second judge's harmful and harmless refusals get rows of their own beside the judge's when both
+  measurements have them, and labels by two different judges, first or second, are never paired.
   Measuring the same edit twice with different `--slots` shows what batching noise alone does. It
   refuses two measurements made by different versions of candor's measuring: those made before
-  2026-10-19 drew a thinking model's answer with its thinking's seed and misread maths answers written
-  `\boxed{18}` or `-$5`. Measuring again under the name of one made by older code keeps the old one
-  as `NAME-measuring-N`. It shows the GPUs, and the judge's device, where they differ, and reads no KL
-  between measurements made on different backends (Metal against CUDA, or a `CANDOR_LLAMA_BIN`
-  build), where KL moves by a few percent whatever the edit does.
+  2026-10-19 drew a thinking model's answer with its thinking's seed and misread maths answers
+  written `\boxed{18}` or `-$5`. Measuring again under the name of one made by older code keeps the
+  old one as `NAME-measuring-N`. It shows the GPUs, and each judge's device, where they differ, and
+  reads no KL between measurements made on different backends (Metal against CUDA, or a
+  `CANDOR_LLAMA_BIN` build), where KL moves by a few percent whatever the edit does.
 - `search` tries edits of the shape heretic searches, in two kinds searched apart that take turns:
   every layer reading one layer's refusal direction, and each layer reading its own
   (`search.trials_per_scope`, 300 each). Each kind starts from 20 evenly spread trials, then
@@ -306,12 +317,13 @@ uv run ruff check . && uv run ruff format --check . && uv run pyright
 ```
 
 `CANDOR_E2E=1 uv run pytest tests/test_e2e.py` also runs small real and tiny random models end to
-end: conversion with llama.cpp's converter (including a tokenizer saved by transformers 5 and a
-tiny Qwen3.5), the edit-target and tokenization checks, `init`, `run` (resuming and a settings
-change), `measure`, `compare`, `search`, `score` and `export` on SmolLM2-135M, a real thinking
-model's budget on Qwen3.5-0.8B, Qwen3.8-27B's `init` and the judge. The first run downloads about
-3.6 GB (Qwen3.5-0.8B 1.8 GB, the judge 1.5 GB, SmolLM2-135M 0.27 GB), and llama.cpp and its
-converter environment if candor hasn't fetched them yet. Nothing else runs it; STATUS says when.
+end: conversion with llama.cpp's converter (including a tokenizer saved by transformers 5 and a tiny
+Qwen3.5), the edit-target and tokenization checks, `init`, `run` (resuming and a settings change),
+`measure` and `compare` (the judge standing in for the 8B second judge), `search`, `score` and
+`export` on SmolLM2-135M, a real thinking model's budget on Qwen3.5-0.8B, Qwen3.8-27B's `init` and
+the judge. The first run downloads about 3.6 GB (Qwen3.5-0.8B 1.8 GB, the judge 1.5 GB, SmolLM2-135M
+0.27 GB), and llama.cpp and its converter environment if candor hasn't fetched them yet. Nothing
+else runs it; STATUS says when.
 
 The engine tests run a tiny random model in the llama-server candor uses: `CANDOR_LLAMA_BIN`'s, or
 the one in candor's cache. Run candor once to install it; without it those tests are skipped.
