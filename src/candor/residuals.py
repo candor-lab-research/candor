@@ -1,6 +1,7 @@
 """Read the residual stream with PyTorch, on the fastest device here."""
 
 import gc
+import math
 import os
 from pathlib import Path
 from typing import cast
@@ -8,6 +9,8 @@ from typing import cast
 import torch
 from torch import Tensor, nn
 from transformers import AutoTokenizer, PreTrainedModel
+
+from . import source
 
 
 def device_and_dtype() -> tuple[str, torch.dtype]:
@@ -37,6 +40,19 @@ def memory_budget(device: str) -> int | None:
     if device == "cuda":
         return torch.cuda.mem_get_info()[0]
     return None
+
+
+def shortfall(model: str, revision: str | None, device: str) -> tuple[float, int] | None:
+    """The bytes a model needs on the device, its weights in 16 bits and a tenth more for a batch's
+    activations, and the bytes the device allows, when that is too few; None when it fits, or on the
+    CPU, whose limit isn't known. Only the model's file headers are read, and only for a GPU."""
+    protect_memory()
+    budget = memory_budget(device)
+    if budget is None:
+        return None
+    weights = sum(math.prod(shape) for shape in source.tensor_shapes(model, revision).values())
+    needed = 2 * weights * 1.1
+    return (needed, budget) if needed > budget else None
 
 
 def free_memory(device: str) -> None:

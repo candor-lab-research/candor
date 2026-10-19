@@ -160,6 +160,14 @@ def test_a_second_judge_reads_back_and_a_file_from_before_it_has_none(tmp_path):
     assert before == settings() and before.measure.second_judge is None
 
 
+def test_a_second_judges_commit_needs_a_second_judge(tmp_path):
+    text = config.render(settings(), "h").replace(
+        "# second_judge_revision =", 'second_judge_revision = "abc"'
+    )
+    with pytest.raises(ConfigError, match="measure: second_judge_revision is set, but second_judge isn't"):
+        config.load(write_text(tmp_path, text))
+
+
 def test_a_full_edit_can_be_chosen(tmp_path):
     text = config.render(settings(), "h").replace('row_norm = "pre"', 'row_norm = "full"')
     assert config.load(write_text(tmp_path, text)).edit.row_norm == "full"

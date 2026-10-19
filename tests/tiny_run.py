@@ -91,7 +91,7 @@ def write_matching_llama(folder):
 
 
 # The run's own, which the tiny run replaces, for a test that needs them.
-READ_DIRECTIONS, PLANNED_DIRECTIONS = Run.directions, Run.planned_directions
+READ_DIRECTIONS, PLANNED_DIRECTIONS, CHECK_JUDGE = Run.directions, Run.planned_directions, Run.check_judge
 
 
 def fixed_plan(self):
@@ -125,6 +125,8 @@ def tiny_run(tmp_path, monkeypatch) -> Run:
     monkeypatch.setattr(measure, "Guard", FakeGuard)
     monkeypatch.setattr(search, "Guard", FakeGuard)
     monkeypatch.setattr(FakeGuard, "events", [])
+    # The judge is fake, so a real one's size is never read from the Hub.
+    monkeypatch.setattr(Run, "check_judge", lambda self, model, revision: None)
     folder = tmp_path / "runs" / "tiny"
     folder.mkdir(parents=True)
     return Run(folder, pinned(model), report=lambda _: None)

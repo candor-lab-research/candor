@@ -1,5 +1,9 @@
+import math
+
+import pytest
 import torch
 
+from candor import residuals, source
 from candor.residuals import last_token_residuals, memory_budget
 
 SHORT = [1, 5, 9, 14]
@@ -13,6 +17,19 @@ def test_a_watermark_of_0_leaves_what_the_apple_gpu_is_recommended_to_take(monke
     # PyTorch reads 0 as no limit, and its out-of-memory message suggests it.
     monkeypatch.setenv("PYTORCH_MPS_HIGH_WATERMARK_RATIO", "0.0")
     assert memory_budget("mps") == 1000
+
+
+def test_a_model_falls_short_of_a_gpu_by_its_16_bit_weights_and_a_tenth(monkeypatch):
+    monkeypatch.setattr(source, "tensor_shapes", lambda model, revision=None: {"w": [1000, 100]})
+    needed = 2 * 100_000 * 1.1
+    monkeypatch.setattr(residuals, "memory_budget", lambda device: math.floor(needed))
+    assert residuals.shortfall("org/model", "abc", "mps") == (needed, math.floor(needed))
+    monkeypatch.setattr(residuals, "memory_budget", lambda device: math.ceil(needed))
+    assert residuals.shortfall("org/model", "abc", "cuda") is None
+    # The CPU's limit isn't known, so nothing is read.
+    monkeypatch.setattr(residuals, "memory_budget", lambda device: None)
+    monkeypatch.setattr(source, "tensor_shapes", lambda *_: pytest.fail("read the headers"))
+    assert residuals.shortfall("org/model", "abc", "cpu") is None
 
 
 def test_shape(tiny_llama):

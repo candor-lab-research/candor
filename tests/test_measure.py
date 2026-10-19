@@ -2,11 +2,15 @@ import copy
 import io
 import json
 import math
+import re
 import shutil
 
+import huggingface_hub
 import numpy as np
 import pytest
+import torch
 from rich.console import Console
+from safetensors.torch import save_file
 from typer.testing import CliRunner
 
 from candor import cli, config, measure, menu, residuals, run, source
@@ -14,12 +18,20 @@ from candor.cli import app
 from candor.engine import LlamaServer, ServerError
 from candor.kernel import Kernel
 from candor.measure import Edit, Measurement
-from candor.run import RunError
+from candor.run import Run, RunError
 from candor.targets import Writer
 
 from .helpers import EDIT, PARAMETERS, on_disk, recorded_syncs, write_journal
 from .tiny_gguf import END_THINK, THINK, THINKING_TOKENS
-from .tiny_run import ALWAYS_THINKING_TEMPLATE, REFUSED, FakeGuard, fake_prompts, thinking, thinks_through
+from .tiny_run import (
+    ALWAYS_THINKING_TEMPLATE,
+    CHECK_JUDGE,
+    REFUSED,
+    FakeGuard,
+    fake_prompts,
+    thinking,
+    thinks_through,
+)
 
 
 def test_a_measurement_keeps_numbers_per_prompt_and_answers_only_in_private(tiny):
@@ -213,21 +225,71 @@ def test_two_judges_judge_one_at_a_time_each_freed_before_the_next_loads(tiny, m
     assert results["harmful_held_out"]["judge_refused"] == [True, False, False]
 
 
-def test_a_second_judge_the_gpu_cant_hold_stops_the_measurement_before_it_loads(tiny, monkeypatch):
+def weights_folder(folder, count):
+    """A model folder holding count weights, for a judge whose size is read from its headers."""
+    folder.mkdir(parents=True)
+    save_file({"w": torch.zeros(count)}, folder / "model.safetensors")
+    return str(folder)
+
+
+def test_a_judge_the_gpu_cant_hold_stops_the_measurement_before_it_loads(tiny, monkeypatch, tmp_path):
+    monkeypatch.setattr(Run, "check_judge", CHECK_JUDGE)
     second = second_judge(tiny, monkeypatch).settings.measure.second_judge
-    weights = sum(math.prod(shape) for shape in source.tensor_shapes(second).values())
-    needed = weights * residuals.device_and_dtype()[1].itemsize * 1.1
+    judge = tiny.settings.measure.judge = weights_folder(tmp_path / "small", 10)
+    needed = 2 * sum(math.prod(shape) for shape in source.tensor_shapes(second).values()) * 1.1
     monkeypatch.setattr(residuals, "memory_budget", lambda device: int(needed) - 1)
     with pytest.raises(
-        RunError, match=r"the second judge, .* needs about 0\.0 GB of GPU memory and this machine allows"
+        RunError, match=rf"the judge {re.escape(second)} needs about 0\.0 GB of GPU memory and this machine"
     ):
         Measurement(tiny, None, "base").measure()
-    assert ("load", second) not in FakeGuard.events
-    assert all(tiny.path("measurements", "base", f"{name}.judged.json").exists() for name in run.HELD_OUT)
+    # The run's judge fits, so it judged before the second was refused.
+    assert FakeGuard.events == [("load", judge), ("close", judge)]
     monkeypatch.setattr(residuals, "memory_budget", lambda device: int(needed) + 1)
     answered = counting_answers(monkeypatch)
     Measurement(tiny, None, "base").measure()
     assert answered == [] and FakeGuard.events[-2:] == [("load", second), ("close", second)]
+    # The run's judge is held to it as well.
+    tiny.settings.measure.judge_revision = "another-commit"
+    monkeypatch.setattr(residuals, "memory_budget", lambda device: 1)
+    FakeGuard.events.clear()
+    with pytest.raises(RunError, match=rf"the judge {re.escape(judge)} needs about"):
+        Measurement(tiny, None, "base").measure()
+    assert FakeGuard.events == []
+
+
+def test_a_downloaded_judge_is_sized_from_the_hubs_cache_without_the_network(tiny, monkeypatch, tmp_path):
+    monkeypatch.setattr(huggingface_hub.constants, "HF_HUB_CACHE", str(tmp_path))
+    repo = tmp_path / "models--org--judge"
+    (repo / "refs").mkdir(parents=True)
+    (repo / "refs" / "main").write_text("abc")
+    weights_folder(repo / "snapshots" / "abc", 10)
+    monkeypatch.setattr(source, "get_safetensors_metadata", lambda *_, **__: pytest.fail("asked the Hub"))
+    monkeypatch.setattr(residuals, "memory_budget", lambda device: 1)
+    with pytest.raises(RunError, match="the judge org/judge needs about"):
+        CHECK_JUDGE(tiny, "org/judge", None)
+    monkeypatch.setattr(residuals, "memory_budget", lambda device: 1000)
+    CHECK_JUDGE(tiny, "org/judge", "abc")
+
+
+def test_a_measurement_older_measuring_code_made_is_refused_saying_measuring_again_starts_afresh(
+    tiny, monkeypatch
+):
+    Measurement(tiny, None, "base").measure()
+    version = run.STAGES["measurements"]
+    monkeypatch.setitem(run.STAGES, "measurements", version + 1)
+    # Whole, it still loads, to be looked at.
+    assert measure.load(tiny, "base")
+    afresh = (
+        "it was made by older measuring code, so candor measure would measure it afresh and keep this "
+        f"one as base-measuring-{version}"
+    )
+    second_judge(tiny, monkeypatch)
+    with pytest.raises(RunError, match=rf"is missing .*second_judge\.json; {afresh}$"):
+        measure.load(tiny, "base")
+    tiny.settings.measure.second_judge = None
+    monkeypatch.setattr(measure, "COUNTING", measure.COUNTING + 1)
+    with pytest.raises(RunError, match=rf"aren't of its answers as candor counts them now; {afresh}$"):
+        measure.load(tiny, "base")
 
 
 def test_answering_a_set_again_discards_the_second_judges_labels_too(tiny, monkeypatch):

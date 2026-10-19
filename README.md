@@ -151,8 +151,9 @@ uv run candor                                                  # or all of it fr
   once the judge is done and freed, so the harmful-refusal bar can be held under both; the search
   keeps to the judge. Its labels, record and replies go in files of their own
   (`SET.second_judge.json`), so adding it to a finished measurement runs only it. With it set, a
-  measurement isn't finished until it has judged. The 8B takes about 16 GB at 16 bits: `measure`
-  stops before loading it on a GPU that can't hold it, such as an 18 GB Mac's, so it judges on a pod.
+  measurement isn't finished until it has judged. The 8B takes about 16 GB at 16 bits, so it judges
+  on a pod: `measure` and `search` stop before loading any judge the GPU can't hold, such as the 8B
+  on an 18 GB Mac, sizing one already downloaded from the Hub's cache, so offline runs still judge.
 - `--heretic STUDY.jsonl --trial N` (for `measure`, `score`, `export` and `serve`) rebuilds one of
   heretic's trials with the run's own directions, read with the run's system prompt, not heretic's;
   one that read its directions after the run's own `think_close` is rebuilt with those read where the

@@ -20,7 +20,7 @@ from typing import Any
 
 import numpy as np
 
-from . import config, export, heretic, kl, residuals, source
+from . import config, export, heretic, kl
 from .edit import FULL_RANK
 from .engine import Answer, LlamaServer, Thinking
 from .files import write_atomic
@@ -206,28 +206,10 @@ def judges(settings: config.Measure) -> dict[str, tuple[str, str | None]]:
     return found
 
 
-def _labelled(kept: str, labels: dict[str, Any]) -> dict[str, Any]:
+def _labelled(which: str, labels: dict[str, Any]) -> dict[str, Any]:
     """What a judge's labels add to a held-out set's results: the run's judge's go beside its answers,
     a second judge's under SECOND, so the two are never counted as one."""
-    return {SECOND: labels} if kept == SECOND else labels
-
-
-def _check_second_judge(model: str, revision: str | None) -> None:
-    """Stop before loading a second judge this machine's GPU can't hold: its weights in the type they
-    load in, and a tenth more for a batch. Loading more than an Apple GPU can take freezes the Mac."""
-    residuals.protect_memory()
-    device, dtype = residuals.device_and_dtype()
-    budget = residuals.memory_budget(device)
-    if budget is None:
-        return
-    weights = sum(math.prod(shape) for shape in source.tensor_shapes(model, revision).values())
-    needed = weights * dtype.itemsize * 1.1
-    if needed > budget:
-        raise RunError(
-            f"the second judge, {model}, needs about {needed / 1e9:.1f} GB of GPU memory and this machine "
-            f"allows {budget / 1e9:.1f} GB; finish measuring on a pod (the answers and the judge's labels "
-            "are kept), or unset measure.second_judge"
-        )
+    return {SECOND: labels} if which == SECOND else labels
 
 
 def mcnemar(only_a: int, only_b: int) -> float:
@@ -352,10 +334,10 @@ class Measurement:
                         )
             judged: dict[str, dict[str, Any]] = {name: {} for name in HELD_OUT}
             # One judge at a time, freed before the next is loaded.
-            for kept, judge in judges(run.settings.measure).items():
+            for which, judge in judges(run.settings.measure).items():
                 try:
                     for name in HELD_OUT:
-                        judged[name] |= _labelled(kept, self._judged(name, answered[name], kept, judge))
+                        judged[name] |= _labelled(which, self._judged(name, answered[name], which, judge))
                 finally:
                     if self.guard:
                         self.guard.close()
@@ -562,11 +544,11 @@ class Measurement:
         return {"answers": answered["answers"], "judge": list(judge), "counting": COUNTING}
 
     def _judged(
-        self, name: str, answered: dict[str, Any], kept: str, judge: tuple[str, str | None]
+        self, name: str, answered: dict[str, Any], which: str, judge: tuple[str, str | None]
     ) -> dict[str, Any]:
         """A judge's labels for a held-out set's saved answers, kept in the files named for it."""
         inputs = self._judge_inputs(answered, judge)
-        path = self.folder / f"{name}.{kept}.json"
+        path = self.folder / f"{name}.{which}.json"
         if self.run.fresh(path, inputs):
             return json.loads(path.read_text())
         answers = json.loads(self._private(f"{name}.json").read_text())["answers"]
@@ -574,11 +556,10 @@ class Measurement:
         if digest(prompts) != answered["prompts"]:
             raise RunError(f"the {LABELS[name]} have changed since they were answered; run candor run first")
         if self.guard is None:
-            if kept == SECOND:
-                _check_second_judge(*judge)
+            self.run.check_judge(*judge)
             self.guard = Guard(*judge)
         started = time.perf_counter()
-        doing = "second judge" if kept == SECOND else "judging"
+        doing = "second judge" if which == SECOND else "judging"
         done = self.progress(f"{SHORT_LABELS[name]}: {doing}", len(answers))
         replies = self.guard.replies(prompts, answers, done=done)
         verdicts = [read_verdict(reply) for reply in replies]
@@ -589,7 +570,7 @@ class Measurement:
             "judge_seconds": time.perf_counter() - started,
             "judge_machine": self.guard.machine,
         }
-        self._write_private(f"{name}.{kept}.json", {"judge_replies": replies})
+        self._write_private(f"{name}.{which}.json", {"judge_replies": replies})
         partial = path.with_name(path.name + ".building")
         partial.write_text(json.dumps(result))
         self.run.commit(partial, path, inputs)
@@ -711,27 +692,32 @@ def seconds(result: dict[str, Any]) -> float:
 def finished(settings: config.Measure) -> list[str]:
     """What a finished measurement holds: each set's results and the held-out sets' labels by each
     judge."""
-    return [f"{s}.json" for s in SETS] + [f"{s}.{kept}.json" for kept in judges(settings) for s in HELD_OUT]
+    return [f"{s}.json" for s in SETS] + [f"{s}.{which}.json" for which in judges(settings) for s in HELD_OUT]
 
 
 def load(run: Run, name: str) -> dict[str, dict[str, Any]]:
     """A measurement's results as candor measure returns them."""
     folder = run.path("measurements", name)
+    version = measured_by(folder)
+    finish = (
+        "run candor measure to finish it"
+        if version in (None, STAGES["measurements"])
+        else "it was made by older measuring code, so candor measure would measure it afresh and keep "
+        f"this one as {name}-measuring-{version}"
+    )
     if missing := [file for file in finished(run.settings.measure) if not (folder / file).exists()]:
-        raise RunError(
-            f"the measurement {name} is missing {', '.join(missing)}; run candor measure to finish it"
-        )
+        raise RunError(f"the measurement {name} is missing {', '.join(missing)}; {finish}")
     results = {s: json.loads((folder / f"{s}.json").read_text()) for s in SETS}
     for s in HELD_OUT:
-        for kept in judges(run.settings.measure):
-            judged = folder / f"{s}.{kept}.json"
+        for which in judges(run.settings.measure):
+            judged = folder / f"{s}.{which}.json"
             record = read_record(record_of(judged)) or {}
             if record.get("answers") != results[s]["answers"] or record.get("counting") != COUNTING:
                 raise RunError(
                     f"the measurement {name}'s labels for the {LABELS[s]} aren't of its answers as candor "
-                    "counts them now; run candor measure to finish it"
+                    f"counts them now; {finish}"
                 )
-            results[s] |= _labelled(kept, json.loads(judged.read_text()))
+            results[s] |= _labelled(which, json.loads(judged.read_text()))
     return results
 
 

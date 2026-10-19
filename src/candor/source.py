@@ -5,7 +5,7 @@ import struct
 from pathlib import Path
 from typing import Any
 
-from huggingface_hub import get_safetensors_metadata, hf_hub_download
+from huggingface_hub import get_safetensors_metadata, hf_hub_download, try_to_load_from_cache
 from huggingface_hub.errors import RemoteEntryNotFoundError
 
 INDEX = "model.safetensors.index.json"
@@ -58,6 +58,19 @@ def weight_files(folder: Path) -> list[str]:
     if (folder / "model.safetensors").exists():
         return ["model.safetensors"]
     return []
+
+
+def downloaded(model: str, revision: str | None = None) -> Path | None:
+    """The folder of the Hub's cache that holds every weight file of a Hugging Face model at this
+    commit, found without the network; None for a local folder, or while any is missing."""
+    if is_local(model):
+        return None
+    for name in (INDEX, "model.safetensors"):
+        found = try_to_load_from_cache(model, name, revision=revision)
+        if isinstance(found, str):
+            folder = Path(found).parent
+            return folder if all((folder / file).exists() for file in weight_files(folder)) else None
+    return None
 
 
 def local_headers(folder: Path) -> dict[str, dict[str, Any]]:

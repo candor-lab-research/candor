@@ -379,6 +379,12 @@ class Measure(Section):
         description="The second judge's Hugging Face commit, pinned by init so its verdicts can't change.",
     )
 
+    @model_validator(mode="after")
+    def _second_judge_named(self) -> "Measure":
+        if self.second_judge_revision is not None and self.second_judge is None:
+            raise ValueError("second_judge_revision is set, but second_judge isn't")
+        return self
+
 
 class Search(Section):
     trials_per_scope: StrictInt = Field(
