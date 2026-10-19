@@ -253,7 +253,9 @@ def machine(folder: Path) -> dict[str, Any]:
     except ToolchainError:
         listed = ""
     gpus = re.findall(r"^\s*(?!BLAS|CPU)\w+: (.+?) \(\d+ MiB", listed, re.MULTILINE)
-    return {"platform": this_platform(), "gpus": gpus}
+    # A build of one's own, through CANDOR_LLAMA_BIN, may not be the release's backend.
+    platform = this_platform() + (", own build" if os.environ.get("CANDOR_LLAMA_BIN") else "")
+    return {"platform": platform, "gpus": gpus}
 
 
 def described(machine: dict[str, Any]) -> str:

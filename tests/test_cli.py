@@ -21,8 +21,7 @@ from candor.run import Run, RunError
 from candor.toolchain import ToolchainError
 
 from .custom_code import write_custom_code_model
-from .test_checks import MESSAGE_WHEN_THINKING, OPENS_ITS_OWN, THINKING
-from .test_targets import LLAMA_3B, QWEN35, llama
+from .helpers import LLAMA_3B, MESSAGE_WHEN_THINKING, OPENS_ITS_OWN, QWEN35, THINKING, llama
 from .tiny_run import ALWAYS_THINKING_TEMPLATE
 from .tiny_tokenizer import DATED, PINNABLE, WITH_BOS, tokenizer
 
@@ -150,8 +149,9 @@ def test_a_quantised_checkpoint_fails(tmp_path):
 
 
 def init(tmp_path, folder, name="first"):
+    # The name after --, so one starting with "-" is read as a name, as candor checks it.
     return CliRunner(env={"COLUMNS": "250"}).invoke(
-        app, ["init", name, "--model", str(folder), "--runs", str(tmp_path / "runs")]
+        app, ["init", "--model", str(folder), "--runs", str(tmp_path / "runs"), "--", name]
     )
 
 
@@ -288,7 +288,7 @@ def test_a_local_model_has_no_revision(tmp_path):
 @pytest.mark.parametrize("name", ["../escape", "a/b", "..", "-x"])
 def test_init_rejects_names_that_are_not_one_plain_folder(tmp_path, name):
     result = init(tmp_path, model_folder(tmp_path), name=name)
-    assert result.exit_code == 2
+    assert result.exit_code == 2 and "can't be a run name" in " ".join(result.output.split())
     assert not (tmp_path / "escape").exists()
     assert not (tmp_path / "runs").exists()
 
@@ -398,67 +398,6 @@ def test_upgrade_adds_missing_settings_pinned_and_keeps_every_value(tmp_path):
     upgraded = (folder / config.FILE).read_text()
     assert upgraded.startswith(text.split("\n\n")[0] + "\n# Upgraded ")
     assert "added prompts.harmful_held_out." in upgraded
-
-
-def test_upgrade_lets_only_a_run_without_a_search_widen_strength(tmp_path):
-    assert init(tmp_path, model_folder(tmp_path)).exit_code == 0
-    folder = tmp_path / "runs" / "first"
-    path = folder / config.FILE
-    before = path.read_text().replace("widest_strength = [0.5, 3.0]\n", "")
-    path.write_text(before)
-    result = upgrade(folder)
-    assert result.exit_code == 0, result.output
-    assert "search.widest_strength = [0.5, 3.0]" in result.output
-    assert config.load(folder).search.widens()
-    path.write_text(before)
-    (folder / "search").mkdir()
-    (folder / "search" / "inputs.json").write_text("{}")
-    result = upgrade(folder)
-    assert result.exit_code == 0, result.output
-    assert "search.widest_strength = [0.8, 1.5]" in result.output
-    assert "so the run's search carries on as it was made, never widening" in " ".join(result.output.split())
-    assert not config.load(folder).search.widens()
-    # A strength reaching past the default's is kept whole, with or without a search.
-    for searched, widest in ((True, (0.8, 5.0)), (False, (0.5, 5.0))):
-        path.write_text(before.replace("strength = [0.8, 1.5]", "strength = [0.8, 5.0]"))
-        if not searched:
-            (folder / "search" / "inputs.json").unlink()
-        result = upgrade(folder)
-        assert result.exit_code == 0, result.output
-        assert config.load(folder).search.widest_strength == widest
-        assert f"search.widest_strength = [{widest[0]}, {widest[1]}]" in result.output
-
-
-def test_upgrade_removes_settings_candor_no_longer_uses(tmp_path):
-    assert init(tmp_path, model_folder(tmp_path)).exit_code == 0
-    folder = tmp_path / "runs" / "first"
-    path = folder / config.FILE
-    text = path.read_text().replace("startup_per_scope = 20\n", "startup_trials = 60\nkl_target = 0.01\n")
-    path.write_text(text)
-    refused = CliRunner(env={"COLUMNS": "250"}).invoke(app, ["run", str(folder)])
-    assert refused.exit_code == 3 and "candor upgrade removes them" in refused.output
-    result = upgrade(folder)
-    assert result.exit_code == 0, result.output
-    assert "search.startup_per_scope = 20" in result.output
-    assert "search.kl_target: the search now caps refusals instead" in result.output
-    upgraded = path.read_text()
-    assert "added search.startup_per_scope; removed search.startup_trials, search.kl_target." in upgraded
-    assert "kl_target" not in upgraded.split("# Upgraded")[1].split("\n", 1)[1]
-    assert config.load(folder).search == config.Search()
-
-
-def test_upgrade_removes_a_retired_setting_when_nothing_is_missing(tmp_path):
-    assert init(tmp_path, model_folder(tmp_path)).exit_code == 0
-    path = tmp_path / "runs" / "first" / config.FILE
-    path.write_text(
-        path.read_text().replace("startup_per_scope = 20\n", "startup_per_scope = 20\nkl_target = 0.01\n")
-    )
-    result = upgrade(path.parent)
-    assert result.exit_code == 0, result.output
-    assert "search.kl_target: the search now caps refusals instead" in result.output
-    upgraded = path.read_text()
-    assert ": removed search.kl_target." in upgraded and "added" not in upgraded.split("# Upgraded")[1]
-    assert config.load(path.parent).search == config.Search()
 
 
 def test_upgrade_pins_the_judge_it_adds(tmp_path):

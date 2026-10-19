@@ -13,6 +13,7 @@ from candor.checks import (
     writes_the_date,
 )
 
+from .helpers import MESSAGE_WHEN_THINKING, OPENS_ITS_OWN, THINKING
 from .tiny_run import ALWAYS_THINKING_TEMPLATE
 from .tiny_tokenizer import DATED, WITH_BOS, WITHOUT_BOS, tokenizer
 
@@ -87,24 +88,6 @@ def test_remote_code_from_both_configs():
     tokenizer_config = {"auto_map": {"AutoTokenizer": ["tokenization_x.XTokenizer", None]}}
     assert remote_code(config, tokenizer_config) == ["modeling_x.py", "tokenization_x.py"]
     assert remote_code({}, None) == []
-
-
-THINKING = WITHOUT_BOS + (
-    "{% if add_generation_prompt %}<think>\n{% if enable_thinking is defined and not enable_thinking %}"
-    "\n</think>\n\n{% endif %}{% endif %}"
-)
-# Qwen3's own: the model opens its thinking itself, so turning it off writes a whole empty block.
-OPENS_ITS_OWN = WITHOUT_BOS + (
-    "{% if add_generation_prompt %}A:{% if enable_thinking is defined and not enable_thinking %}"
-    "<think>\n\n</think>\n\n{% endif %}{% endif %}"
-)
-
-
-# Qwen3.8's: thinking adds a system message, at every reasoning effort but medium, that turning it
-# off leaves out.
-MESSAGE_WHEN_THINKING = (
-    "{% if enable_thinking is not defined or enable_thinking %}Think hard.\n{% endif %}" + THINKING
-)
 
 
 def test_a_thinking_models_close_is_what_turning_thinking_off_adds():

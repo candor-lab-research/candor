@@ -12,6 +12,7 @@ import re
 import shutil
 import tomllib
 from datetime import date
+from enum import StrEnum
 from pathlib import Path
 from typing import Annotated, Any, Literal
 
@@ -230,6 +231,12 @@ class Prompts(Section):
     )
 
 
+class RowNorm(StrEnum):
+    NONE = "none"
+    PRE = "pre"
+    FULL = "full"
+
+
 class Edit(Section):
     row_norm: str = Field(
         default="pre",
@@ -244,8 +251,9 @@ class Edit(Section):
     @field_validator("row_norm")
     @classmethod
     def _known_row_norm(cls, value: str) -> str:
-        if value not in {"none", "pre", "full"}:
-            raise ValueError('must be "none", "pre" or "full"')
+        if value not in set(RowNorm):
+            *most, last = (f'"{norm}"' for norm in RowNorm)
+            raise ValueError(f"must be {', '.join(most)} or {last}")
         return value
 
 
@@ -566,74 +574,19 @@ def _missing(settings: BaseModel, prefix: str = "") -> list[str]:
     return found
 
 
-# Settings a newer candor dropped, with why; candor upgrade removes them.
-RETIRED = {
-    "search.trials": "the two kinds of edit are now searched apart: see search.trials_per_scope",
-    "search.startup_trials": "see search.startup_per_scope",
-    "search.kl_target": "the search now caps refusals instead: see search.max_refusals",
-}
-
-
-def _retired(data: dict[str, Any]) -> list[str]:
-    """Remove the retired settings from parsed TOML, and name those it held."""
-    found = []
-    for name in RETIRED:
-        section, key = name.split(".")
-        if isinstance(data.get(section), dict) and key in data[section]:
-            del data[section][key]
-            found.append(name)
-    return found
-
-
-def _filled(data: dict[str, Any], searched: bool) -> list[str]:
-    """Fill in search.widest_strength for a run from before it, as it must hold the run's own strength:
-    a run with a search keeps it at that strength, so the search carries on as it was made, and another
-    widens as far as the default or its own strength, whichever reaches further. Names what it filled."""
-    search = data.get("search")
-    if not isinstance(search, dict) or "widest_strength" in search:
-        return []
-    try:
-        low, high = (float(value) for value in search["strength"])
-    except (KeyError, TypeError, ValueError):
-        # Missing or malformed, which the checks explain.
-        return []
-    widest_low, widest_high = Search.model_fields["widest_strength"].default
-    search["widest_strength"] = [low, high] if searched else [min(low, widest_low), max(high, widest_high)]
-    return ["search.widest_strength"]
-
-
-def _validated(
-    text: str,
-    where: str,
-    retired: list[str] | None = None,
-    added: list[str] | None = None,
-    searched: bool = False,
-) -> RunConfig:
-    """The settings, with any the text leaves out at their defaults. Retired settings are refused, or
-    with retired given, dropped and named there. With added given, settings filled in before they are
-    checked, for a run that has a search when searched, are named there."""
+def _validated(text: str, where: str) -> RunConfig:
+    """The settings, with any the text leaves out at their defaults."""
     try:
         data = tomllib.loads(text)
     except tomllib.TOMLDecodeError as error:
         raise ConfigError(f"{where} isn't valid TOML: {error}") from None
-    if added is not None:
-        added += _filled(data, searched)
-    dropped = _retired(data)
-    if retired is not None:
-        retired += dropped
-    elif dropped:
-        reasons = "; ".join(f"{name} ({RETIRED[name]})" for name in dropped)
-        raise ConfigError(
-            f"{where} has settings this version of candor no longer uses: {reasons}. candor upgrade "
-            "removes them."
-        )
     try:
         return RunConfig.model_validate(data)
     except ValidationError as error:
         problems = []
         for found in error.errors():
-            # A check of candor's own words its problem itself; one of several settings together has
-            # no one setting to name.
+            # pydantic puts "Value error, " before what candor's own checks say, and a check of several
+            # settings at once names none.
             message = found["msg"].removeprefix("Value error, ")
             setting = ".".join(map(str, found["loc"]))
             problems.append(f"{setting}: {message}" if setting else message)
@@ -665,20 +618,17 @@ def load(folder: Path) -> RunConfig:
     return parse(text, str(path))
 
 
-def load_for_upgrade(folder: Path) -> tuple[RunConfig, list[str], list[str], str]:
-    """The settings with those the file leaves out added (see _filled) or at their defaults, the names
-    of those, the retired settings it held, and the file's header."""
+def load_for_upgrade(folder: Path) -> tuple[RunConfig, list[str], str]:
+    """The settings with those the file leaves out at their defaults, the names of those, and the
+    file's header."""
     path, text = _read(folder)
-    retired: list[str] = []
-    filled: list[str] = []
-    searched = (folder / "search" / "inputs.json").exists()
-    settings = _validated(text, str(path), retired, filled, searched)
+    settings = _validated(text, str(path))
     header = []
     for line in text.splitlines():
         if not line.startswith("#"):
             break
         header.append(line.removeprefix("#").removeprefix(" "))
-    return settings, _missing(settings) + filled, retired, "\n".join(header)
+    return settings, _missing(settings), "\n".join(header)
 
 
 def rewrite(folder: Path, settings: RunConfig, header: str) -> None:
@@ -735,7 +685,7 @@ def render(config: RunConfig, header: str) -> str:
 
 
 def check_run_name(name: str) -> None:
-    if not RUN_NAME.fullmatch(name) or name in {".", ".."}:
+    if not RUN_NAME.fullmatch(name):
         raise ConfigError(
             f"{name!r} can't be a run name: use one plain folder name of letters, digits, '.', '_' or '-'"
         )

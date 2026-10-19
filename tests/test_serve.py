@@ -16,10 +16,7 @@ from candor.cli import app
 from candor.engine import LLAMA_CPP_RELEASE, ServerError
 from candor.run import Run, RunError
 
-from .test_engine import KV_FAILED, NO_ROOM, stub
-from .test_export import converting  # noqa: F401
-from .test_run import TEMPLATE
-from .test_search import small, write_journal
+from .helpers import KV_FAILED, NO_ROOM, TEMPLATE, on_disk, small, stub, write_journal
 from .tiny_gguf import random_weights, write_model
 
 
@@ -50,11 +47,6 @@ def stopped_by_ctrl_c(monkeypatch):
 
     monkeypatch.setattr(serve, "start", start)
     return started
-
-
-def cli_folder(tiny):
-    config.write(tiny.folder.parent, "cli", tiny.settings, "made by a test")
-    return tiny.folder.parent / "cli"
 
 
 def test_the_server_runs_at_the_runs_settings(tiny, monkeypatch):
@@ -92,7 +84,7 @@ def test_the_server_samples_and_thinks_as_measured(tiny):
 
 def test_serve_shows_the_mode_then_serves_until_ctrl_c(tiny, stopped_by_ctrl_c):
     tiny.settings.deployment.system_prompt = "Be brief."
-    folder = cli_folder(tiny)
+    folder = on_disk(tiny)
     port = free_port()
     result = CliRunner(env={"COLUMNS": "250"}).invoke(app, ["serve", str(folder), "--port", str(port)])
     assert result.exit_code == 0, result.output
@@ -111,7 +103,7 @@ def test_serve_shows_the_mode_then_serves_until_ctrl_c(tiny, stopped_by_ctrl_c):
 
 
 def test_a_server_that_crashes_while_serving_ends_serve_with_an_error(tiny, monkeypatch):
-    folder = cli_folder(tiny)
+    folder = on_disk(tiny)
     real = serve.start
     started = []
 
@@ -137,8 +129,8 @@ def test_a_server_that_crashes_while_serving_ends_serve_with_an_error(tiny, monk
     assert started[0].poll() is not None
 
 
-def test_serve_runs_a_trials_export_and_only_that_edits(tiny, converting, monkeypatch, stopped_by_ctrl_c):  # noqa: F811
-    folder = cli_folder(tiny)
+def test_serve_runs_a_trials_export_and_only_that_edits(tiny, converting, monkeypatch, stopped_by_ctrl_c):
+    folder = on_disk(tiny)
     journal = write_journal(tiny.folder.parent / "heretic.jsonl", 0.25)
     runner = CliRunner(env={"COLUMNS": "250"})
     picked = ["--heretic", str(journal), "--trial", "1", "--port", str(free_port())]
@@ -167,9 +159,9 @@ def test_serve_runs_a_trials_export_and_only_that_edits(tiny, converting, monkey
     assert other.exit_code == 1 and "heretic-1's export was made from another edit" in other.output
 
 
-def test_serve_runs_a_search_trial_without_the_weights(tiny, converting, monkeypatch, stopped_by_ctrl_c):  # noqa: F811
+def test_serve_runs_a_search_trial_without_the_weights(tiny, converting, monkeypatch, stopped_by_ctrl_c):
     small(tiny)
-    folder = cli_folder(tiny)
+    folder = on_disk(tiny)
     runner = CliRunner(env={"COLUMNS": "250"})
     assert runner.invoke(app, ["search", str(folder), "--trials", "2"]).exit_code == 0
     assert runner.invoke(app, ["export", str(folder), "--trial", "2"]).exit_code == 0
@@ -205,11 +197,35 @@ def test_a_hub_model_pinned_to_a_commit_finds_its_gguf_without_the_weights(tiny,
     )
 
 
+def test_a_hub_models_float_type_is_read_once_and_from_its_download_when_there_is_one(tiny, monkeypatch):
+    stored, local = run_module.source.float_type(tiny.settings.model.source), tiny.settings.model.source
+    asked = []
+    monkeypatch.setattr(
+        run_module.source, "float_type", lambda source, revision=None: asked.append(source) or stored
+    )
+    monkeypatch.setattr(run_module.source, "is_local", lambda source: False)
+    tiny.settings.model.source, tiny.settings.model.revision = "org/model", "a" * 40
+    monkeypatch.setattr(run_module, "snapshot_download", lambda *args, **kwargs: local)
+    tiny.model_file()
+    tiny.model_file()
+    assert asked == [local]
+
+    def not_downloaded(*args, **kwargs):
+        raise run_module.LocalEntryNotFoundError("not here")
+
+    monkeypatch.setattr(run_module, "snapshot_download", not_downloaded)
+    asked.clear()
+    del tiny.__dict__["float_type"]
+    tiny.model_file()
+    tiny.model_file()
+    assert asked == ["org/model"]
+
+
 def test_the_sample_shows_the_servers_own_template_settings(tiny, tmp_path, monkeypatch, stopped_by_ctrl_c):
     # A request with no settings of its own, as the chat page sends on Default, gets the server's.
     write_model(tmp_path / "tiny.gguf", random_weights(), chat_template="mode={{ mode }}\n" + TEMPLATE)
     monkeypatch.setattr(Run, "template_kwargs", lambda self, date=None: {"date_string": "x", "mode": "deep"})
-    folder = cli_folder(tiny)
+    folder = on_disk(tiny)
     result = CliRunner(env={"COLUMNS": "250"}).invoke(app, ["serve", str(folder), "--port", str(free_port())])
     assert result.exit_code == 0, result.output
     assert 'chat template settings: {"mode": "deep"}' in result.output
@@ -236,7 +252,7 @@ def test_serve_offers_the_tools_of_mcp_servers_and_stops_if_none_start(tiny, tmp
     broken = {"command": "false"}
     (tmp_path / "mcp.json").write_text(json.dumps({"mcpServers": {"one": one, "broken": broken}}))
     (tmp_path / "broken.json").write_text(json.dumps({"mcpServers": {"broken": broken}}))
-    folder = cli_folder(tiny)
+    folder = on_disk(tiny)
     runner = CliRunner(env={"COLUMNS": "250"})
     serving = ["serve", str(folder), "--port", str(free_port()), "--mcp"]
     result = runner.invoke(app, [*serving, str(tmp_path / "mcp.json")])
@@ -256,7 +272,7 @@ def test_candor_mcp_gives_every_serve_tools_and_more_context(tiny, tmp_path, mon
     one = {"command": sys.executable, "args": [str(tmp_path / "one.py")]}
     (tmp_path / "mcp.json").write_text(json.dumps({"mcpServers": {"one": one}}))
     monkeypatch.setattr(serve, "context_limit", lambda model: None)
-    serving = ["serve", str(cli_folder(tiny)), "--port", str(free_port())]
+    serving = ["serve", str(on_disk(tiny)), "--port", str(free_port())]
     tools = CliRunner(env={"COLUMNS": "250", "CANDOR_MCP": str(tmp_path / "mcp.json")}).invoke(app, serving)
     assert tools.exit_code == 0, tools.output
     assert f"--mcp-servers-config {tmp_path / 'mcp.json'}" in tools.output
@@ -286,7 +302,7 @@ def test_the_server_renders_with_the_runs_chat_template_settings(tiny, tmp_path,
     args = serve.arguments(tiny, tiny.folder / "model.gguf", 8080, 4096)
     # The pinned date is left out: apps write today's.
     assert json.loads(args[args.index("--chat-template-kwargs") + 1]) == settings
-    folder = cli_folder(tiny)
+    folder = on_disk(tiny)
     result = CliRunner(env={"COLUMNS": "250"}).invoke(app, ["serve", str(folder), "--port", str(free_port())])
     assert result.exit_code == 0, result.output
     assert 'chat template settings: {"reasoning_effort": "low", "short": true}' in result.output
@@ -327,6 +343,8 @@ def test_sigterm_while_serving_stops_the_server(tiny, monkeypatch):
 
         def wait(timeout=None):
             if timeout is None:
+                # Only candor's own handler may take it: the default would end pytest with no report.
+                assert getattr(signal.getsignal(signal.SIGTERM), "__module__", None) == "candor.cli"
                 os.kill(os.getpid(), signal.SIGTERM)
                 time.sleep(10)  # the signal ends this first
             return waiting(timeout)
@@ -335,7 +353,7 @@ def test_sigterm_while_serving_stops_the_server(tiny, monkeypatch):
         return process
 
     monkeypatch.setattr(serve, "start", start)
-    folder = cli_folder(tiny)
+    folder = on_disk(tiny)
     try:
         result = CliRunner().invoke(app, ["serve", str(folder), "--port", str(free_port())])
         assert result.exit_code == 128 + signal.SIGTERM

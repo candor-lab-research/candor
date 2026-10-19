@@ -182,6 +182,7 @@ def test_the_gpus_are_listed_once_and_named_to_every_server(release, monkeypatch
 
 def test_the_machine_names_the_platform_and_the_gpus_listed(tmp_path, monkeypatch):
     monkeypatch.setattr(toolchain, "this_platform", lambda: "linux-cuda")
+    monkeypatch.delenv("CANDOR_LLAMA_BIN", raising=False)
     server = tmp_path / "llama-server"
     gpus = (
         "Available devices:\\n  CUDA0: NVIDIA A40 (45498 MiB, 45229 MiB free)\\n"
@@ -193,6 +194,9 @@ def test_the_machine_names_the_platform_and_the_gpus_listed(tmp_path, monkeypatc
     assert toolchain.described(toolchain.machine(tmp_path)) == "NVIDIA A40 (linux-cuda)"
     # One that can't list its devices still names the platform.
     assert toolchain.machine(tmp_path / "missing") == {"platform": "linux-cuda", "gpus": []}
+    # A build of one's own may not be the release's backend.
+    monkeypatch.setenv("CANDOR_LLAMA_BIN", str(tmp_path))
+    assert toolchain.machine(tmp_path)["platform"] == "linux-cuda, own build"
 
 
 def test_an_override_on_linux_must_see_the_gpu_too(tmp_path, monkeypatch):

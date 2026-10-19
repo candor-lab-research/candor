@@ -46,3 +46,7 @@ def test_matches_hidden_states_before_the_final_norm(tiny_llama):
         hidden = tiny_llama(torch.tensor([LONG]), output_hidden_states=True).hidden_states
     for index in range(len(hidden) - 1):
         torch.testing.assert_close(residuals[index], hidden[index][0, -1])
+    # The last layer's output, which hidden_states only gives after the final norm.
+    with torch.no_grad():
+        torch.testing.assert_close(tiny_llama.model.norm(residuals[-1]), hidden[-1][0, -1])
+    assert not torch.allclose(residuals[-1], hidden[-1][0, -1])

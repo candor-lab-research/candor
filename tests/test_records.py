@@ -10,17 +10,14 @@ from candor.measure import Measurement
 from candor.run import Run, record_of
 from candor.search import Search
 
-from .test_export import converting  # noqa: F401
-from .test_measure import EDIT
-from .test_run import fake_residuals, model  # noqa: F401
-from .test_search import small
+from .helpers import EDIT, fake_residuals, small
 
 PINNED = Path(__file__).parent / "records_not_thinking.json"
 # The model files' times, which a local model's fingerprint holds.
 FIXED = 1_700_000_000_000_000_000
 
 
-def test_the_records_of_a_model_that_doesnt_think_are_as_they_were(tiny, converting):  # noqa: F811
+def test_the_records_of_a_model_that_doesnt_think_are_as_they_were(tiny, converting):
     for path in tiny.model_folder.rglob("*"):
         if path.is_file():
             os.utime(path, ns=(FIXED, FIXED))
@@ -44,7 +41,7 @@ def test_the_records_of_a_model_that_doesnt_think_are_as_they_were(tiny, convert
     assert found == json.loads(PINNED.read_text())
 
 
-def test_the_directions_record_of_a_model_that_doesnt_think_is_as_it_was(tmp_path, model, monkeypatch):  # noqa: F811
+def test_the_directions_record_of_a_model_that_doesnt_think_is_as_it_was(tmp_path, model, monkeypatch):
     # The tiny run above fakes its directions, so its adapters pin them only as "fixed".
     for path in model.rglob("*"):
         if path.is_file():

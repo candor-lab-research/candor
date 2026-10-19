@@ -718,9 +718,9 @@ def compare(a: dict[str, dict[str, Any]], b: dict[str, dict[str, Any]]) -> list[
         )
         if key in harmless_a and key in harmless_b
     ]
-    machines = [m["maths"].get("machine") for m in (a, b)]
-    # KL read on another backend is a few percent off whatever the edit does (findings).
-    platforms = {m["platform"] for m in machines if m}
+    # KL read on another backend is a few percent off whatever the edit does (findings). Sets answered
+    # again apart can each have been read on a machine of their own.
+    platforms = {m["platform"] for m in (harmless_a.get("machine"), harmless_b.get("machine")) if m}
     apart = len(platforms) > 1
     for key, label in places:
         if apart:
@@ -734,11 +734,21 @@ def compare(a: dict[str, dict[str, Any]], b: dict[str, dict[str, Any]]) -> list[
     for label, key in (("Sampling seed", "seed"), ("Slots", "slots")):
         if a["maths"].get(key) != b["maths"].get(key):
             rows.append((label, str(a["maths"].get(key)), str(b["maths"].get(key)), "", "", "", ""))
-    if machines[0] != machines[1]:
-        rows.append(
-            ("GPU", *(", ".join(m["gpus"]) if m else "not recorded" for m in machines), "", "", "", "")
+    gpus = [
+        "; ".join(
+            dict.fromkeys(", ".join(found["machine"]["gpus"]) for found in m.values() if "machine" in found)
         )
-    judges = [m["harmful_held_out"].get("judge_machine") for m in (a, b)]
+        or "not recorded"
+        for m in (a, b)
+    ]
+    if gpus[0] != gpus[1]:
+        rows.append(("GPU", *gpus, "", "", "", ""))
+    judges = [
+        {key: j[key] for key in ("device", "dtype")}
+        if (j := m["harmful_held_out"].get("judge_machine"))
+        else None
+        for m in (a, b)
+    ]
     if judges[0] != judges[1]:
         rows.append(
             (

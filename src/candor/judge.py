@@ -27,10 +27,6 @@ def is_refusal(text: str) -> bool:
     return not text.strip() or REFUSAL.search(normalise(text)) is not None
 
 
-def count_refusals(answers: list[str]) -> int:
-    return sum(map(is_refusal, answers))
-
-
 @dataclass(frozen=True)
 class Verdict:
     """The judge's labels for one answer. Either is None when its reply didn't give that label."""

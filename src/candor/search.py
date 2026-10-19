@@ -427,7 +427,8 @@ def differences(score: Score, searched: Score) -> list[str]:
     ):
         if abs(now - before) > REPEAT_REFUSALS:
             found.append(f"{what} {now}, not {before}")
-    if not math.isclose(score.kl, searched.kl, rel_tol=REPEAT_KL):
+    # Nor by less than KL is shown to.
+    if not math.isclose(score.kl, searched.kl, rel_tol=REPEAT_KL, abs_tol=0.5 * 10**-KL_DIGITS):
         found.append(f"KL {score.kl:.4f}, not {searched.kl:.4f}")
     return found
 
@@ -650,9 +651,9 @@ def _changed(before: dict[str, Any], now: dict[str, Any], keys: Iterable[str] | 
 def _moved(
     folder: Path, study: optuna.Study, name: str, trials: list[FrozenTrial], *dropped: str
 ) -> optuna.Study:
-    """A new study of this name holding these trials and study's user attributes, but "widened" and
-    those dropped, which the caller writes: "widened" last, as a study without it was left part made
-    by a search stopped while moving its trials, and is made again."""
+    """A new study of this name holding these trials, with study's user attributes but "widened" and
+    those dropped, which the caller writes. It writes "widened" last: a study without it is one a
+    search stopped while moving its trials, which is made again here."""
     storage = _storage(folder)
     if name in optuna.get_all_study_names(storage):
         optuna.delete_study(study_name=name, storage=storage)
@@ -863,7 +864,7 @@ class Search:
                 self.check_thinking_off()
             _, quantized = run.gguf()
             ids = run.prompt_ids()
-            run.directions()
+            run.planned_directions()
             self._check(self.inputs(ids), known=True)
             harmful, harmless = ids["harmful_test"], run.kl_ids(ids, "harmless_test")
             studies = self._studies(self.inputs(ids, harmless), len(harmful))
@@ -950,7 +951,7 @@ class Search:
             self.check_thinking_off()
         _, quantized = run.gguf()
         ids = run.prompt_ids()
-        run.directions()
+        run.planned_directions()
         if beside_search:
             self._check(self.inputs(ids), known=True, scoring=True)
         harmful, harmless = ids["harmful_test"], run.kl_ids(ids, "harmless_test")
@@ -1075,7 +1076,7 @@ class Search:
                     run.thinking(server, budget),
                 )
             )
-            reads = {
+            read_from = {
                 "model file": run.inputs["quantized"],
                 "KV cache": settings.deployment.kv_cache,
                 "slots": slots,
@@ -1083,7 +1084,9 @@ class Search:
                 "prompts": digest([harmless, beside]),
                 "machine": run.machine(),
             }
-            base = _base_reads(server, harmless, beside, settings.scoring.kl_tokens, self.folder, reads, kept)
+            # Kept only beside a search.
+            folder = self.folder if kept and self.folder.is_dir() else None
+            base = _base_reads(server, harmless, beside, settings.scoring.kl_tokens, folder, read_from)
             scorer = _Scorer(
                 server,
                 guard,
@@ -1450,28 +1453,24 @@ def _base_reads(
     harmless: list[list[int]],
     beside: dict[str, list[list[int]]],
     kl_tokens: int,
-    folder: Path,
-    reads: dict[str, Any],
-    kept: bool,
+    folder: Path | None,
+    read_from: dict[str, Any],
 ) -> tuple[list[dict[int, float]], dict[str, list[dict[int, float]]]]:
-    """The unedited model's first tokens on the KL prompts and those beside. With kept, those a session
-    read from the same reads before are used again, so every session of a search sets its trials
-    against the same ones; otherwise they are read and, with kept, kept."""
-    path = folder / "base-first-tokens.json"
-    # Kept only beside a search.
-    kept = kept and folder.is_dir()
-    if kept and path.exists():
+    """The unedited model's first tokens on the KL prompts and those beside. Given a search's folder,
+    those read there before from the same inputs on the same machine are used again, so every session
+    of the search sets its trials against the same ones, and those read now are kept there."""
+    path = folder / "base-first-tokens" / f"{digest(read_from)}.json" if folder else None
+    if path and path.exists():
         saved = json.loads(path.read_text())
-        if saved["reads"] == json.loads(json.dumps(reads)):
-            return [_read(top) for top in saved["kl"]], {
-                name: [_read(top) for top in found] for name, found in saved["beside"].items()
-            }
+        return [_read(top) for top in saved["kl"]], {
+            name: [_read(top) for top in found] for name, found in saved["beside"].items()
+        }
     base = server.top_logprobs(harmless, kl_tokens)
     others = {name: server.top_logprobs(prompts, kl_tokens) for name, prompts in beside.items()}
-    if kept:
-        made = {"reads": reads, "kl": base, "beside": others}
-        # In the order read, so KL sums them as it would have.
-        write_atomic(path, json.dumps(made))
+    if path:
+        path.parent.mkdir(exist_ok=True)
+        # In the order read, so KL sums them as it did.
+        write_atomic(path, json.dumps({"read from": read_from, "kl": base, "beside": others}))
     return base, others
 
 

@@ -12,56 +12,19 @@ import torch
 from safetensors.torch import load_file, save_file
 from typer.testing import CliRunner
 
-from candor import config, convert, export, measure, run, search
+from candor import convert, export, measure, run, search
 from candor.cli import app
-from candor.convert import check_targets
 from candor.convert import quantize as real_quantize
 from candor.edit import RowNorm, rank_one
 from candor.kernel import Kernel
 from candor.measure import Edit, Measurement
 from candor.run import Run, RunError
 
-from .test_engine import LLAMA_SERVER
-from .test_measure import EDIT
-from .test_run import TEMPLATE
-from .test_search import small, write_journal
+from .helpers import EDIT, LLAMA_SERVER, TEMPLATE, gguf_from_folder, on_disk, small, write_journal
 from .tiny_gguf import HIDDEN, random_weights, write_model
-from .tiny_run import HF_NAMES, THINKING_TEMPLATE, thinking
+from .tiny_run import thinking
 
-GGUF_NAMES = {hf: kind for kind, hf in HF_NAMES.items()}
 TYPE = gguf.GGMLQuantizationType
-
-
-def gguf_from_folder(folder, destination, log, rounded_to=torch.float32, thinks=False, types=None):
-    """The tiny model's GGUF with the layer weights of a Hugging Face folder, as the converter would
-    write it, rounded to a type, its matrices stored as types gives, and of the thinking model when it
-    thinks: the tiny run's own converter only copies the unedited GGUF."""
-    weights = random_weights()
-    for name, tensor in load_file(folder / "model.safetensors").items():
-        _, _, layer, *kind, _ = name.split(".")
-        weights[f"blk.{layer}.{GGUF_NAMES['.'.join(kind)]}.weight"] = tensor.to(rounded_to).float().numpy()
-    kinds = {name: types for name, array in weights.items() if array.ndim == 2} if types else None
-    write_model(destination, weights, THINKING_TEMPLATE if thinks else TEMPLATE, thinking=thinks, types=kinds)
-
-
-@pytest.fixture
-def converting(tiny, monkeypatch):
-    """The run's GGUF made from the tiny model's own weights, as the converter would, and every export
-    written, by where it goes."""
-    monkeypatch.setattr(
-        convert,
-        "to_gguf",
-        lambda folder, destination, log: gguf_from_folder(
-            folder, destination, log, thinks=bool(tiny.settings.deployment.think_close)
-        ),
-    )
-    monkeypatch.setattr(convert, "check_targets", check_targets)
-    shipped = []
-    real = export._ship
-    monkeypatch.setattr(
-        export, "_ship", lambda run, path, *args: shipped.append(path) or real(run, path, *args)
-    )
-    return shipped
 
 
 def kl_between(a, b):
@@ -234,8 +197,7 @@ def test_a_trials_export_is_measured_after_its_edit_can_no_longer_be_rebuilt_as_
     tiny, converting, monkeypatch
 ):
     small(tiny)
-    config.write(tiny.folder.parent, "cli", tiny.settings, "made by a test")
-    folder = str(tiny.folder.parent / "cli")
+    folder = str(on_disk(tiny))
     runner = CliRunner(env={"COLUMNS": "200"})
     assert runner.invoke(app, ["search", folder, "--trials", "2"]).exit_code == 0
     assert runner.invoke(app, ["export", folder, "--trial", "2"]).exit_code == 0
@@ -569,8 +531,7 @@ def test_only_an_edit_has_an_export_to_measure(tiny):
 
 
 def test_export_and_measure_it_from_the_command_line(tiny, converting):
-    config.write(tiny.folder.parent, "cli", tiny.settings, "made by a test")
-    folder = tiny.folder.parent / "cli"
+    folder = on_disk(tiny)
     journal = write_journal(tiny.folder.parent / "heretic.jsonl", 0.25)
     runner = CliRunner(env={"COLUMNS": "250"})
     early = runner.invoke(
@@ -595,8 +556,7 @@ def test_export_and_measure_it_from_the_command_line(tiny, converting):
 
 def test_the_commands_export_suggests_name_the_measurements_measure_makes_at_the_runs_slots(tiny, converting):
     tiny.settings.slots.measure = 3
-    config.write(tiny.folder.parent, "cli", tiny.settings, "made by a test")
-    folder = tiny.folder.parent / "cli"
+    folder = on_disk(tiny)
     journal = write_journal(tiny.folder.parent / "heretic.jsonl", 0.25)
     runner = CliRunner(env={"COLUMNS": "250"})
     exported = runner.invoke(app, ["export", str(folder), "--heretic", str(journal), "--trial", "1"])
@@ -766,8 +726,7 @@ def test_ggufs_edited_elsewhere_that_cant_be_taken_are_refused(tiny, converting)
 def test_the_command_line_exports_and_measures_a_model_edited_elsewhere(tiny, converting):
     tiny.gguf()
     folder = saved_elsewhere(tiny)
-    config.write(tiny.folder.parent, "cli", tiny.settings, "made by a test")
-    run_folder = tiny.folder.parent / "cli"
+    run_folder = on_disk(tiny)
     runner = CliRunner(env={"COLUMNS": "200"})
     unnamed = runner.invoke(app, ["export", str(run_folder), "--outside", str(folder)])
     assert unnamed.exit_code == 2 and "--name" in unnamed.output

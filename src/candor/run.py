@@ -27,6 +27,7 @@ import torch
 from datasets import load_dataset
 from datasets.exceptions import DatasetNotFoundError
 from huggingface_hub import constants, snapshot_download
+from huggingface_hub.errors import LocalEntryNotFoundError
 
 from . import checks, config, convert, directions, residuals, source, targets, toolchain
 from .adapters import write_adapter
@@ -325,6 +326,25 @@ class Run:
             )
 
     @cached_property
+    def float_type(self) -> str:
+        """The GGUF type the model converts to without rounding (see source.float_type), read from the
+        weights here, or from a Hub model's headers on the Hub while it isn't downloaded."""
+        model = self.settings.model
+        if source.is_local(model.source):
+            return source.float_type(str(self.model_folder))
+        try:
+            downloaded = snapshot_download(
+                model.source,
+                revision=model.revision,
+                allow_patterns=self.model_files,
+                ignore_patterns=NOT_MODEL_FILES,
+                local_files_only=True,
+            )
+            return source.float_type(downloaded)
+        except (LocalEntryNotFoundError, OSError):
+            return source.float_type(model.source, model.revision)
+
+    @cached_property
     def model_fingerprint(self) -> str:
         """Local folders by the names, sizes and times of the files a run reads; Hub models by their
         commit, found without downloading them when the run pins it. Nothing else, so editing a README
@@ -443,8 +463,7 @@ class Run:
         """Where the model's unquantised and deployed GGUFs go, and what each is built from."""
         out = self.path("gguf")
         quantization = self.settings.deployment.quantization
-        # From the weights' headers, which a Hub model's need no download for.
-        base_type = source.float_type(self._model_without_download, self.settings.model.revision)
+        base_type = self.float_type
         base = out / f"model-{base_type}.gguf"
         base_inputs = {"model": self.model_fingerprint, "llama.cpp": LLAMA_CPP_RELEASE}
         quantized = base if quantization == base_type else out / f"model-{quantization}.gguf"
@@ -495,8 +514,9 @@ class Run:
         self,
         model: Path,
         adapters: Sequence[Path] = (),
-        context_per_slot: int = 8192,
-        parallel: int = 4,
+        *,
+        context_per_slot: int,
+        parallel: int,
         slots_setting: str | None = None,
     ) -> LlamaServer:
         binaries = toolchain.binaries()
@@ -881,15 +901,22 @@ class Run:
         an empty thinking block. A thinking model's are read at both in one pass."""
         if answering not in self.positions:
             raise RunError("only a thinking model has directions where its answer starts")
+        plans = self.planned_directions()
+        if stale := {position: plan for position, plan in plans.items() if not self.fresh(*plan)}:
+            self._read_directions(stale)
+        return torch.load(plans[answering][0])
+
+    def planned_directions(self) -> dict[bool, tuple[Path, dict[str, Any]]]:
+        """Where each position's directions go and what they are read from, named in the run's inputs
+        as directions() names them but without reading any, so what is built from them can be checked
+        first."""
         self._check_directions_kept()
         plans = {position: self._direction_plan(position) for position in self.positions}
         self.inputs["directions"] = digest(plans[False][1])
         if True in plans:
             # The stage comes after the adapters in STAGES, so its code version reaches them only here.
             self.inputs["answering directions"] = digest(self._with_code(*plans[True]))
-        if stale := {position: plan for position, plan in plans.items() if not self.fresh(*plan)}:
-            self._read_directions(stale)
-        return torch.load(plans[answering][0])
+        return plans
 
     def _read_directions(self, stale: dict[bool, tuple[Path, dict[str, Any]]]) -> None:
         """Read the residuals for each stale position, loading the model once, and save its directions."""

@@ -2,8 +2,10 @@ import pytest
 import torch
 from transformers import LlamaConfig, LlamaForCausalLM
 
-from candor import toolchain
+from candor import convert, export, toolchain
+from candor.convert import check_targets
 
+from .helpers import gguf_from_folder, write_llama
 from .tiny_run import tiny_run
 
 
@@ -37,3 +39,28 @@ def no_tools_from_the_shell(monkeypatch):
 def not_on_cuda(monkeypatch):
     """Tests run llama-server as on the Mac, where it names no GPU, wherever they run."""
     monkeypatch.setattr(toolchain, "on_cuda", lambda: False)
+
+
+@pytest.fixture
+def model(tmp_path):
+    return write_llama(tmp_path / "model")
+
+
+@pytest.fixture
+def converting(tiny, monkeypatch):
+    """The run's GGUF made from the tiny model's own weights, as the converter would, and every export
+    written, by where it goes."""
+    monkeypatch.setattr(
+        convert,
+        "to_gguf",
+        lambda folder, destination, log: gguf_from_folder(
+            folder, destination, log, thinks=bool(tiny.settings.deployment.think_close)
+        ),
+    )
+    monkeypatch.setattr(convert, "check_targets", check_targets)
+    shipped = []
+    real = export._ship
+    monkeypatch.setattr(
+        export, "_ship", lambda run, path, *args: shipped.append(path) or real(run, path, *args)
+    )
+    return shipped

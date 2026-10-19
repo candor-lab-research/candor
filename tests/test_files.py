@@ -5,20 +5,7 @@ import pytest
 
 from candor import config, files
 
-from .test_config import settings
-
-
-def recorded_syncs(monkeypatch) -> list[tuple[str, str]]:
-    """Each file flushed, by name, with what it held then."""
-    synced = []
-    real = files.sync
-
-    def sync(path: Path) -> None:
-        synced.append((path.name, path.read_text()))
-        real(path)
-
-    monkeypatch.setattr(files, "sync", sync)
-    return synced
+from .helpers import recorded_syncs, settings
 
 
 @pytest.mark.skipif(not hasattr(fcntl, "F_FULLFSYNC"), reason="only macOS has F_FULLFSYNC")

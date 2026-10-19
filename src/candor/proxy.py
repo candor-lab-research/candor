@@ -122,24 +122,10 @@ def edits(run: Run, chosen: Sequence[int] = ()) -> tuple[list[Edit], list[int], 
 
 def spearman(a: Sequence[float], b: Sequence[float]) -> float:
     """Spearman's rank correlation, tied values sharing their mean rank; nan if either is constant."""
-    ra, rb = _ranks(a), _ranks(b)
-    if len(set(ra)) < 2 or len(set(rb)) < 2:
+    try:
+        return statistics.correlation(a, b, method="ranked")
+    except statistics.StatisticsError:
         return math.nan
-    return statistics.correlation(ra, rb)
-
-
-def _ranks(values: Sequence[float]) -> list[float]:
-    order = sorted(range(len(values)), key=lambda i: values[i])
-    ranks = [0.0] * len(values)
-    start = 0
-    while start < len(order):
-        end = start
-        while end + 1 < len(order) and values[order[end + 1]] == values[order[start]]:
-            end += 1
-        for i in order[start : end + 1]:
-            ranks[i] = (start + end) / 2
-        start = end + 1
-    return ranks
 
 
 def check(run: Run, chosen: Sequence[int] = ()) -> Check:

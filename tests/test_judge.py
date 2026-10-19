@@ -1,6 +1,6 @@
 import pytest
 
-from candor.judge import Verdict, count_refusals, is_refusal, judged_refusal, read_verdict
+from candor.judge import Verdict, is_refusal, judged_refusal, read_verdict
 
 
 @pytest.mark.parametrize(
@@ -32,7 +32,7 @@ def test_answers(text):
 
 
 def test_count():
-    assert count_refusals(["Sorry, no.", "Paris.", ""]) == 2
+    assert sum(map(is_refusal, ["Sorry, no.", "Paris.", ""])) == 2
 
 
 @pytest.mark.parametrize(

@@ -1,17 +1,10 @@
 """The weight edit, as LoRA factors."""
 
-from enum import StrEnum
-
 import torch
 import torch.nn.functional as F
 from torch import Tensor
 
-
-class RowNorm(StrEnum):
-    NONE = "none"
-    PRE = "pre"
-    FULL = "full"
-
+from .config import RowNorm
 
 # The rank heretic approximates a "full" edit at (its default full_normalization_lora_rank).
 FULL_RANK = 3

@@ -16,6 +16,7 @@ from importlib.metadata import version
 from pathlib import Path
 from typing import Annotated, Any
 
+import click
 import optuna
 import typer
 from huggingface_hub import HfApi
@@ -51,7 +52,6 @@ MARKS = {
     "ok": "[green]ok[/]",
     "warn": "[yellow]warn[/]",
     "fail": "[red]fail[/]",
-    "skipped": "[dim]skipped[/]",
 }
 # 2 is what typer uses for usage errors, so "couldn't inspect" gets its own code.
 FAILED_CHECK, COULD_NOT_INSPECT = 1, 3
@@ -442,8 +442,7 @@ def init(
 
 @app.command(short_help="Bring a run's candor.toml up to this version's settings.")
 def upgrade(folder: Annotated[Path, typer.Argument(help="A run folder made by candor init.")]) -> None:
-    """Add the settings this version of candor has and a run's candor.toml lacks, at their defaults,
-    and remove those it no longer uses.
+    """Add the settings this version of candor has and a run's candor.toml lacks, at their defaults.
 
     Prompt sets it adds are pinned to their datasets' commits now. Every other value already in the
     file is kept, but the file is written afresh, so comments added by hand are lost.
@@ -451,17 +450,15 @@ def upgrade(folder: Annotated[Path, typer.Argument(help="A run folder made by ca
     console = Console()
     folder = folder.expanduser()
     try:
-        settings, added, retired, header = config.load_for_upgrade(folder)
-        if not added and not retired:
+        settings, added, header = config.load_for_upgrade(folder)
+        if not added:
             console.print(f"{escape(str(folder / config.FILE))} already has every setting.")
             return
         new_sets = [name for name in PROMPT_SETS if {"prompts", f"prompts.{name}"} & set(added)]
         settings.prompts = _pinned(settings.prompts, new_sets)
         if {"measure", "measure.judge"} & set(added) and settings.measure.judge_revision is None:
             settings.measure.judge_revision = _revision(settings.measure.judge)
-        changes = [f"added {', '.join(added)}"] if added else []
-        changes += [f"removed {', '.join(retired)}"] if retired else []
-        header += f"\nUpgraded {date.today()} by candor {version('candor')}: {'; '.join(changes)}."
+        header += f"\nUpgraded {date.today()} by candor {version('candor')}: added {', '.join(added)}."
         with Run(folder, settings).locked():
             config.rewrite(folder, settings, header)
     except config.ConfigError as error:
@@ -474,20 +471,9 @@ def upgrade(folder: Annotated[Path, typer.Argument(help="A run folder made by ca
         failure = escape(f"{type(error).__name__}: {error}")
         console.print(f"[red]candor couldn't upgrade the run:[/] {failure}")
         raise typer.Exit(COULD_NOT_INSPECT) from None
-    if added:
-        console.print(f"[green]Added to {escape(str(folder / config.FILE))}:[/]")
-        for name in added:
-            console.print(f"  {escape(config.setting(settings, name))}", soft_wrap=True)
-        if "search.widest_strength" in added and not settings.search.widens():
-            console.print(
-                "  search.widest_strength is search.strength, so the run's search carries on as it was "
-                "made, never widening. Before starting a new search, set it wider, such as [0.5, 3.0], "
-                "to let it widen."
-            )
-    if retired:
-        console.print(f"[green]Removed from {escape(str(folder / config.FILE))}:[/]")
-        for name in retired:
-            console.print(f"  {escape(name)}: {escape(config.RETIRED[name])}", soft_wrap=True)
+    console.print(f"[green]Added to {escape(str(folder / config.FILE))}:[/]")
+    for name in added:
+        console.print(f"  {escape(config.setting(settings, name))}", soft_wrap=True)
 
 
 def _lines(console: Console, what: str, total: int, done: int = 0) -> Callable[[], None]:
@@ -522,21 +508,9 @@ def run(folder: Annotated[Path, typer.Argument(help="A run folder made by candor
     console = Console()
     folder = folder.expanduser()
 
-    def report(message: str) -> None:
-        console.print(f"[dim]{escape(message)}[/]")
-
-    try:
-        with _stopped_by_signals(), _awake():
-            done = Run.open(folder, report).prepare()
-    except config.ConfigError as error:
-        console.print(f"[red]{escape(str(error))}[/]")
-        raise typer.Exit(COULD_NOT_INSPECT) from None
-    except (RunError, ToolchainError, ConversionError, ServerError) as error:
-        console.print(f"[red]The run stopped:[/] {escape(str(error))}")
-        raise typer.Exit(FAILED_CHECK) from None
-    except Exception as error:
-        console.print(f"[red]The run stopped on an unexpected error:[/] {escape(_where(error))}")
-        raise typer.Exit(COULD_NOT_INSPECT) from None
+    report = _reporter(console)
+    with _stopping(console, "The run"), _stopped_by_signals(), _awake():
+        done = Run.open(folder, report).prepare()
     summary = ", ".join(f"{count} {what}" for what, count in done.items())
     console.print(
         f"[green]Prepared {escape(str(folder))}:[/] {summary}. Next, candor search {escape(str(folder))} "
@@ -563,6 +537,57 @@ def _where(error: Exception) -> str:
     ours = [f for f in frames[:-1] if Path(f.filename).parent == Path(__file__).parent]
     shown = [f"{Path(f.filename).name}:{f.lineno}" for f in reversed([*ours, frames[-1]])]
     return f"{type(error).__name__} at {shown[0]}" + (f", from {', '.join(shown[1:])}" if ours else "")
+
+
+@contextmanager
+def _stopping(console: Console, what: str, *more: type[Exception]) -> Iterator[None]:
+    """End a command with its exit code and a line saying why when what it runs fails: a check that
+    failed, or an unexpected error, by where it happened only."""
+    try:
+        yield
+    except (typer.Exit, click.ClickException):
+        raise
+    except config.ConfigError as error:
+        console.print(f"[red]{escape(str(error))}[/]")
+        raise typer.Exit(COULD_NOT_INSPECT) from None
+    except (RunError, ToolchainError, ConversionError, ServerError, *more) as error:
+        console.print(f"[red]{what} stopped:[/] {escape(str(error))}")
+        raise typer.Exit(FAILED_CHECK) from None
+    except Exception as error:
+        console.print(f"[red]{what} stopped on an unexpected error:[/] {escape(_where(error))}")
+        raise typer.Exit(COULD_NOT_INSPECT) from None
+
+
+def _multiple(low: float, high: float) -> str:
+    """How many times its trial's strength an edit's strengths are, as the proxy shows it."""
+    shown = f"{low:.3g}", f"{high:.3g}"
+    return f"x{shown[0]}" + (f"-{shown[1]}" if shown[1] != shown[0] else "")
+
+
+def _reporter(console: Console) -> Callable[[str], None]:
+    """How a command shows what candor is doing: dimmed, under its own lines."""
+    return lambda message: console.print(f"[dim]{escape(message)}[/]")
+
+
+def _bars(console: Console, **settings: Any) -> Progress:
+    return Progress(
+        TextColumn("{task.description}"),
+        BarColumn(bar_width=20),
+        MofNCompleteColumn(),
+        TimeElapsedColumn(),
+        TextColumn("left"),
+        TimeRemainingColumn(),
+        console=console,
+        **settings,
+    )
+
+
+def _heretic_trial(run: Run, journal: Path, trial: int) -> measure.Edit:
+    """A heretic study's trial, as this run rebuilds it."""
+    settings = run.settings
+    return measure.heretic_trial(
+        journal.expanduser(), trial, settings.edit.row_norm, settings.deployment.think_close
+    )
 
 
 def _edit_name(trial: int, heretic: bool) -> str:
@@ -658,69 +683,47 @@ def measure_command(
             except config.ConfigError as error:
                 raise typer.BadParameter(str(error), param_hint=hint) from None
 
-    def report(message: str) -> None:
-        console.print(f"[dim]{escape(message)}[/]")
+    report = _reporter(console)
+    with (
+        _stopping(console, "The measurement"),
+        _stopped_by_signals(),
+        _awake(),
+        _bars(console) as bars,
+    ):
 
-    columns = (
-        TextColumn("{task.description}"),
-        BarColumn(bar_width=20),
-        MofNCompleteColumn(),
-        TimeElapsedColumn(),
-        TextColumn("left"),
-        TimeRemainingColumn(),
-    )
-    try:
-        with _stopped_by_signals(), _awake(), Progress(*columns, console=console) as bars:
+        def progress(description: str, total: int) -> Callable[[], None]:
+            task = bars.add_task(description, total=total)
+            line = _lines(console, description, total)
 
-            def progress(description: str, total: int) -> Callable[[], None]:
-                task = bars.add_task(description, total=total)
-                line = _lines(console, description, total)
+            def done() -> None:
+                bars.advance(task)
+                line()
 
-                def done() -> None:
-                    bars.advance(task)
-                    line()
+            return done
 
-                return done
-
-            run = Run.open(folder, report)
-            if seed is not None and run.settings.sampling.temperature == 0:
-                raise RunError(
-                    "--seed samples the answers with other draws, but this run answers greedily, which "
-                    "every seed answers alike"
-                )
-            slots = run.settings.slots.measure if slots is None else slots
-            default = _measurement_name(trial, heretic is not None, slots, limit, exported, seed, outside)
-            if name not in (None, default) and export.RESERVED.fullmatch(name):
-                raise RunError(
-                    f"--name {name} is how candor names a measurement of the unedited model or of a trial, "
-                    "so it could replace one; choose another"
-                )
-            name = name or default
-            edit = None
-            if heretic is not None and trial is not None:
-                edit = measure.heretic_trial(
-                    heretic.expanduser(),
-                    trial,
-                    run.settings.edit.row_norm,
-                    run.settings.deployment.think_close,
-                )
-            elif trial is not None:
-                # The export holds the edit, so the trial needn't be rebuildable as scored; the
-                # export itself is checked against the run as it is now.
-                edit = search.recorded_edit(run, trial) if exported else search.trial_edit(run, trial)
-            measurement = measure.Measurement(
-                run, edit, name, slots, limit, progress, exported, seed, outside
+        run = Run.open(folder, report)
+        if seed is not None and run.settings.sampling.temperature == 0:
+            raise RunError(
+                "--seed samples the answers with other draws, but this run answers greedily, which "
+                "every seed answers alike"
             )
-            results = measurement.measure()
-    except config.ConfigError as error:
-        console.print(f"[red]{escape(str(error))}[/]")
-        raise typer.Exit(COULD_NOT_INSPECT) from None
-    except (RunError, ToolchainError, ConversionError, ServerError) as error:
-        console.print(f"[red]The measurement stopped:[/] {escape(str(error))}")
-        raise typer.Exit(FAILED_CHECK) from None
-    except Exception as error:
-        console.print(f"[red]The measurement stopped on an unexpected error:[/] {escape(_where(error))}")
-        raise typer.Exit(COULD_NOT_INSPECT) from None
+        slots = run.settings.slots.measure if slots is None else slots
+        default = _measurement_name(trial, heretic is not None, slots, limit, exported, seed, outside)
+        if name not in (None, default) and export.RESERVED.fullmatch(name):
+            raise RunError(
+                f"--name {name} is how candor names a measurement of the unedited model or of a trial, "
+                "so it could replace one; choose another"
+            )
+        name = name or default
+        edit = None
+        if heretic is not None and trial is not None:
+            edit = _heretic_trial(run, heretic, trial)
+        elif trial is not None:
+            # The export holds the edit, so the trial needn't be rebuildable as scored; the
+            # export itself is checked against the run as it is now.
+            edit = search.recorded_edit(run, trial) if exported else search.trial_edit(run, trial)
+        measurement = measure.Measurement(run, edit, name, slots, limit, progress, exported, seed, outside)
+        results = measurement.measure()
     table = Table(title=f"candor measure: {name}", title_justify="left", box=box.SIMPLE_HEAD)
     table.add_column("")
     table.add_column("Result", justify="right")
@@ -826,36 +829,19 @@ def export_command(
         except config.ConfigError as error:
             raise typer.BadParameter(str(error), param_hint="--name") from None
 
-    def report(message: str) -> None:
-        console.print(f"[dim]{escape(message)}[/]")
-
-    try:
-        with _stopped_by_signals(), _awake():
-            run = Run.open(folder, report)
-            if outside is not None:
-                assert name is not None
-                shipped = export.export_outside(run, name, outside)
-            elif heretic is not None:
-                assert trial is not None
-                edit = measure.heretic_trial(
-                    heretic.expanduser(),
-                    trial,
-                    run.settings.edit.row_norm,
-                    run.settings.deployment.think_close,
-                )
-                shipped = export.export(run, edit)
-            else:
-                assert trial is not None
-                shipped = export.export(run, search.trial_edit(run, trial))
-    except config.ConfigError as error:
-        console.print(f"[red]{escape(str(error))}[/]")
-        raise typer.Exit(COULD_NOT_INSPECT) from None
-    except (RunError, ToolchainError, ConversionError, ServerError) as error:
-        console.print(f"[red]The export stopped:[/] {escape(str(error))}")
-        raise typer.Exit(FAILED_CHECK) from None
-    except Exception as error:
-        console.print(f"[red]The export stopped on an unexpected error:[/] {escape(_where(error))}")
-        raise typer.Exit(COULD_NOT_INSPECT) from None
+    report = _reporter(console)
+    with _stopping(console, "The export"), _stopped_by_signals(), _awake():
+        run = Run.open(folder, report)
+        if outside is not None:
+            assert name is not None
+            shipped = export.export_outside(run, name, outside)
+        elif heretic is not None:
+            assert trial is not None
+            edit = _heretic_trial(run, heretic, trial)
+            shipped = export.export(run, edit)
+        else:
+            assert trial is not None
+            shipped = export.export(run, search.trial_edit(run, trial))
     shown = name or _edit_name(trial or 0, heretic is not None)
     console.print(f"{escape(shown)}: {escape(str(shipped))}, {shipped.stat().st_size / 1e9:.1f} GB")
     # Named as candor measure names them at the run's slots.
@@ -935,105 +921,87 @@ def serve_command(
         if not mcp.is_file():
             raise typer.BadParameter(f"{mcp} is not a file{WITHOUT_TOOLS}", param_hint="--mcp or CANDOR_MCP")
 
-    def report(message: str) -> None:
-        console.print(f"[dim]{escape(message)}[/]")
-
-    try:
-        with _stopped_by_signals():
-            run = Run.open(folder, report)
-            if trial is None:
-                name = "the unedited model"
-                with run.locked():
-                    _, model = run.gguf()
+    report = _reporter(console)
+    with _stopping(console, "candor serve", serve.ServeError), _stopped_by_signals():
+        run = Run.open(folder, report)
+        if trial is None:
+            name = "the unedited model"
+            with run.locked():
+                _, model = run.gguf()
+        else:
+            if heretic is not None:
+                edit = _heretic_trial(run, heretic, trial)
             else:
-                if heretic is not None:
-                    edit = measure.heretic_trial(
-                        heretic.expanduser(),
-                        trial,
-                        run.settings.edit.row_norm,
-                        run.settings.deployment.think_close,
-                    )
-                else:
-                    edit = search.recorded_edit(run, trial)
-                name = edit.name
-                with run.locked():
-                    model = export.built(run, edit)
-            # Tool calls and the pages they return fill a chat's context fast.
-            context = context or (32768 if mcp else 16384)
-            limit = serve.context_limit(model)
-            context = min(context, limit) if limit else context
-            args = serve.arguments(run, model, port, context, mcp)
-            settings = serve.chat_settings(run)
-            system = run.settings.deployment.system_prompt
-            console.print(f"Serving {escape(name)}: {escape(str(model))}")
-            temperature = run.settings.sampling.temperature
-            sampled = "greedily" if temperature == 0 else f"at temperature {temperature:g}"
-            budget = run.settings.deployment.thinking_budget
+                edit = search.recorded_edit(run, trial)
+            name = edit.name
+            with run.locked():
+                model = export.built(run, edit)
+        # Tool calls and the pages they return fill a chat's context fast.
+        context = context or (32768 if mcp else 16384)
+        limit = serve.context_limit(model)
+        context = min(context, limit) if limit else context
+        args = serve.arguments(run, model, port, context, mcp)
+        settings = serve.chat_settings(run)
+        system = run.settings.deployment.system_prompt
+        console.print(f"Serving {escape(name)}: {escape(str(model))}")
+        temperature = run.settings.sampling.temperature
+        sampled = "greedily" if temperature == 0 else f"at temperature {temperature:g}"
+        budget = run.settings.deployment.thinking_budget
+        console.print(
+            f"KV cache {run.settings.deployment.kv_cache}, {context} tokens of context, chat template "
+            f"settings: {escape(json.dumps(settings)) if settings else 'none'}. Answers are sampled as "
+            f"measured, {sampled}" + (f", thinking for at most {budget} tokens." if budget else ".")
+        )
+        console.print(shlex.join(args), markup=False, highlight=False, soft_wrap=True, style="dim")
+        log = run.path("private", "logs", "serve.log")
+        process = serve.start(args, log)
+        try:
+            console.print("A first message of Hello reaches the model as:")
+            console.print(serve.sample(run, port), markup=False, highlight=False)
+            tools = serve.mcp_tools(port) if mcp else []
+            if mcp and not tools:
+                raise serve.ServeError(f"no MCP server in {mcp} listed a tool; see {log}{WITHOUT_TOOLS}")
             console.print(
-                f"KV cache {run.settings.deployment.kv_cache}, {context} tokens of context, chat template "
-                f"settings: {escape(json.dumps(settings)) if settings else 'none'}. Answers are sampled as "
-                f"measured, {sampled}" + (f", thinking for at most {budget} tokens." if budget else ".")
+                "In the chat page's Settings, then in a new chat (a chat keeps the settings it began with):"
             )
-            console.print(shlex.join(args), markup=False, highlight=False, soft_wrap=True, style="dim")
-            log = run.path("private", "logs", "serve.log")
-            process = serve.start(args, log)
-            try:
-                console.print("A first message of Hello reaches the model as:")
-                console.print(serve.sample(run, port), markup=False, highlight=False)
-                tools = serve.mcp_tools(port) if mcp else []
-                if mcp and not tools:
-                    raise serve.ServeError(f"no MCP server in {mcp} listed a tool; see {log}{WITHOUT_TOOLS}")
+            if system:
+                console.print("  set the system message to the one measured, between the lines:")
+                console.print("---", system, "---", sep="\n", markup=False, highlight=False)
+            else:
+                console.print("  leave the system message empty, as measured")
+            if tools:
+                listed = escape(", ".join(tools))
                 console.print(
-                    "In the chat page's Settings, then in a new chat (a chat keeps the settings it began "
-                    "with):"
+                    f"  under Tools, keep Server on ({listed}, from {escape(str(mcp))}; a server "
+                    f"missing there failed to start, see {escape(str(log))}) and turn Browser off: the "
+                    "page's own tools, such as get_info. Each call asks first: the menu beside Allow "
+                    "once can always allow every tool from Server"
                 )
-                if system:
-                    console.print("  set the system message to the one measured, between the lines:")
-                    console.print("---", system, "---", sep="\n", markup=False, highlight=False)
-                else:
-                    console.print("  leave the system message empty, as measured")
-                if tools:
-                    listed = escape(", ".join(tools))
-                    console.print(
-                        f"  under Tools, keep Server on ({listed}, from {escape(str(mcp))}; a server "
-                        f"missing there failed to start, see {escape(str(log))}) and turn Browser off: the "
-                        "page's own tools, such as get_info. Each call asks first: the menu beside Allow "
-                        "once can always allow every tool from Server"
-                    )
-                else:
-                    console.print(
-                        "  turn off every tool under Tools: the page offers its own (such as the time and "
-                        "get_info), and chat templates such as Llama 3's turn any tool into a request for a "
-                        "function call"
-                    )
+            else:
                 console.print(
-                    "  keep the reasoning menu on Default: its other choices replace the template settings "
-                    "and the thinking budget (its Low, Medium and High are budgets of 512, 2048 and 8192 "
-                    "tokens, not the model's own effort levels)"
+                    "  turn off every tool under Tools: the page offers its own (such as the time and "
+                    "get_info), and chat templates such as Llama 3's turn any tool into a request for a "
+                    "function call"
                 )
-                console.print(
-                    "  leave the sampling settings empty, so the page uses the server's: a value set there "
-                    "before stays in the browser and overrides them"
-                )
-                console.print(f"Chat at http://127.0.0.1:{port}, llama-server's own page. Ctrl-C stops it.")
-                code = process.wait()
-                stopped = f"llama-server stopped by itself with code {code}; its log is {log}"
-                if code:
-                    raise serve.ServeError(stopped)
-                console.print(escape(stopped))
-            except KeyboardInterrupt:
-                console.print("Stopped.")
-            finally:
-                terminate(process)
-    except config.ConfigError as error:
-        console.print(f"[red]{escape(str(error))}[/]")
-        raise typer.Exit(COULD_NOT_INSPECT) from None
-    except (RunError, ToolchainError, ConversionError, ServerError, serve.ServeError) as error:
-        console.print(f"[red]candor serve stopped:[/] {escape(str(error))}")
-        raise typer.Exit(FAILED_CHECK) from None
-    except Exception as error:
-        console.print(f"[red]candor serve stopped on an unexpected error:[/] {escape(_where(error))}")
-        raise typer.Exit(COULD_NOT_INSPECT) from None
+            console.print(
+                "  keep the reasoning menu on Default: its other choices replace the template settings "
+                "and the thinking budget (its Low, Medium and High are budgets of 512, 2048 and 8192 "
+                "tokens, not the model's own effort levels)"
+            )
+            console.print(
+                "  leave the sampling settings empty, so the page uses the server's: a value set there "
+                "before stays in the browser and overrides them"
+            )
+            console.print(f"Chat at http://127.0.0.1:{port}, llama-server's own page. Ctrl-C stops it.")
+            code = process.wait()
+            stopped = f"llama-server stopped by itself with code {code}; its log is {log}"
+            if code:
+                raise serve.ServeError(stopped)
+            console.print(escape(stopped))
+        except KeyboardInterrupt:
+            console.print("Stopped.")
+        finally:
+            terminate(process)
 
 
 @app.command("search", short_help="Find the smallest edit that leaves almost no refusals.")
@@ -1056,48 +1024,29 @@ def search_command(
     console = Console()
     folder = folder.expanduser()
 
-    def report(message: str) -> None:
-        console.print(f"[dim]{escape(message)}[/]")
+    report = _reporter(console)
+    with (
+        _stopping(console, "The search"),
+        _stopped_by_signals(),
+        _awake(),
+        _bars(console, speed_estimate_period=DAY) as bars,
+    ):
+        tasks, lines = [], []
 
-    columns = (
-        TextColumn("{task.description}"),
-        BarColumn(bar_width=20),
-        MofNCompleteColumn(),
-        TimeElapsedColumn(),
-        TextColumn("left"),
-        TimeRemainingColumn(),
-    )
-    try:
-        with (
-            _stopped_by_signals(),
-            _awake(),
-            Progress(*columns, console=console, speed_estimate_period=DAY) as bars,
-        ):
-            tasks, lines = [], []
+        def started(done: int, total: int) -> None:
+            tasks.append(bars.add_task("Trials", total=total, completed=done))
+            lines.append(_lines(console, "Trials", total, done))
 
-            def started(done: int, total: int) -> None:
-                tasks.append(bars.add_task("Trials", total=total, completed=done))
-                lines.append(_lines(console, "Trials", total, done))
+        def finished(best: str | None) -> None:
+            bars.advance(tasks[0])
+            lines[0]()
+            if best:
+                console.print(escape(best))
 
-            def finished(best: str | None) -> None:
-                bars.advance(tasks[0])
-                lines[0]()
-                if best:
-                    console.print(escape(best))
-
-            run = Run.open(folder, report)
-            space = run.settings.search
-            total = len(search.SCOPES) * space.trials_per_scope
-            found, seconds = search.Search(run).search(trials or total, started, finished)
-    except config.ConfigError as error:
-        console.print(f"[red]{escape(str(error))}[/]")
-        raise typer.Exit(COULD_NOT_INSPECT) from None
-    except (RunError, ToolchainError, ConversionError, ServerError) as error:
-        console.print(f"[red]The search stopped:[/] {escape(str(error))}")
-        raise typer.Exit(FAILED_CHECK) from None
-    except Exception as error:
-        console.print(f"[red]The search stopped on an unexpected error:[/] {escape(_where(error))}")
-        raise typer.Exit(COULD_NOT_INSPECT) from None
+        run = Run.open(folder, report)
+        space = run.settings.search
+        total = len(search.SCOPES) * space.trials_per_scope
+        found, seconds = search.Search(run).search(trials or total, started, finished)
     table = Table(
         title="Fully scored trials no other beats on both refusals and KL",
         title_justify="left",
@@ -1224,48 +1173,29 @@ def score_command(
     console = Console()
     folder = folder.expanduser()
 
-    def report(message: str) -> None:
-        console.print(f"[dim]{escape(message)}[/]")
-
-    try:
-        with _stopped_by_signals(), _awake():
-            run = Run.open(folder, report)
-            found = search.load(run)
-            front = search.candidates(found) if found else []
-            _, layers, _, writers = run.shape
-            # Each edit, with its number when it is a trial of the search.
-            edits: list[tuple[measure.Edit, int | None]] = []
-            if heretic is None:
-                edits.append((search.trial_edit(run, trial), trial))
-            else:
-                edit = measure.heretic_trial(
-                    heretic.expanduser(),
-                    trial,
-                    run.settings.edit.row_norm,
-                    run.settings.deployment.think_close,
-                )
-                nearest = search.nearest_layer(edit, run.settings.search, layers)
-                edits += [(edit, None)] + ([(nearest, None)] if nearest else [])
-                if front:
-                    edits.append((search.trial_edit(run, front[0].trial), front[0].trial))
-            # A trial the search scored in full, scored again, shows whether scoring repeats, so the
-            # unedited model is scored again only where there is none.
-            repeated = found is not None and any(
-                number and not found.trials[number].user_attrs["stopped"] for _, number in edits
-            )
-            scored = search.Search(run).score([edit for edit, _ in edits], base=not repeated)
-            searched = {
-                number: search.searched_score(found, number) for _, number in edits if found and number
-            }
-    except config.ConfigError as error:
-        console.print(f"[red]{escape(str(error))}[/]")
-        raise typer.Exit(COULD_NOT_INSPECT) from None
-    except (RunError, ToolchainError, ConversionError, ServerError) as error:
-        console.print(f"[red]The scoring stopped:[/] {escape(str(error))}")
-        raise typer.Exit(FAILED_CHECK) from None
-    except Exception as error:
-        console.print(f"[red]The scoring stopped on an unexpected error:[/] {escape(_where(error))}")
-        raise typer.Exit(COULD_NOT_INSPECT) from None
+    report = _reporter(console)
+    with _stopping(console, "The scoring"), _stopped_by_signals(), _awake():
+        run = Run.open(folder, report)
+        found = search.load(run)
+        front = search.candidates(found) if found else []
+        _, layers, _, writers = run.shape
+        # Each edit, with its number when it is a trial of the search.
+        edits: list[tuple[measure.Edit, int | None]] = []
+        if heretic is None:
+            edits.append((search.recorded_edit(run, trial), trial))
+        else:
+            edit = _heretic_trial(run, heretic, trial)
+            nearest = search.nearest_layer(edit, run.settings.search, layers)
+            edits += [(edit, None)] + ([(nearest, None)] if nearest else [])
+            if front:
+                edits.append((search.recorded_edit(run, front[0].trial), front[0].trial))
+        # A trial the search scored in full, scored again, shows whether scoring repeats, so the
+        # unedited model is scored again only where there is none.
+        repeated = found is not None and any(
+            number and not found.trials[number].user_attrs["stopped"] for _, number in edits
+        )
+        scored = search.Search(run).score([edit for edit, _ in edits], base=not repeated)
+        searched = {number: search.searched_score(found, number) for _, number in edits if found and number}
     table = Table(box=box.SIMPLE_HEAD)
     for heading in ["Edit", "Direction", "Refused", "Keywords", "KL", "In the search"]:
         table.add_column(heading, justify="left" if heading in {"Edit", "Direction"} else "right")
@@ -1356,22 +1286,10 @@ def proxy_command(
     console = Console()
     folder = folder.expanduser()
 
-    def report(message: str) -> None:
-        console.print(f"[dim]{escape(message)}[/]")
-
-    try:
-        with _stopped_by_signals(), _awake():
-            run = Run.open(folder, report)
-            checked = proxy.check(run, trial or ())
-    except config.ConfigError as error:
-        console.print(f"[red]{escape(str(error))}[/]")
-        raise typer.Exit(COULD_NOT_INSPECT) from None
-    except (RunError, ToolchainError, ConversionError, ServerError) as error:
-        console.print(f"[red]The check stopped:[/] {escape(str(error))}")
-        raise typer.Exit(FAILED_CHECK) from None
-    except Exception as error:
-        console.print(f"[red]The check stopped on an unexpected error:[/] {escape(_where(error))}")
-        raise typer.Exit(COULD_NOT_INSPECT) from None
+    report = _reporter(console)
+    with _stopping(console, "The check"), _stopped_by_signals(), _awake():
+        run = Run.open(folder, report)
+        checked = proxy.check(run, trial or ())
     prompts = checked.off[0].judged
     table = Table(box=box.SIMPLE_HEAD)
     headings = [
@@ -1393,7 +1311,7 @@ def proxy_command(
             edit.name,
             str(number),
             search.direction(edit.direction_layer, edit.answering),
-            f"x{factor[0]:.3g}" + (f"-{factor[1]:.3g}" if factor[1] != factor[0] else ""),
+            _multiple(*factor),
             str(off.refusals),
             str(on.refusals),
             f"{on.thinking:.0f}",

@@ -18,9 +18,6 @@ class Trial:
     number: int
     direction_layer: float | None
     kernels: dict[str, Kernel]
-    refusals: int
-    base_refusals: int
-    kl_divergence: float
 
 
 @dataclass(frozen=True)
@@ -49,14 +46,12 @@ def read_journal(path: Path) -> Journal:
                 attrs.setdefault(op["trial_id"], {}).update(op["user_attr"])
     trials = {}
     for attr in attrs.values():
+        # heretic 1.x marks a trial finished by its refusals; 2.x writes none, so its trials aren't read.
         if "refusals" not in attr:
             continue
         trials[attr["index"]] = Trial(
             number=attr["index"],
             direction_layer=attr["direction_index"],
             kernels={COMPONENTS[name]: Kernel(**params) for name, params in attr["parameters"].items()},
-            refusals=attr["refusals"],
-            base_refusals=attr["base_refusals"],
-            kl_divergence=attr["kl_divergence"],
         )
     return Journal(settings, trials)

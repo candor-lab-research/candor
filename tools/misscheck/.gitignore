@@ -1,0 +1,6 @@
+# What running the simulator leaves behind.
+cache/
+sims/
+candor-*/
+*.log
+__pycache__/

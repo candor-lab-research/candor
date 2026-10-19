@@ -17,8 +17,7 @@ from candor.measure import Edit
 from candor.run import Run, RunError
 from candor.weights import ModelFiles
 
-from .test_convert import CONVERTER_ORDER, OUT_PROJ, QWEN35, qwen35
-from .test_targets import llama
+from .helpers import CONVERTER_ORDER, OUT_PROJ, TINY_QWEN35, adapter_factors, llama, qwen35
 
 HIDDEN, LAYERS = 64, 2
 
@@ -90,17 +89,9 @@ def test_the_disk_check_counts_only_the_files_it_will_write(
             this.gguf()
 
 
-def adapter_factors(path, name=""):
-    """An adapter's (b, a), for the weight named when it holds several."""
-    tensors = {t.name: torch.from_numpy(t.data.copy()) for t in gguf.GGUFReader(path).tensors}
-    a = next(v for k, v in tensors.items() if k.startswith(name) and k.endswith("lora_a"))
-    b = next(v for k, v in tensors.items() if k.startswith(name) and k.endswith("lora_b"))
-    return b, a
-
-
 @pytest.mark.parametrize("row_norm", [RowNorm.NONE, RowNorm.PRE])
 def test_qwen35_adapters_are_built_in_the_gguf_layout(tmp_path, monkeypatch, row_norm):
-    this = make_run(tmp_path, qwen35(), QWEN35, torch.bfloat16)
+    this = make_run(tmp_path, qwen35(), TINY_QWEN35, torch.bfloat16)
     this.settings.edit.row_norm = row_norm.value
     found = F.normalize(torch.randn(LAYERS + 1, HIDDEN), dim=-1)
 
@@ -124,7 +115,7 @@ def test_qwen35_adapters_are_built_in_the_gguf_layout(tmp_path, monkeypatch, row
 
 
 def test_a_full_qwen35_edits_adapter_is_built_in_the_gguf_layout(tmp_path, monkeypatch):
-    this = make_run(tmp_path, qwen35(), QWEN35, torch.bfloat16)
+    this = make_run(tmp_path, qwen35(), TINY_QWEN35, torch.bfloat16)
     this.settings.edit.row_norm = "full"
     found = F.normalize(torch.randn(LAYERS + 1, HIDDEN), dim=-1)
 
@@ -142,7 +133,7 @@ def test_a_full_qwen35_edits_adapter_is_built_in_the_gguf_layout(tmp_path, monke
 
 
 def test_a_qwen35_export_writes_and_reads_its_edit_in_the_converters_order(tmp_path, monkeypatch):
-    this = make_run(tmp_path, qwen35(), QWEN35, torch.bfloat16)
+    this = make_run(tmp_path, qwen35(), TINY_QWEN35, torch.bfloat16)
     this.settings.edit.row_norm = "full"
     found = F.normalize(torch.randn(LAYERS + 1, HIDDEN), dim=-1)
 
@@ -166,7 +157,7 @@ def test_a_qwen35_export_writes_and_reads_its_edit_in_the_converters_order(tmp_p
         values = (
             written
             if name == OUT_PROJ
-            else convert.as_converted(weights.tensor(name).float(), name, "qwen35", QWEN35)
+            else convert.as_converted(weights.tensor(name).float(), name, "qwen35", TINY_QWEN35)
         )
         writer.add_tensor(gguf_name, values.numpy())
     writer.write_header_to_file()

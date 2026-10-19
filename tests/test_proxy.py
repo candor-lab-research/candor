@@ -1,24 +1,27 @@
 import json
 import math
+import statistics
 
 import pytest
 from typer.testing import CliRunner
 
-from candor import config, proxy, search
+from candor import cli, proxy, search
 from candor.cli import app
 from candor.measure import Edit
 from candor.run import RunError
 from candor.search import Score, Scores, Search
 
-from .test_files import recorded_syncs
-from .test_search import flat, small
+from .helpers import flat, on_disk, recorded_syncs, small
 from .tiny_run import thinking, thinks_through
 
 
 def test_spearman_shares_tied_ranks_and_is_none_for_a_constant():
     assert proxy.spearman([1, 2, 3], [10, 20, 30]) == pytest.approx(1)
     assert proxy.spearman([1, 2, 3], [30, 20, 10]) == pytest.approx(-1)
-    assert proxy._ranks([5, 1, 5, 0]) == [2.5, 1, 2.5, 0]
+    # Tied values share their mean rank: [2.5, 1, 2.5, 0] against [0, 1, 2, 3].
+    assert proxy.spearman([5, 1, 5, 0], [0, 1, 2, 3]) == pytest.approx(
+        statistics.correlation([2.5, 1, 2.5, 0], [0, 1, 2, 3])
+    )
     assert math.isnan(proxy.spearman([1, 2, 3], [4, 4, 4]))
 
 
@@ -34,11 +37,15 @@ def searched_thinking_off(tiny, monkeypatch, trials: int = 12):
 
 def test_a_thinking_off_search_shows_no_thinking_it_didnt_do(tiny, monkeypatch):
     searched_thinking_off(tiny, monkeypatch, trials=2)
-    config.write(tiny.folder.parent, "cli", tiny.settings, "made by a test")
-    result = CliRunner(env={"COLUMNS": "200"}).invoke(app, ["search", str(tiny.folder.parent / "cli")])
+    folder = on_disk(tiny)
+    result = CliRunner(env={"COLUMNS": "200"}).invoke(app, ["search", str(folder)])
     assert result.exit_code == 0, result.output
     assert "reached the search's budget" not in result.output
     assert "after an empty thinking block" in result.output
+
+
+def test_a_multiple_is_shown_once_where_its_strengths_differ_only_by_rounding():
+    assert cli._multiple(1.4, 1.4000000001) == "x1.4" and cli._multiple(1.2, 1.4) == "x1.2-1.4"
 
 
 def test_the_edits_are_each_kind_and_places_best_of_a_thinking_off_search(tiny, monkeypatch):
@@ -93,7 +100,7 @@ def test_proxy_passes_the_trials_named_to_the_check(tiny, monkeypatch):
         raise RunError("stopped by a test")
 
     monkeypatch.setattr(proxy, "check", check)
-    folder = config.write(tiny.folder.parent, "cli", tiny.settings, "made by a test").parent
+    folder = on_disk(tiny)
     runner = CliRunner(env={"COLUMNS": "200"})
     assert runner.invoke(app, ["proxy", str(folder), "--trial", "5", "--trial", "7"]).exit_code != 0
     runner.invoke(app, ["proxy", str(folder)])
@@ -256,7 +263,7 @@ def test_proxy_shows_both_counts_and_whether_the_cheap_score_may_be_used(tiny, m
     thinking(tiny)
     count = fixed(monkeypatch)
     faked(monkeypatch, {False: list(range(count)), True: [n + 2 for n in range(count)]})
-    folder = config.write(tiny.folder.parent, "cli", tiny.settings, "made by a test").parent
+    folder = on_disk(tiny)
     result = CliRunner(env={"COLUMNS": "200"}).invoke(app, ["proxy", str(folder)])
     assert result.exit_code == 0, result.output
     shown = flat(result.output)
@@ -278,7 +285,7 @@ def test_proxy_judges_which_edits_are_within_the_cap_as_the_search_does(tiny, mo
     thinking(tiny).settings.search.max_budget_hits = 0
     count = fixed(monkeypatch)
     faked(monkeypatch, {False: [0] * count, True: [0] * count}, forced={True: [n % 2 for n in range(count)]})
-    folder = config.write(tiny.folder.parent, "cli", tiny.settings, "made by a test").parent
+    folder = on_disk(tiny)
     result = CliRunner(env={"COLUMNS": "200"}).invoke(app, ["proxy", str(folder)])
     assert result.exit_code == 0, result.output
     shown = flat(result.output)
@@ -294,7 +301,7 @@ def test_proxy_of_named_trials_leaves_whether_the_search_may_think_off_to_the_de
     thinking(tiny)
     count = fixed(monkeypatch)
     faked(monkeypatch, {False: list(range(count)), True: [n + 2 for n in range(count)]})
-    folder = config.write(tiny.folder.parent, "cli", tiny.settings, "made by a test").parent
+    folder = on_disk(tiny)
     result = CliRunner(env={"COLUMNS": "200"}).invoke(app, ["proxy", str(folder), "--trial", "101"])
     assert result.exit_code == 0, result.output
     shown = flat(result.output)

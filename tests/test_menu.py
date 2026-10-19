@@ -19,8 +19,7 @@ from candor.menu import BACK, Menus, Option, Questions, Status
 from candor.run import Run
 from candor.search import Search
 
-from .test_config import settings
-from .test_search import small
+from .helpers import settings, small
 
 DOWN, ENTER, CTRL_C, CTRL_D = "\x1b[B", "\r", "\x03", "\x04"
 

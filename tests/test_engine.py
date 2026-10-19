@@ -5,7 +5,6 @@ in candor's own cache. They never download it, and are skipped when neither is t
 """
 
 import csv
-import os
 import random
 import shutil
 import signal
@@ -26,6 +25,7 @@ from candor.edit import RowNorm, rank_one
 from candor.engine import MAX_ARGUMENT, Answer, LlamaServer, ServerError, Thinking
 from candor.run import seeds as run_seeds
 
+from .helpers import KV_FAILED, LLAMA_SERVER, NO_ROOM, stub
 from .tiny_gguf import (
     END_THINK,
     FIRST_WORD,
@@ -36,15 +36,6 @@ from .tiny_gguf import (
     random_weights,
     write_model,
 )
-
-
-def installed_server() -> Path:
-    if folder := os.environ.get("CANDOR_LLAMA_BIN"):
-        return Path(folder).expanduser() / "llama-server"
-    return toolchain.cache() / toolchain.this_platform() / "bin" / "llama-server"
-
-
-LLAMA_SERVER = installed_server()
 
 PROMPTS = [[1, FIRST_WORD + i, FIRST_WORD + 2 * i + 1, FIRST_WORD + 3] for i in range(6)]
 STRENGTHS = {"blk.0.attn_output.weight": 1.5, "blk.1.ffn_down.weight": 0.8}
@@ -81,14 +72,6 @@ def server(folder: Path, model: str, adapters=()) -> LlamaServer:
     return LlamaServer(
         LLAMA_SERVER, folder / model, folder / "server.log", adapters, parallel=2, context_per_slot=64
     )
-
-
-def stub(folder: Path, script: str) -> Path:
-    """A shell script standing in for llama-server."""
-    path = folder / "llama-server"
-    path.write_text(f"#!/bin/sh\n{script}\n")
-    path.chmod(0o755)
-    return path
 
 
 @pytest.fixture
@@ -311,14 +294,6 @@ def test_a_server_whose_gpu_has_failed_says_so(tmp_path):
         ServerError, match="can't see CUDA0, the GPU it was started on, so the GPU has failed"
     ):
         s.start()
-
-
-# What llama.cpp logs when a KV cache doesn't fit on the GPU, as K2-Horizon's search did on an A40.
-NO_ROOM = (
-    "ggml_backend_cuda_buffer_type_alloc_buffer: allocating 61488.00 MiB on device 0: cudaMalloc failed: "
-    "out of memory"
-)
-KV_FAILED = "llama_init_from_model: failed to initialize the context: failed to allocate buffer for kv cache"
 
 
 @pytest.mark.parametrize(

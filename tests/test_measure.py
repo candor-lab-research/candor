@@ -15,12 +15,9 @@ from candor.measure import Edit, Measurement
 from candor.run import RunError
 from candor.targets import Writer
 
-from .test_files import recorded_syncs
-from .test_heretic import PARAMETERS
+from .helpers import EDIT, PARAMETERS, on_disk, recorded_syncs, write_journal
 from .tiny_gguf import END_THINK, THINK, THINKING_TOKENS
 from .tiny_run import ALWAYS_THINKING_TEMPLATE, FakeGuard, fake_prompts, thinking, thinks_through
-
-EDIT = Edit("trial", 0.4, {"attn": Kernel(1.2, 1.0, 0.8, 1.0), "mlp": Kernel(1.0, 0.0, 0.5, 1.0)})
 
 
 def test_a_measurement_keeps_numbers_per_prompt_and_answers_only_in_private(tiny):
@@ -315,6 +312,15 @@ def test_compare_names_the_machines_and_leaves_out_kl_read_on_another_backend(ti
     assert (
         rows["GPU"][1:3] == ("NVIDIA A40", "NVIDIA H100") and rows["Harmless KL from A"][2] != "other backend"
     )
+    # KL goes by the machine its own set was read on, which a set answered again apart may not share.
+    mixed = on(a40)
+    mixed["harmless_held_out"]["machine"] = here["harmless_held_out"]["machine"]
+    rows = {row[0]: row for row in measure.compare(here, mixed)}
+    assert rows["Harmless KL from A"][2] != "other backend"
+    assert rows["GPU"][2] == f"NVIDIA A40; {', '.join(tiny.machine()['gpus'])}"
+    # A new torch alone isn't another judge.
+    newer = on(here["maths"]["machine"], FakeGuard.machine | {"torch": "newer"})
+    assert "Judged on" not in {row[0] for row in measure.compare(here, newer)}
 
 
 def test_measurements_by_other_measuring_code_are_measured_again_and_not_compared(tiny, monkeypatch):
@@ -362,8 +368,7 @@ def test_a_measurement_answers_slots_measure_at_once_unless_given_another_number
 
 def test_measure_names_a_measurement_for_slots_other_than_8_from_the_settings_or_the_command(tiny):
     tiny.settings.slots.measure = 2
-    config.write(tiny.folder.parent, "cli", tiny.settings, "made by a test")
-    folder = tiny.folder.parent / "cli"
+    folder = on_disk(tiny)
     runner = CliRunner(env={"COLUMNS": "250"})
     for given, name in (([], "base-slots-2-first-1"), (["--slots", "8"], "base-first-1")):
         measured = runner.invoke(app, ["measure", str(folder), "--limit", "1", *given])
@@ -372,8 +377,7 @@ def test_measure_names_a_measurement_for_slots_other_than_8_from_the_settings_or
 
 
 def test_a_name_candor_gives_another_measurement_is_refused(tiny):
-    config.write(tiny.folder.parent, "cli", tiny.settings, "made by a test")
-    folder = tiny.folder.parent / "cli"
+    folder = on_disk(tiny)
     runner = CliRunner(env={"COLUMNS": "250"})
     for taken in ("base", "trial-3", "heretic-2-exported"):
         measured = runner.invoke(app, ["measure", str(folder), "--limit", "1", "--name", taken])
@@ -461,8 +465,7 @@ def test_a_direction_layer_outside_the_model_is_refused(tiny):
 
 
 def test_measure_and_compare_from_the_command_line_show_counts_only(tiny):
-    config.write(tiny.folder.parent, "cli", tiny.settings, "made by a test")
-    folder = tiny.folder.parent / "cli"
+    folder = on_disk(tiny)
     runner = CliRunner(env={"COLUMNS": "250"})
     measured = runner.invoke(app, ["measure", str(folder), "--limit", "2"])
     assert measured.exit_code == 0, measured.output
@@ -571,19 +574,12 @@ def test_strengths_follow_each_components_kernel():
     assert edit.strengths(writers, names) == {"blk.0.attn": 1.0, "blk.1.attn": 1.5, "blk.1.ffn": 0.0}
 
 
-def write_journal(path, settings):
-    ops = [
-        {"op_code": 2, "study_id": 0, "user_attr": {"settings": json.dumps(settings)}},
-        {"op_code": 8, "trial_id": 0, "user_attr": {"index": 1, "direction_index": 12.5}},
-        {"op_code": 8, "trial_id": 0, "user_attr": {"parameters": PARAMETERS, "refusals": 4}},
-        {"op_code": 8, "trial_id": 0, "user_attr": {"base_refusals": 96, "kl_divergence": 0.03}},
-    ]
-    path.write_text("".join(json.dumps(op) + "\n" for op in ops))
-    return path
+def heretic_journal(path, settings):
+    return write_journal(path, 12.5, settings, PARAMETERS)
 
 
 def test_a_heretic_trial_is_read_as_an_edit(tmp_path):
-    journal = write_journal(
+    journal = heretic_journal(
         tmp_path / "study.jsonl", {"row_normalization": "pre", "orthogonalize_direction": True}
     )
     edit = measure.heretic_trial(journal, 1, "pre")
@@ -611,7 +607,7 @@ def test_a_heretic_trial_is_read_as_an_edit(tmp_path):
     ],
 )
 def test_a_heretic_trial_built_differently_is_refused(tmp_path, settings, problem):
-    journal = write_journal(tmp_path / "study.jsonl", settings)
+    journal = heretic_journal(tmp_path / "study.jsonl", settings)
     with pytest.raises(RunError, match=f"can't be rebuilt like for like: .*{problem}"):
         measure.heretic_trial(journal, 1, "pre")
 
@@ -622,16 +618,16 @@ def test_a_full_heretic_trial_read_after_the_runs_think_close_is_rebuilt_where_t
         "orthogonalize_direction": True,
         "response_prefix": "\n</think>\n\n",
     }
-    journal = write_journal(tmp_path / "study.jsonl", settings)
+    journal = heretic_journal(tmp_path / "study.jsonl", settings)
     edit = measure.heretic_trial(journal, 1, "full", "\n</think>\n\n")
     assert edit.answering and edit.direction_layer == 12.5
     with pytest.raises(RunError, match=r"a response prefix, .* that isn't the run's deployment\.think_close"):
         measure.heretic_trial(journal, 1, "full", "</think>")
     with pytest.raises(RunError, match='normalised rows as "full"'):
         measure.heretic_trial(journal, 1, "pre", "\n</think>\n\n")
-    plain = write_journal(tmp_path / "plain.jsonl", settings | {"response_prefix": ""})
+    plain = heretic_journal(tmp_path / "plain.jsonl", settings | {"response_prefix": ""})
     assert not measure.heretic_trial(plain, 1, "full").answering
-    ranked = write_journal(tmp_path / "rank.jsonl", settings | {"full_normalization_lora_rank": 4})
+    ranked = heretic_journal(tmp_path / "rank.jsonl", settings | {"full_normalization_lora_rank": 4})
     with pytest.raises(RunError, match='built "full" edits at rank 4, and candor at 3'):
         measure.heretic_trial(ranked, 1, "full", "\n</think>\n\n")
 
@@ -828,10 +824,10 @@ def test_a_thinking_runs_prompts_are_each_counted_once(tiny, monkeypatch):
 
 
 def test_another_seed_is_refused_for_a_run_that_answers_greedily(tiny):
-    config.write(tiny.folder.parent, "cli", tiny.settings, "made by a test")
-    result = CliRunner().invoke(app, ["measure", str(tiny.folder.parent / "cli"), "--seed", "1"])
+    folder = on_disk(tiny)
+    result = CliRunner().invoke(app, ["measure", str(folder), "--seed", "1"])
     assert result.exit_code == cli.FAILED_CHECK and "answers greedily" in result.output
-    assert not (tiny.folder.parent / "cli" / "measurements").exists()
+    assert not (folder / "measurements").exists()
 
 
 def test_measurements_after_different_unedited_thinking_arent_compared(tiny, monkeypatch):

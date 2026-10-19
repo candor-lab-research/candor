@@ -10,6 +10,7 @@ from pathlib import Path
 
 import optuna
 import pytest
+import torch
 from optuna.distributions import BaseDistribution, FloatDistribution, IntDistribution
 from optuna.samplers._tpe.sampler import default_gamma
 from optuna.study import StudyDirection
@@ -26,15 +27,18 @@ from candor.run import RunError
 from candor.search import Score, Search
 from candor.targets import Writer
 
-from .test_files import recorded_syncs
+from .helpers import flat, on_disk, recorded_syncs, small, write_journal
 from .tiny_gguf import END_THINK
 from .tiny_run import (
     ALWAYS_THINKING_TEMPLATE,
     ANSWERED,
     MESSAGE_WHEN_THINKING_TEMPLATE,
+    PLANNED_DIRECTIONS,
+    READ_DIRECTIONS,
     REFUSED,
     FakeGuard,
     fake_prompts,
+    fixed_directions,
     thinking,
     thinks_through,
 )
@@ -58,11 +62,6 @@ CHANGES = [
     (lambda s, m: m.setattr(search, "EDITS", search.EDITS + 1), "candor code"),
     (lambda s, m: m.setattr(optuna, "__version__", "9.9.9"), "Optuna"),
 ]
-
-
-def small(run, trials=2):
-    run.settings.search.trials_per_scope = trials
-    run.settings.search.startup_per_scope = 1
 
 
 def studies(run) -> dict[str, optuna.Study]:
@@ -182,6 +181,45 @@ def test_a_search_isnt_carried_on_or_scored_beside_once_anything_its_scores_depe
     assert model_files(tiny) == scored_with
 
 
+def test_candor_score_refused_for_another_model_file_leaves_the_run_as_it_was(tiny):
+    folder = cli_run(tiny)
+    runner = CliRunner(env={"COLUMNS": "200"})
+    assert runner.invoke(app, ["search", str(folder)]).exit_code == 0
+    scored_with = model_files(run.Run.open(folder))
+    path = folder / config.FILE
+    path.write_text(path.read_text().replace('quantization = "Q4_K_M"', 'quantization = "Q8_0"'))
+    refused = runner.invoke(app, ["score", str(folder), "--trial", "1"])
+    assert refused.exit_code == cli.FAILED_CHECK and "different model file" in refused.output
+    assert model_files(run.Run.open(folder)) == scored_with
+
+
+def test_a_search_refused_for_other_prompts_reads_no_directions_first(tiny, monkeypatch):
+    # The run's own directions stage, its residuals made up.
+    monkeypatch.setattr(run.Run, "directions", READ_DIRECTIONS)
+    monkeypatch.setattr(run.Run, "planned_directions", PLANNED_DIRECTIONS)
+    read = []
+
+    def read_directions(self, stale):
+        read.append(len(stale))
+        for path, inputs in stale.values():
+            partial = path.with_name(f"{path.name}.building")
+            torch.save(fixed_directions(self), partial)
+            self.commit(partial, path, inputs)
+
+    monkeypatch.setattr(run.Run, "_read_directions", read_directions)
+    small(tiny)
+    Search(tiny).search(1)
+    assert read == [1]
+    kept = tiny.path("directions.pt").read_bytes()
+    read.clear()
+    tiny.settings.prompts.harmful.split = "train[:399]"
+    with pytest.raises(RunError, match="different adapters"):
+        Search(tiny).search(2)
+    with pytest.raises(RunError, match="different adapters"):
+        Search(tiny).score([Edit("each", None, KERNELS)])
+    assert read == [] and tiny.path("directions.pt").read_bytes() == kept
+
+
 def model_files(run) -> dict[str, str]:
     """The run's GGUFs and adapters, by path, as digests of their bytes."""
     found = [p for folder in ("gguf", "adapters") for p in run.path(folder).rglob("*") if p.is_file()]
@@ -218,9 +256,15 @@ def test_the_unedited_models_first_tokens_are_read_once_a_search_until_the_machi
     Search(tiny).search(2)
     assert read == [True]
     read.clear()
+    here = tiny.machine()
     monkeypatch.setattr(run.Run, "machine", lambda self: {"platform": "linux-cuda", "gpus": ["NVIDIA A40"]})
     Search(tiny).search(3)
     assert read == [False, True]
+    # Back on the first machine, its own are still kept.
+    read.clear()
+    monkeypatch.setattr(run.Run, "machine", lambda self: here)
+    Search(tiny).search(4)
+    assert read == [True]
 
 
 def test_a_search_session_reads_only_the_harmful_test_prompts_from_their_dataset(tiny, monkeypatch):
@@ -413,8 +457,7 @@ def test_a_trials_recorded_edit_is_its_edit_and_needs_no_gguf(tiny):
 
 def test_search_and_measure_a_trial_from_the_command_line(tiny):
     small(tiny)
-    config.write(tiny.folder.parent, "cli", tiny.settings, "made by a test")
-    folder = tiny.folder.parent / "cli"
+    folder = on_disk(tiny)
     runner = CliRunner(env={"COLUMNS": "200"})
     searched = runner.invoke(app, ["search", str(folder), "--trials", "2"])
     assert searched.exit_code == 0, searched.output
@@ -796,7 +839,7 @@ def scorer_inputs(tiny):
 
 def test_the_search_shows_time_left_from_every_trial_of_the_session(tiny, monkeypatch):
     small(tiny)
-    config.write(tiny.folder.parent, "cli", tiny.settings, "made by a test")
+    folder = on_disk(tiny)
     made = []
     real = cli.Progress
 
@@ -805,7 +848,7 @@ def test_the_search_shows_time_left_from_every_trial_of_the_session(tiny, monkey
         return real(*args, **kwargs)
 
     monkeypatch.setattr(cli, "Progress", recording)
-    result = CliRunner().invoke(app, ["search", str(tiny.folder.parent / "cli"), "--trials", "1"])
+    result = CliRunner().invoke(app, ["search", str(folder), "--trials", "1"])
     assert result.exit_code == 0, result.output
     assert made[0]["speed_estimate_period"] >= 3600
 
@@ -1109,6 +1152,8 @@ def test_a_trial_scored_again_repeats_its_score_within_noise():
     assert search.differences(score(1, 0.1, 3), score(1, 0.1, 5)) == ["refused by keywords 3, not 5"]
     assert search.differences(score(1, 0.1, 3), score(1, 0.104, 3)) == ["KL 0.1000, not 0.1040"]
     assert search.differences(score(1, 0.1, 3), score(1, 0.1, 3, judged=8)) == ["judged 100, not 8"]
+    # KL too small to show apart is the same.
+    assert search.differences(score(1, 0.00012), score(1, 0.00009)) == []
 
 
 def test_the_searched_score_is_the_trials_own():
@@ -1124,41 +1169,9 @@ def test_the_searched_score_is_the_trials_own():
         search.searched_score(found, 1)
 
 
-def write_journal(path, direction_index):
-    settings = {"row_normalization": "pre", "orthogonalize_direction": True}
-    parameters = {
-        "attn.o_proj": {
-            "max_weight": 1.2,
-            "max_weight_position": 0.8,
-            "min_weight": 0.6,
-            "min_weight_distance": 0.6,
-        },
-        "mlp.down_proj": {
-            "max_weight": 1.0,
-            "max_weight_position": 1.0,
-            "min_weight": 0.5,
-            "min_weight_distance": 0.6,
-        },
-    }
-    ops = [
-        {"op_code": 2, "study_id": 0, "user_attr": {"settings": json.dumps(settings)}},
-        {"op_code": 8, "trial_id": 0, "user_attr": {"index": 1, "direction_index": direction_index}},
-        {"op_code": 8, "trial_id": 0, "user_attr": {"parameters": parameters, "refusals": 4}},
-        {"op_code": 8, "trial_id": 0, "user_attr": {"base_refusals": 96, "kl_divergence": 0.03}},
-    ]
-    path.write_text("".join(json.dumps(op) + "\n" for op in ops))
-    return path
-
-
-def flat(output: str) -> str:
-    """Command output with Rich's line breaks undone."""
-    return " ".join(output.split())
-
-
 def cli_run(tiny, trials=2):
     small(tiny, trials=trials)
-    config.write(tiny.folder.parent, "cli", tiny.settings, "made by a test")
-    return tiny.folder.parent / "cli"
+    return on_disk(tiny)
 
 
 def test_score_a_trial_and_a_heretic_trial_from_the_command_line(tiny):
@@ -1409,8 +1422,7 @@ def test_a_search_holding_only_one_kinds_study_still_loads(tiny):
 def test_the_report_names_each_kinds_best_at_each_count_its_edges_and_what_to_measure(tiny, monkeypatch):
     small(tiny, trials=3)
     tiny.settings.search.strength = (1.0, 1.0)  # every trial presses on the strength's ends
-    config.write(tiny.folder.parent, "cli", tiny.settings, "made by a test")
-    folder = tiny.folder.parent / "cli"
+    folder = on_disk(tiny)
     scripted(
         monkeypatch,
         [
@@ -1451,8 +1463,8 @@ def test_the_edge_alarm_waits_for_the_trials_the_search_aims(tiny):
     small(tiny)
     tiny.settings.search.startup_per_scope = 2
     tiny.settings.search.strength = (1.0, 1.0)
-    config.write(tiny.folder.parent, "cli", tiny.settings, "made by a test")
-    result = CliRunner(env={"COLUMNS": "200"}).invoke(app, ["search", str(tiny.folder.parent / "cli")])
+    folder = on_disk(tiny)
+    result = CliRunner(env={"COLUMNS": "200"}).invoke(app, ["search", str(folder)])
     assert result.exit_code == 0, result.output
     assert "It presses on the edge" not in flat(result.output)
 
@@ -1460,8 +1472,7 @@ def test_the_edge_alarm_waits_for_the_trials_the_search_aims(tiny):
 def test_with_nothing_within_the_cap_the_fewest_refused_of_each_kind_is_reported(tiny):
     small(tiny)
     tiny.settings.search.max_refusals = 0
-    config.write(tiny.folder.parent, "cli", tiny.settings, "made by a test")
-    folder = tiny.folder.parent / "cli"
+    folder = on_disk(tiny)
     result = CliRunner(env={"COLUMNS": "200"}).invoke(app, ["search", str(folder)])
     assert result.exit_code == 0, result.output
     shown = flat(result.output)
@@ -1536,11 +1547,9 @@ def test_the_search_scores_a_thinking_model_at_its_own_budget_with_the_same_seed
     scores = [search._score(trial) for trial in finished(tiny)]
     assert sum(score.thinking for score in scores) > 0 and all(0 <= s.forced <= s.judged for s in scores)
     assert all(score.kl_thinking is not None and score.kl_empty is not None for score in scores)
-    config.write(tiny.folder.parent, "cli", tiny.settings, "made by a test")
+    folder = on_disk(tiny)
     shown = flat(
-        CliRunner(env={"COLUMNS": "200"})
-        .invoke(app, ["search", str(tiny.folder.parent / "cli"), "--trials", "1"])
-        .output
+        CliRunner(env={"COLUMNS": "200"}).invoke(app, ["search", str(folder), "--trials", "1"]).output
     )
     assert (
         "tokens per answer on average across trials" in shown and "reached the search's budget of 6" in shown
@@ -1981,8 +1990,8 @@ def test_the_report_shows_a_widened_strength_and_judges_its_edges_by_it(tiny, mo
     small(tiny, trials=4)
     tiny.settings.search.strength = (1.0, 1.0)  # every trial at 1, on both ends until the ceiling widens
     tiny.settings.search.widest_strength = (1.0, 3.0)
-    config.write(tiny.folder.parent, "cli", tiny.settings, "made by a test")
-    result = CliRunner(env={"COLUMNS": "200"}).invoke(app, ["search", str(tiny.folder.parent / "cli")])
+    folder = on_disk(tiny)
+    result = CliRunner(env={"COLUMNS": "200"}).invoke(app, ["search", str(folder)])
     assert result.exit_code == 0, result.output
     shown = flat(result.output)
     assert "After 2 one layer trials no one layer edit is within the cap yet" in shown

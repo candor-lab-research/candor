@@ -60,7 +60,6 @@ class Writer:
 
 @dataclass
 class Targets:
-    stack: str
     writers: list[Writer] = field(default_factory=list)
     unclassified: list[str] = field(default_factory=list)
     missing: list[str] = field(default_factory=list)
@@ -118,9 +117,9 @@ def find_targets(shapes: dict[str, list[int]], hidden: int, layers: int) -> Targ
             stacks[match[1]].add(int(match[2]))
     stack, problem = _choose_stack(stacks, layers)
     if stack is None:
-        return Targets("", missing=[problem])
+        return Targets(missing=[problem])
 
-    targets = Targets(stack, extra_layers=sorted(stacks[stack] - set(range(layers))))
+    targets = Targets(extra_layers=sorted(stacks[stack] - set(range(layers))))
     scaled: set[str] = set()
     for name, shape in sorted(shapes.items()):
         match = LAYER.match(name)

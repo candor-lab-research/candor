@@ -2,7 +2,6 @@ import json
 import math
 import os
 import shutil
-import zlib
 from pathlib import Path
 from types import SimpleNamespace
 from typing import Any
@@ -12,7 +11,6 @@ import pytest
 import torch
 import torch.nn.functional as F
 from datasets.exceptions import DatasetNotFoundError
-from safetensors.torch import save_file
 
 from candor import config, directions, files, run, targets
 from candor.edit import RowNorm, edit_factors, rank_one
@@ -23,27 +21,23 @@ from candor.run import Run, RunError
 from candor.weights import ModelFiles
 
 from .custom_code import write_custom_code_model
-from .test_engine import LLAMA_SERVER
-from .test_targets import llama
+from .helpers import (
+    LLAMA_SERVER,
+    TEMPLATE,
+    adapter_factors,
+    fake_everything_but_the_stages,
+    fake_residuals,
+    llama,
+    pinned,
+    residuals_of,
+    short,
+    write_llama,
+)
 from .tiny_gguf import random_weights, write_model
 
 HIDDEN, LAYERS = 64, 2
 GGUF = {"gguf/model-BF16.gguf", "gguf/model-Q4_K_M.gguf"}
 ADAPTERS = {"adapters/per-layer", "adapters/layer-0", "adapters/layer-1"}
-
-
-def write_llama(folder: Path) -> Path:
-    folder.mkdir()
-    torch.manual_seed(7)
-    save_file({name: torch.randn(shape) for name, shape in llama().items()}, folder / "model.safetensors")
-    model_config = {"architectures": ["LlamaForCausalLM"], "hidden_size": HIDDEN, "num_hidden_layers": LAYERS}
-    (folder / "config.json").write_text(json.dumps(model_config | {"max_position_embeddings": 256}))
-    return folder
-
-
-@pytest.fixture
-def model(tmp_path):
-    return write_llama(tmp_path / "model")
 
 
 @pytest.fixture
@@ -56,11 +50,6 @@ def directions_by_seed():
         return F.normalize(torch.randn(LAYERS + 1, HIDDEN, generator=generator), dim=-1)
 
     return state, found
-
-
-def short() -> config.Measure:
-    """Measure settings that fit the tiny test models' 256 tokens of context."""
-    return config.Measure(answer_tokens=16, maths_answer_tokens=16, maths_instruction="Answer.")
 
 
 @pytest.fixture
@@ -78,44 +67,6 @@ def current(tmp_path, model, monkeypatch, directions_by_seed):
 
     monkeypatch.setattr(Run, "directions", fake_directions)
     return Run(folder, settings, report=messages.append), messages
-
-
-class Loaded(torch.nn.Module):
-    """Stands in for a model loaded by transformers when the residuals are faked."""
-
-
-def residuals_of(prompts: list[list[int]]) -> torch.Tensor:
-    """The residuals fake_residuals gives for these prompts."""
-    generator = torch.Generator().manual_seed(zlib.crc32(json.dumps(prompts).encode()))
-    return torch.randn(len(prompts), LAYERS + 1, HIDDEN, generator=generator)
-
-
-def fake_residuals(monkeypatch) -> SimpleNamespace:
-    """Residuals fixed by the prompts they are read for. Returns how each model and tokenizer was loaded."""
-    loads = SimpleNamespace(models=[], tokenizers=[])
-
-    def residuals(model, prompts, pad_id):
-        return residuals_of(prompts)
-
-    def load_model(folder, **kwargs):
-        loads.models.append(kwargs)
-        return Loaded()
-
-    def pad_token_id_for(folder, trust_remote_code):
-        loads.tokenizers.append(trust_remote_code)
-        return 0
-
-    monkeypatch.setattr(run.residuals, "last_token_residuals", residuals)
-    monkeypatch.setattr(run.residuals, "pad_token_id_for", pad_token_id_for)
-    monkeypatch.setattr("transformers.AutoModelForCausalLM.from_pretrained", load_model)
-    return loads
-
-
-def adapter_factors(path):
-    tensors = {t.name: torch.from_numpy(t.data.copy()) for t in gguf.GGUFReader(path).tensors}
-    a = next(v for k, v in tensors.items() if k.endswith("lora_a"))
-    b = next(v for k, v in tensors.items() if k.endswith("lora_b"))
-    return b, a
 
 
 def rebuilt(messages: list[str]) -> set[str]:
@@ -657,7 +608,7 @@ def test_the_kv_cache_type_reaches_llama_server(current, monkeypatch):
     this, _ = current
     monkeypatch.setattr(run.toolchain, "binaries", lambda: Path("/bin"))
     this.settings.deployment.kv_cache = "q8_0"
-    assert this.server(Path("m.gguf")).extra == [
+    assert this.server(Path("m.gguf"), context_per_slot=64, parallel=1).extra == [
         "--cache-type-k",
         "q8_0",
         "--cache-type-v",
@@ -666,25 +617,30 @@ def test_the_kv_cache_type_reaches_llama_server(current, monkeypatch):
         "on",
     ]
     this.settings.deployment.kv_cache = "f16"
-    assert this.server(Path("m.gguf")).extra == ["--cache-type-k", "f16", "--cache-type-v", "f16"]
+    assert this.server(Path("m.gguf"), context_per_slot=64, parallel=1).extra == [
+        "--cache-type-k",
+        "f16",
+        "--cache-type-v",
+        "f16",
+    ]
 
 
 def test_on_cuda_the_server_must_run_on_the_gpus(current, monkeypatch):
     this, _ = current
     monkeypatch.setattr(run.toolchain, "binaries", lambda: Path("/bin"))
-    assert "--device" not in this.server(Path("m.gguf")).extra
+    assert "--device" not in this.server(Path("m.gguf"), context_per_slot=64, parallel=1).extra
     monkeypatch.setattr(run.toolchain, "on_cuda", lambda: True)
     monkeypatch.setattr(run.toolchain, "_check_gpu", lambda folder: ("CUDA0", "CUDA1"))
-    extra = this.server(Path("m.gguf")).extra
+    extra = this.server(Path("m.gguf"), context_per_slot=64, parallel=1).extra
     assert extra[extra.index("--device") + 1] == "CUDA0,CUDA1"
 
 
 def test_a_sampled_run_samples_on_the_gpu(current, monkeypatch):
     this, _ = current
     monkeypatch.setattr(run.toolchain, "binaries", lambda: Path("/bin"))
-    assert "--backend-sampling" not in this.server(Path("m.gguf")).extra
+    assert "--backend-sampling" not in this.server(Path("m.gguf"), context_per_slot=64, parallel=1).extra
     this.settings.sampling = config.Sampling(temperature=1.0)
-    assert this.server(Path("m.gguf")).extra[-1] == "--backend-sampling"
+    assert this.server(Path("m.gguf"), context_per_slot=64, parallel=1).extra[-1] == "--backend-sampling"
 
 
 def test_overflowing_activations_stop_the_run(tmp_path, model, monkeypatch):
@@ -853,11 +809,6 @@ def test_a_change_where_the_thinking_starts_rebuilds_only_whats_read_there(tmp_p
     assert rebuilt(messages) == {"directions.pt"} | ADAPTERS
 
 
-TEMPLATE = (
-    "{%- if not date_string is defined %}{%- set date_string = strftime_now('%d %b %Y') %}{%- endif %}"
-    "<s>Today: {{ date_string }}\n{% for m in messages %}{{ m['role'] }}: {{ m['content'] }}\n{% endfor %}"
-    "{% if add_generation_prompt %}assistant:{% endif %}"
-)
 IGNORES_THE_DATE = (
     "<s>Today: {{ strftime_now('%d %b %Y') }}\n{% for m in messages %}{{ m['content'] }}{% endfor %}"
 )
@@ -1051,10 +1002,10 @@ def test_a_long_server_log_is_kept_as_the_last_one_when_a_server_starts(current,
     log = this.path("logs", "server.log")
     log.parent.mkdir()
     log.write_bytes(b"x" * 10)
-    this.server(Path("m.gguf"))
+    this.server(Path("m.gguf"), context_per_slot=64, parallel=1)
     assert log.exists() and not log.with_name("server.log.1").exists()
     monkeypatch.setattr(run, "LOG_BYTES", 5)
-    this.server(Path("m.gguf"))
+    this.server(Path("m.gguf"), context_per_slot=64, parallel=1)
     assert not log.exists() and log.with_name("server.log.1").read_bytes() == b"x" * 10
 
 
@@ -1124,22 +1075,6 @@ def test_raising_the_answer_length_later_is_still_checked(tiny_run):
     this.settings.scoring.answer_tokens = 250
     with pytest.raises(RunError, match="too long"):
         this.prompt_ids()
-
-
-def fake_everything_but_the_stages(monkeypatch, tiny: Path) -> None:
-    """The converter copies a tiny random GGUF, and residuals are random but fixed by their prompts."""
-    monkeypatch.setenv("CANDOR_LLAMA_BIN", str(LLAMA_SERVER.parent))
-    monkeypatch.setattr(
-        run.convert, "to_gguf", lambda folder, destination, log: shutil.copy(tiny, destination)
-    )
-    monkeypatch.setattr(run.convert, "quantize", lambda base, destination, *_: shutil.copy(base, destination))
-    monkeypatch.setattr(run.convert, "check_targets", lambda *_: [])
-    monkeypatch.setattr(run, "load_prompts", lambda spec: [f"first prompt {spec.split}", "second"])
-    fake_residuals(monkeypatch)
-
-
-def pinned(model: Path) -> config.RunConfig:
-    return config.RunConfig(model=config.Model(source=str(model), date="01 Jan 2020"), measure=short())
 
 
 @pytest.fixture(scope="module")

@@ -12,21 +12,16 @@ from candor import config, measure, run, search
 from candor.engine import LlamaServer
 from candor.run import Run
 
-from .test_engine import LLAMA_SERVER
-from .test_run import TEMPLATE, fake_everything_but_the_stages, pinned
+from .helpers import (
+    HF_NAMES,
+    LLAMA_SERVER,
+    TEMPLATE,
+    THINKING_TEMPLATE,
+    fake_everything_but_the_stages,
+    pinned,
+)
 from .tiny_gguf import HIDDEN, LAYERS, random_weights, write_model
 
-# A thinking model's template that turns thinking off with an empty thinking block, as Qwen3.5's does.
-# It writes past thinking too, by which llama-server knows it thinks and leaves its thinking on.
-THINKING_TEMPLATE = TEMPLATE.replace(
-    "{{ m['content'] }}",
-    "{% if m.reasoning_content %}<think>\n{{ m.reasoning_content }}\n</think>\n\n{% endif %}"
-    "{{ m['content'] }}",
-).replace(
-    "assistant:{% endif %}",
-    "assistant:<think>\n{% if enable_thinking is defined and not enable_thinking %}"
-    "{{ '\\n</think>\\n\\n' }}{% endif %}{% endif %}",
-)
 # Qwen3.8's: thinking adds a system message, at every reasoning effort but medium, that turning it
 # off leaves out.
 MESSAGE_WHEN_THINKING_TEMPLATE = (
@@ -76,19 +71,6 @@ class FakeGuard:
         pass
 
 
-HF_NAMES = {
-    "attn_q": "self_attn.q_proj",
-    "attn_k": "self_attn.k_proj",
-    "attn_v": "self_attn.v_proj",
-    "attn_output": "self_attn.o_proj",
-    "ffn_gate": "mlp.gate_proj",
-    "ffn_up": "mlp.up_proj",
-    "ffn_down": "mlp.down_proj",
-    "attn_norm": "input_layernorm",
-    "ffn_norm": "post_attention_layernorm",
-}
-
-
 def write_matching_llama(folder):
     """A Hugging Face folder holding the tiny GGUF's own layer weights, so adapters made from it fit
     the model llama-server runs."""
@@ -104,12 +86,22 @@ def write_matching_llama(folder):
     return folder
 
 
-def fixed_directions(self, answering=False):
-    """Made-up directions, different where the answer starts, instead of reading residuals."""
+# The run's own, which the tiny run replaces, for a test that needs them.
+READ_DIRECTIONS, PLANNED_DIRECTIONS = Run.directions, Run.planned_directions
+
+
+def fixed_plan(self):
+    """The made-up directions named in the run's inputs, as Run.planned_directions names real ones."""
     self.prompt_ids()
     self.inputs["directions"] = "fixed"
     if self.settings.deployment.think_close:
         self.inputs["answering directions"] = "fixed, answering"
+    return {}
+
+
+def fixed_directions(self, answering=False):
+    """Made-up directions, different where the answer starts, instead of reading residuals."""
+    fixed_plan(self)
     seed = torch.Generator().manual_seed(1 if answering else 0)
     return F.normalize(torch.randn(LAYERS + 1, HIDDEN, generator=seed), dim=-1)
 
@@ -123,6 +115,7 @@ def tiny_run(tmp_path, monkeypatch) -> Run:
     model = write_matching_llama(tmp_path / "model")
     fake_everything_but_the_stages(monkeypatch, tmp_path / "tiny.gguf")
     monkeypatch.setattr(Run, "directions", fixed_directions)
+    monkeypatch.setattr(Run, "planned_directions", fixed_plan)
     monkeypatch.setattr(run, "load_prompts", fake_prompts)
     monkeypatch.setattr(measure, "load_prompts", fake_prompts)
     monkeypatch.setattr(measure, "Guard", FakeGuard)

@@ -11,22 +11,9 @@ from candor.targets import (
     recurrent_bytes_per_slot,
 )
 
+from .helpers import LLAMA_3B, QWEN35, llama
+
 HIDDEN = 64
-
-
-def llama(layers: int = 2, prefix: str = "model.layers") -> dict[str, list[int]]:
-    shapes = {}
-    for i in range(layers):
-        shapes |= {
-            f"{prefix}.{i}.self_attn.q_proj.weight": [HIDDEN, HIDDEN],
-            f"{prefix}.{i}.self_attn.k_proj.weight": [16, HIDDEN],
-            f"{prefix}.{i}.self_attn.o_proj.weight": [HIDDEN, HIDDEN],
-            f"{prefix}.{i}.mlp.up_proj.weight": [128, HIDDEN],
-            f"{prefix}.{i}.mlp.gate_proj.weight": [128, HIDDEN],
-            f"{prefix}.{i}.mlp.down_proj.weight": [HIDDEN, 128],
-            f"{prefix}.{i}.input_layernorm.weight": [HIDDEN],
-        }
-    return shapes
 
 
 def test_finds_writers_and_ignores_same_shaped_readers():
@@ -54,7 +41,7 @@ def test_hybrid_linear_attention_and_extra_stacks():
     shapes["mtp.layers.0.mlp.down_proj.weight"] = [HIDDEN, 128]
     found = find_targets(shapes, HIDDEN, 4)
     assert found.ok
-    assert found.stack == "model.language_model.layers"
+    assert all(w.name.startswith("model.language_model.layers.") for w in found.writers)
     assert found.summary()["attn"] == {"linear_attn.out_proj": 2, "self_attn.o_proj": 2}
     assert not any(w.name.startswith("mtp.") for w in found.writers)
 
@@ -95,7 +82,7 @@ def test_a_vision_stack_of_the_same_depth_is_ignored():
     shapes = llama() | llama(prefix="model.vision_tower.layers")
     found = find_targets(shapes, HIDDEN, 2)
     assert found.ok
-    assert found.stack == "model.layers"
+    assert all(w.name.startswith("model.layers.") for w in found.writers)
 
 
 def test_fused_experts_without_a_weight_suffix_are_found():
@@ -178,27 +165,11 @@ def test_gguf_architecture_prefers_text_config_like_the_converter():
         "architectures": ["KimiK3ForConditionalGeneration"],
         "text_config": {"architectures": ["LlamaForCausalLM"]},
     }
-    assert gguf_architecture(exception) != "llama"
+    assert gguf_architecture(exception) == "kimi-k3"
 
 
-# Qwen3.5-9B's sizes: a full-attention layer after every three linear-attention ones.
-QWEN35 = {
-    "num_hidden_layers": 32,
-    "num_attention_heads": 16,
-    "num_key_value_heads": 4,
-    "head_dim": 256,
-    "hidden_size": 4096,
-    "layer_types": (["linear_attention"] * 3 + ["full_attention"]) * 8,
-    "linear_conv_kernel_dim": 4,
-    "linear_key_head_dim": 128,
-    "linear_num_key_heads": 16,
-    "linear_value_head_dim": 128,
-    "linear_num_value_heads": 32,
-}
 # As a derivative may give it: no layer_types, so llama.cpp goes by full_attention_interval.
 QWEN35_BY_INTERVAL = {k: v for k, v in QWEN35.items() if k != "layer_types"}
-# rude-llama's, a Llama 3.2 3B.
-LLAMA_3B = {"num_hidden_layers": 28, "num_attention_heads": 24, "num_key_value_heads": 8, "hidden_size": 3072}
 SMOLLM2 = {"num_hidden_layers": 30, "num_attention_heads": 9, "num_key_value_heads": 3, "hidden_size": 576}
 
 

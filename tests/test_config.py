@@ -1,12 +1,12 @@
+import re
+
 import pytest
 from pydantic import ValidationError
 
 from candor import config
 from candor.config import ConfigError, Model, RunConfig
 
-
-def settings(**model) -> RunConfig:
-    return RunConfig(model=Model.model_validate({"source": "org/model"} | model))
+from .helpers import settings
 
 
 def write_text(tmp_path, text: str):
@@ -42,12 +42,9 @@ def test_a_character_utf8_cannot_hold_is_refused_before_writing():
 def test_every_setting_and_section_has_an_explanation():
     lines = config.render(settings(), "header").splitlines()
     for i, line in enumerate(lines):
-        is_setting = " = " in line or line.endswith(" =")
-        if (
-            line.startswith("[")
-            or (is_setting and not line.startswith("# "))
-            or line in ("# date =", "# revision =", "# judge_revision =", "# search =", "# max_budget_hits =")
-        ):
+        # A setting left unset is written as a comment, "# name =".
+        unset = re.fullmatch(r"# \w+ =", line) is not None
+        if line.startswith("[") or (" = " in line and not line.startswith("#")) or unset:
             assert lines[i - 1].startswith("# ") and not lines[i - 1].endswith(" ="), (
                 f"{line!r} has no comment above it"
             )
@@ -76,8 +73,7 @@ def test_a_misspelt_setting_is_named(tmp_path):
 )
 def test_a_missing_setting_is_an_error_not_a_default(tmp_path, line, name):
     text = config.render(settings(), "h")
-    cut = text[: text.index("# The search over edits.")] if line == "[search]" else text.replace(line, "")
-    text = cut
+    text = text[: text.index("# The search over edits.")] if line == "[search]" else text.replace(line, "")
     with pytest.raises(ConfigError, match=f"missing settings.*{name}"):
         config.load(write_text(tmp_path, text))
 
@@ -219,8 +215,8 @@ def test_an_upgrade_fills_in_missing_settings_and_keeps_the_rest(tmp_path):
     text = config.render(settings(source="/models/mine"), "Made by init\nfor a run")
     held_out = next(line for line in text.splitlines() if line.startswith("harmful_held_out = "))
     text = text.replace(held_out + "\n", "").replace("trials_per_scope = 300", "trials_per_scope = 123")
-    upgraded, added, retired, header = config.load_for_upgrade(write_text(tmp_path, text))
-    assert added == ["prompts.harmful_held_out"] and retired == []
+    upgraded, added, header = config.load_for_upgrade(write_text(tmp_path, text))
+    assert added == ["prompts.harmful_held_out"]
     assert header == "Made by init\nfor a run"
     assert upgraded.prompts.harmful_held_out == config.Prompts().harmful_held_out
     assert upgraded.search.trials_per_scope == 123 and upgraded.model.source == "/models/mine"
@@ -243,23 +239,6 @@ def test_an_unpinned_prompt_set_is_left_floating(tmp_path):
     unpinned = 'harmful = { dataset = "mlabonne/harmful_behaviors", split = "train[:400]", column = "text" }'
     assert unpinned in rendered
     assert config.load(write_text(tmp_path, rendered)).prompts.harmful.revision is None
-
-
-def test_settings_candor_no_longer_uses_are_refused_and_upgrade_removes_them(tmp_path):
-    text = config.render(settings(), "h")
-    old = "trials = 200\nstartup_trials = 60\nkl_target = 0.01\n"
-    text = text.replace("trials_per_scope = 300\n", "").replace("startup_per_scope = 20\n", "")
-    text = text.replace("[search]\n", "[search]\n" + old)
-    path = write_text(tmp_path, text)
-    with pytest.raises(
-        ConfigError,
-        match=r"no longer uses: search\.trials \(.*search\.trials_per_scope\).*candor upgrade removes them",
-    ):
-        config.load(path)
-    upgraded, added, retired, _ = config.load_for_upgrade(path)
-    assert retired == ["search.trials", "search.startup_trials", "search.kl_target"]
-    assert added == ["search.trials_per_scope", "search.startup_per_scope"]
-    assert upgraded.search == config.Search()
 
 
 def test_a_thinking_model_needs_a_budget_and_one_end_tag():
