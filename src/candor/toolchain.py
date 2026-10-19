@@ -297,8 +297,8 @@ def converter() -> tuple[Path, Path]:
             requirements = source / "requirements" / "requirements-convert_hf_to_gguf.txt"
             shutil.rmtree(venv, ignore_errors=True)
             subprocess.run([uv, "venv", "--quiet", "--python", "3.12", str(venv)], check=True)
-            install = [uv, "pip", "install", "--quiet", "--python", str(python),
-                       "-r", str(requirements), "-c", str(CONSTRAINTS)]  # fmt: skip
+            install = [uv, "pip", "install", "--quiet", "--python", str(python), "--index-strategy",
+                       "unsafe-best-match", "-r", str(requirements), "-c", str(CONSTRAINTS)]  # fmt: skip
             subprocess.run(install, check=True)
             installed.write_text(pinned)
     return python, source / "convert_hf_to_gguf.py"

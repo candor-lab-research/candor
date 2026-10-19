@@ -5,6 +5,7 @@ description = "Remove a model's refusal direction, scored the way you actually r
 readme = "README.md"
 requires-python = ">=3.12"
 dependencies = [
+    # Never imported, but transformers needs it to load a model with device_map.
     "accelerate>=1.10",
     "datasets>=4",
     # The same llama.cpp release as the engine, so tensor and architecture names always agree.
@@ -32,6 +33,13 @@ dev = [
     "pytest>=9",
     "pytest-xdist>=3.8.0",
     "ruff>=0.17",
+]
+
+[tool.uv]
+# The platforms toolchain.py has a llama.cpp build for.
+environments = [
+    "sys_platform == 'darwin' and platform_machine == 'arm64'",
+    "sys_platform == 'linux' and platform_machine == 'x86_64'",
 ]
 
 [tool.uv.sources]

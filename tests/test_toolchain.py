@@ -2,6 +2,7 @@ import importlib.metadata
 import io
 import json
 import os
+import re
 import shutil
 import socket
 import subprocess
@@ -266,6 +267,11 @@ def test_every_pin_of_llama_cpp_is_the_same_commit():
     assert installed["vcs_info"]["requested_revision"] == LLAMA_CPP_RELEASE
     assert installed["vcs_info"]["commit_id"] == toolchain.COMMIT
     assert table["commit"] == toolchain.COMMIT
+
+
+def test_the_converter_pins_were_made_for_the_pinned_release():
+    header = [line for line in toolchain.CONSTRAINTS.read_text().splitlines() if line.startswith("#")]
+    assert re.search(rf"\bllama\.cpp {LLAMA_CPP_RELEASE}\b", "\n".join(header))
 
 
 def test_a_changed_converter_checkout_is_refused(converter_source):
