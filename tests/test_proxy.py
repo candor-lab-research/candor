@@ -41,7 +41,6 @@ def test_a_thinking_off_search_shows_no_thinking_it_didnt_do(tiny, monkeypatch):
     result = CliRunner(env={"COLUMNS": "200"}).invoke(app, ["search", str(folder)])
     assert result.exit_code == 0, result.output
     assert "reached the search's budget" not in result.output
-    assert "after an empty thinking block" in result.output
 
 
 def test_a_multiple_is_shown_once_where_its_strengths_differ_only_by_rounding():

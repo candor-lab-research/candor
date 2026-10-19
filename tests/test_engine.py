@@ -14,18 +14,19 @@ import sys
 import time
 from concurrent.futures import ThreadPoolExecutor
 from pathlib import Path
+from threading import Lock
 
 import pytest
 import torch
 import torch.nn.functional as F
 
-from candor import engine, kl, toolchain
+from candor import engine, toolchain
 from candor.adapters import write_adapter
 from candor.edit import RowNorm, rank_one
 from candor.engine import MAX_ARGUMENT, Answer, LlamaServer, ServerError, Thinking
 from candor.run import seeds as run_seeds
 
-from .helpers import KV_FAILED, LLAMA_SERVER, NO_ROOM, stub
+from .helpers import KV_FAILED, LLAMA_SERVER, NO_ROOM, mean_from_top, stub
 from .tiny_gguf import (
     END_THINK,
     FIRST_WORD,
@@ -84,7 +85,7 @@ def stop_later():
 
 
 def assert_same(a: list[dict[int, float]], b: list[dict[int, float]]) -> None:
-    assert kl.mean_from_top(a, b) < 1e-4
+    assert mean_from_top(a, b) < 1e-4
     assert [max(x, key=x.__getitem__) for x in a] == [max(y, key=y.__getitem__) for y in b]
 
 
@@ -110,7 +111,7 @@ def test_adapters_at_their_strengths_match_the_merged_model(files, references):
     with server(folder, "base.gguf", [*scales, unused]) as s:
         edited = s.top_logprobs(PROMPTS, 50, scales)
     assert_same(edited, merged)
-    assert kl.mean_from_top(base, merged) > 1e-3
+    assert mean_from_top(base, merged) > 1e-3
 
 
 def test_adapters_load_from_folders_with_commas_and_quotes(files, references, tmp_path):
@@ -573,6 +574,15 @@ def test_a_failed_batch_of_first_tokens_stops_every_request_of_it(monkeypatch):
     assert given[0] is not None and all(requests is given[0] for requests in given) and given[0].stopped
 
 
+def waited(condition, seconds: float = 5, every: float = 0.05) -> None:
+    """Wait until condition holds, checking it every so many seconds, and fail if it doesn't within
+    seconds."""
+    deadline = time.monotonic() + seconds
+    while not condition():
+        assert time.monotonic() < deadline, f"not so after {seconds} s"
+        time.sleep(every)
+
+
 # Sampling that keeps every token, so seeds decide the answers.
 SAMPLED = {"temperature": 1.0, "top_k": 0, "top_p": 1.0, "min_p": 0.0}
 NEWLINE = len(SPECIAL) + 0x0A
@@ -594,23 +604,35 @@ def test_a_server_stopped_while_answering_stops_at_once(tmp_path, monkeypatch, b
     )
     real_terminate, real_complete = engine.terminate, s._complete
     monkeypatch.setattr(engine, "terminate", lambda process: real_terminate(process, timeout=10))
-    sent = []
+    sent, lock = [], Lock()
+
+    def answering() -> bool:
+        return any(slot["is_processing"] for slot in s._call("GET", "/slots"))
 
     def complete(payload, requests=None):
-        sent.append(payload)
-        if len(sent) == 2:
-            # Stopped, as by Ctrl-C, while the other answer is well under way.
-            time.sleep(0.5)
+        with lock:
+            sent.append(payload)
+            second = len(sent) == 2
+        if second:
+            # Stopped, as by Ctrl-C, once the other answer is under way.
+            waited(answering)
             raise KeyboardInterrupt
         return real_complete(payload, requests)
 
     monkeypatch.setattr(s, "_complete", complete)
     long = Thinking(THINK, END_THINK, END_THINK, THINK, 6000, "")
     with pytest.raises(KeyboardInterrupt), s:
-        if batch == "generate":
-            s.generate(PROMPTS[:2], 6000)
-        else:
-            s.thoughts(PROMPTS[:2], engine.GREEDY, [0, 0], long)
+        try:
+            if batch == "generate":
+                s.generate(PROMPTS[:2], 6000)
+            else:
+                s.thoughts(PROMPTS[:2], engine.GREEDY, [0, 0], long)
+        finally:
+            # Its connection closed, the answer is dropped once a second passes with no request
+            # finishing (see Requests), so the server is asked less often than that, and stopped only
+            # once it has dropped it: llama-server's SIGTERM handler takes a lock its main loop holds
+            # while it answers, so a signal landing there hangs it.
+            waited(lambda: not answering(), seconds=6, every=1.5)
     # llama-server waits for the answer it is working on to be closed before it stops: not killed
     # after the wait, as it would be were that answer still open.
     assert s.process is not None and s.process.returncode == 0

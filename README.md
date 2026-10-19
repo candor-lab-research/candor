@@ -116,8 +116,9 @@ uv run candor                                                  # or all of it fr
   KL is read where the answer starts after the unedited model's own thinking, leaving out prompts
   whose thinking ran out its budget. That thinking is sampled once for each set of settings and
   kept, never sampled over, since sampling it again wouldn't give the same (`thinking/`; the
-  thinking itself only as token ids in `private/`). KL after an empty thinking block, as heretic
-  read it, and where the thinking starts are kept beside it.
+  thinking itself only as token ids in `private/`). `measure` also reads KL after an empty thinking
+  block, as heretic read it, and where the thinking starts; the search reads neither, since none of
+  its choices use them.
 - Answers are greedy unless `[sampling]` says otherwise. Set it to the settings you chat with, such as
   a thinking model card's recommended ones: the search, measurements and `serve` then all sample
   that way, each prompt with a seed of its own that is the same for every edit, so two edits are
@@ -173,27 +174,30 @@ uv run candor                                                  # or all of it fr
   prompts, except for a trial stopped so, which can't win. For a thinking model
   `search.max_budget_hits` (unset) can also cap the test prompts whose thinking reaches the budget:
   an edit over it doesn't count, and its trial stops there, which unlike the refusal stop can change
-  later draws. Changing it carries a search on, its finished trials judged
-  again by the new number. Nothing a model writes is kept. Strength starts at heretic's 0.8-1.5. From
-  a kind's 60th trial, and every 30th after, if its best edit within the cap presses an end of that range
-  (or none is within the cap yet: the ceiling), that end moves out to `search.widest_strength`
-  (0.5-3.0), once; the kind's trials carry on and 10 evenly spread trials start the wider range.
-  For a thinking model the 20 start points are split evenly between the two places directions are
-  read. It resumes where it stopped, refuses to carry on a search made under other settings before it
-  rebuilds anything, and `--trials N` stops early to time it. The unedited model's first tokens, which
-  KL is read against, are kept in `search/base-first-tokens/` for each set of inputs and machine, so
-  every session sets its trials against the same ones; a search carried on on another machine says
-  so, as KL read there can differ by a few percent. It ends with the fully scored trials no other
-  beats on both refusals and KL; for each kind, any strength it widened to, and the least-KL trial at
-  each count within the cap unless one refusing fewer has less (or, failing that, the one that refused
-  fewest), each flagged if it presses on the edge of a range; and the commands to measure each on the
-  held-out prompts, since 100 test prompts can't tell 0 refused from 2. Every `search.report_every`
-  trials (25; 0 for never) it shows its pace and the time left, and for each kind its trials, how
-  many stopped early, its best so far as the end picks it (least KL within the cap, or else fewest
-  refused) with that trial's strengths against the kind's range, and the trials since that best
-  improved, keeping the latest report in `search/progress.json`. The setting is left out of the
-  search's record, so changing it never stops a search carrying on. The results files explain the
-  design: `results/phase-2-rude-llama.md` and, for widening and the two places,
+  later draws. Changing it carries a search on, its finished trials judged again by the new number.
+  Nothing a model writes is kept. Strength starts at heretic's 0.8-1.5. From a kind's 60th trial,
+  and every 30th after, if its best edit within the cap presses an end of that range (or none is
+  within the cap yet: the ceiling), that end moves out to `search.widest_strength` (0.5-3.0), once;
+  the kind's trials carry on and 10 evenly spread trials start the wider range. For a thinking model
+  the 20 start points are split evenly between the two places directions are read. It resumes where
+  it stopped, refuses to carry on a search made under other settings before it rebuilds anything,
+  and `--trials N` stops early to time it. The unedited model's first tokens, which KL is read
+  against, are kept in `search/base-first-tokens/` for each set of inputs and machine, so every
+  session sets its trials against the same ones; a search carried on on another machine says so, as
+  KL read there can differ by a few percent. It ends with the fully scored trials no other beats on
+  both refusals and KL; for each kind, any strength it widened to, and the least-KL trial at each
+  count within the cap unless one refusing fewer has less (or, failing that, the one that refused
+  fewest), each flagged if it presses on the edge of a range and shown with how much more KL it has
+  than its kind's least, paired by prompt, a tie within 2 standard errors (each trial keeps its KL
+  at every prompt KL is read on; one scored before candor kept them shows none); and the commands to
+  measure each on the held-out prompts, since 100 test prompts can't tell 0 refused from 2. The ties
+  only guide: they change none of the trials named. Every `search.report_every` trials (25; 0 for
+  never) it shows its pace and the time left, and for each kind its trials, how many stopped early,
+  its best so far as the end picks it (least KL within the cap, or else fewest refused) with that
+  trial's strengths against the kind's range, and the trials since that best improved, keeping the
+  latest report in `search/progress.json`. The setting is left out of the search's record, so
+  changing it never stops a search carrying on. The results files explain the design:
+  `results/phase-2-rude-llama.md` and, for widening and the two places,
   `results/phase-3-qwen3.5-9b.md`.
 - `score` scores one edit exactly as the search scores its trials, without adding it to the search.
   A heretic trial is scored as rebuilt, and at the nearest whole layer as the search could draw it;

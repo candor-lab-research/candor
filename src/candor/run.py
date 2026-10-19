@@ -52,9 +52,9 @@ HELD_OUT = ("harmful_held_out", "harmless_held_out")
 # unedited model's own thinking (thinking/).
 KL_SETS = ("harmless_test", "harmless_held_out")
 # For a thinking model, these sets are also kept with an empty thinking block closed after the prompt,
-# under their names and ANSWERING: directions are read there as well as where the thinking starts, KL
-# there is kept beside the KL the search aims at, as heretic read KL, and the search may score its test
-# prompts there with thinking off.
+# under their names and ANSWERING: directions are read there as well as where the thinking starts,
+# candor measure reads KL there beside the KL the search aims at, as heretic read KL, and the search may
+# score its test prompts there with thinking off.
 CLOSED_SETS = ("harmful", "harmless", *KL_SETS, "harmful_test")
 ANSWERING = "_answering"
 # The names of a thinking model's adapter sets read where the answer starts begin with this.

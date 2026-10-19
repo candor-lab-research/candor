@@ -1075,7 +1075,7 @@ def search_command(
         f"The least KL of each kind at each count within the cap ({caps}), unless a trial "
         "refusing fewer has less:"
     )
-    picks = []
+    picks, gaps_shown = [], False
     for scope in search.SCOPES:
         best = search.to_measure(found, scope, space)
         fewest = search.fewest_refused(found, scope)
@@ -1093,7 +1093,9 @@ def search_command(
                 f"KL {candidate.kl:.4f}"
             )
             if best:
-                console.print(f"  {scope}: {described}")
+                against = _against_least(found, candidate, best[-1])
+                gaps_shown = gaps_shown or bool(against)
+                console.print(f"  {scope}: {described}{against}")
             else:
                 none = f"none refused {cap} or fewer" if hits is None else "none within the cap"
                 console.print(f"  {scope}: {none}; the fewest refused: {described}")
@@ -1103,6 +1105,11 @@ def search_command(
                     "so a better edit may lie outside them."
                 )
             picks.append(candidate.trial)
+    if gaps_shown:
+        console.print(
+            f"A gap within {search.TIE_SE} standard errors is a tie: the test prompts can't tell the two "
+            "apart by KL."
+        )
     if run.settings.deployment.think_close:
         _thinking_summary(console, run, found)
     if (left := total - len(found.trials)) > 0:
@@ -1117,6 +1124,21 @@ def search_command(
             console.print(escape(f"  uv run candor measure {folder} --trial {number}"), soft_wrap=True)
 
 
+def _against_least(found: search.Found, candidate: search.Candidate, least: search.Candidate) -> str:
+    """How much more KL a trial has than its kind's least within the cap, paired by prompt, and whether
+    that is a tie; nothing for the least itself, or where either kept no KL at each prompt."""
+    if candidate.trial == least.trial:
+        return ""
+    paired = search.kl_gap(
+        search.searched_score(found, candidate.trial), search.searched_score(found, least.trial)
+    )
+    if paired is None:
+        return ""
+    gap, error, tie = paired
+    verdict = "a tie" if tie else "not a tie"
+    return f"; {gap:.4f} more KL than trial {least.trial}, paired by prompt (SE {error:.4f}): {verdict}"
+
+
 def _searched(score: search.Score, prompts: int) -> str:
     """A trial's score in the search: its refusals by the judge and by keywords, and its KL, or that it
     stopped early, as a trial that couldn't win does."""
@@ -1129,30 +1151,17 @@ def _thinking_summary(console: Console, run: Run, found: search.Found) -> None:
     """How long the trials' answers thought, to choose the budget a search of a thinking model scores
     at."""
     scores = [search.searched_score(found, number) for number in found.trials]
-    if not scores:
-        return
     # A search scored with thinking off has no thinking to show.
-    if search.Search(run).thinks:
-        judged = sum(score.judged for score in scores)
-        means = sorted(score.thinking for score in scores)
-        budget = run.settings.scoring.thinking_budget or run.settings.deployment.thinking_budget
-        console.print(
-            f"Thinking: {means[0]:.0f} to {means[-1]:.0f} tokens per answer on average across trials "
-            f"(median {statistics.median(means):.0f}); {sum(s.forced for s in scores)} of {judged} answers "
-            f"reached the search's budget of {budget} and were made to stop."
-        )
-    read = [
-        (s.kl, s.kl_empty, s.kl_thinking)
-        for s in scores
-        if s.kl_empty is not None and s.kl_thinking is not None
-    ]
-    if read:
-        after, empty, start = (f"{min(kls):.4f} to {max(kls):.4f}" for kls in zip(*read, strict=True))
-        console.print(
-            f"KL across trials: {after} where the answer starts after the unedited model's own thinking, "
-            f"which the search aims at; {empty} after an empty thinking block; {start} where the thinking "
-            "starts."
-        )
+    if not scores or not search.Search(run).thinks:
+        return
+    judged = sum(score.judged for score in scores)
+    means = sorted(score.thinking for score in scores)
+    budget = run.settings.scoring.thinking_budget or run.settings.deployment.thinking_budget
+    console.print(
+        f"Thinking: {means[0]:.0f} to {means[-1]:.0f} tokens per answer on average across trials "
+        f"(median {statistics.median(means):.0f}); {sum(s.forced for s in scores)} of {judged} answers "
+        f"reached the search's budget of {budget} and were made to stop."
+    )
 
 
 def _trials(numbers: list[int]) -> str:
