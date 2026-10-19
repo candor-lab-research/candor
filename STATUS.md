@@ -43,15 +43,10 @@ thinking on (next, e.g. Qwen3.8-27B). A 9B model must not take days.
 - Phases 3 and 4 wait only on the phase-end discussion (Next, 1); trial 205 is released as
   `candor-lab/K2-Horizon-7B-Candor-Uncensored-GGUF`.
 - 20 ideas from arXiv are ranked in `results/new-features.md`.
-- The repository review (2026-10-18): 24 work packages in the order agreed
-  (`results/evidence-2026-10-18/repo-review.md`). Steps 1 (faster tests, one server launch), 2
-  (the thinking check, measurements that can't pair stale labels, intervals in `compare`, findings
-  corrected), 3 (27B cost and safety: packages 6-10, 14 and 17) and 4 (the answer's own seed and the
-  maths reading, in one measurements change) and 5 (the rest, 2026-10-19) done, but for package 11
-  (with the 27B pilot, below) and three items left with reasons (history).
-- Evidence for the discussion (2026-10-19, `results/evidence-2026-10-19/method-evidence.md`): the
-  upstream check, and six of the review's method questions answered from the K2 and Qwen runs; the
-  e2e test passes.
+- The repository review (2026-10-18, `results/evidence-2026-10-18/repo-review.md`): all 24
+  packages done but package 11 (with the 27B pilot) and three items left with reasons (history).
+- Evidence for the discussion (2026-10-19): `results/evidence-2026-10-19/method-evidence.md` (the
+  upstream check, six method questions) and `cost-27b.md`.
 
 ## Next
 
@@ -59,10 +54,8 @@ thinking on (next, e.g. Qwen3.8-27B). A 9B model must not take days.
    off and the search's beside KL reads go; the 27B is Qwen3.8-27B at xhigh, and the gate (about a
    day and $20; `results/evidence-2026-10-19/cost-27b.md`: $73-195 now) is set again from the pilot
    (history). Next in it: the thinking-off search with a per-model proxy check (F55) and the method
-   questions left (`results/evidence-2026-10-19/method-evidence.md`); no other method changes
-   until agreed. The
-   answer reusing its thinking's cache (package 11) changes draws too, so its timed pilot belongs in
-   the 27B pilot, before the 27B reference is measured.
+   questions left; no other method changes until agreed. Package 11 (the answer reusing its
+   thinking's cache) changes draws, so it is timed in the 27B pilot, before the 27B reference.
 2. Approved: one A40 pod to judge K2's and Qwen's held-out answers with Qwen3Guard-Gen-8B and to
    score one finalist each with both row normalisations, quoted after timing the first units; then
    the 27B pilot (about $7-8), quoted from its first units. The code for 27B (a second judge, the
@@ -90,9 +83,8 @@ thinking on (next, e.g. Qwen3.8-27B). A 9B model must not take days.
      before; the export's file name when some tensors are Q8_0 or F32; a local model copied to a pod
      rebuilds every stage;
    - heretic 2.x journals aren't read (they record no refusals for a trial);
-   - llama-server b11524 can deadlock when stopped mid-answer (its SIGTERM handler takes a lock the
-     generating thread holds; about 1 stop in 500): `stop` then waits 60 s and kills it, losing
-     nothing.
+   - llama-server b11524 can deadlock when stopped mid-answer (about 1 stop in 500; history): `stop`
+     then waits 60 s and kills it, losing nothing.
 
 ## Phase 3: in force
 
