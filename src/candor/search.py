@@ -1038,7 +1038,8 @@ class Search:
         thinking model thinks when thinks is True, by default as the search's trials do, and otherwise
         answers greedily after an empty thinking block. seed replaces the sampling seed. With kept, the
         unedited model's first tokens are kept in the search's folder, and read again only when what
-        they are read from or the machine changes."""
+        they are read from or the machine changes. For a caller that has checked the judge
+        (Run.check_judge) before anything was recorded."""
         run, settings = self.run, self.run.settings
         thinks = self.thinks if thinks is None else thinks
         closed = bool(settings.deployment.think_close) and not thinks

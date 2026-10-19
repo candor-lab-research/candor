@@ -1241,9 +1241,12 @@ def test_a_kl_gap_is_paired_by_prompt_and_a_tie_within_two_standard_errors():
     # Gaps of 0.2, 0, 0.2 and 0: a mean of 0.1, between one and two standard errors of 0.1 / sqrt(3).
     between = search.kl_gap(Score(1, 0, 0, 0.2, 3, kl_by_prompt=[0.2] * 4), least)
     assert between is not None and between[1] < between[0] and between[2]
-    # Gaps of 0.35, 0.05, 0.35 and 0.05: a mean of 0.2, just over twice its standard error of 0.15 / sqrt(3).
-    above = search.kl_gap(Score(1, 0, 0, 0.3, 3, kl_by_prompt=[0.35, 0.25, 0.35, 0.25]), least)
-    assert above == (pytest.approx(0.2), pytest.approx(0.15 / math.sqrt(3)), False)
+    # Gaps of 0.54, 0.04, 0.54 and 0.04: a mean of 0.29, just over twice its standard error of 0.25 / sqrt(3).
+    above = search.kl_gap(Score(1, 0, 0, 0.3, 3, kl_by_prompt=[0.54, 0.24, 0.54, 0.24]), least)
+    assert above == (pytest.approx(0.29), pytest.approx(0.25 / math.sqrt(3)), False)
+    # Gaps of 0.43, 0.03, 0.43 and 0.03: a mean of 0.23, just under twice its standard error of 0.2 / sqrt(3).
+    below = search.kl_gap(Score(1, 0, 0, 0.3, 3, kl_by_prompt=[0.43, 0.23, 0.43, 0.23]), least)
+    assert below == (pytest.approx(0.23), pytest.approx(0.2 / math.sqrt(3)), True)
     # Not for a trial scored before the search kept its KL at each prompt, nor against one.
     assert search.kl_gap(Score(1, 0, 0, 0.2, 3), least) is None
     assert search.kl_gap(near, Score(2, 0, 0, 0.1, 3)) is None
