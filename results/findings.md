@@ -75,6 +75,14 @@ entry is corrected, dropped or overturned is in CLAUDE.md ("Finished, dropped an
   [Published] Keywords with thinking off flatter thinking models badly: Qwen3.5-35B-A3B 3-5 refused
   by keywords against 33+ by a judge, Qwen3.8-27B 0 against 30.5% (DreamFast;
   `evidence-2026-10-14/ara.md`). candor decides on the judge.
+- **A bigger judge finds more refusals on edited models.** [Measured: K2-Horizon-7B and Qwen3.5-9B,
+  7 edited and 2 unedited held-out sets of 288, Qwen3Guard-Gen-4B at Q8_0] It calls 19 refusals
+  against the 0.6B's 8 on K2 and 69 against 44 on Qwen; the 0.6B finds 6 of the 4B's 19 and 31 of 69
+  (kappa 0.44 and 0.52), mostly on heretic's Trial 161 and K2's 114. Those refusals mostly run to
+  the 256-token answer limit. Of the 156 that keywords call refusals and the 0.6B doesn't, it calls
+  9. No decision changed, but K2's 114 went from 3 to 9 against a bar of 10. The 0.6B's recall on
+  edited models is unchecked against ground truth. (`evidence-2026-10-19/method-evidence.md`, F104)
+  [Hypothesis] Test: the 8B at 16 bits, or a judge of another family, on the disagreements.
 - **The best public Qwen3.5-9B edit's 0/400 may not be as used.** [Published, with caveats]
   DreamFast judged trohrbaugh's heretic edit (`Qwen3.5-9B-heretic-v2`) at 0 of 400 HarmBench
   refusals, GSM8K 87.64 to 85.97; its report notes a 2,048-token cap and truncated thinking. Edited
@@ -90,6 +98,15 @@ entry is corrected, dropped or overturned is in CLAUDE.md ("Finished, dropped an
   with two seeds and 0 of 288 held-out as used, at KL 0.059 (steps 5-7). On K2 every finalist, and
   both kinds' bests, read there (`phase-4-k2-horizon-7b.md`, step 5). [Published] They worked on
   Qwen3-8B (arXiv 2507.03167).
+- **20 tokens hold nearly all the mass where the answer starts, not all.** [Measured: K2-Horizon-7B
+  and Qwen3.5-9B, about 300 held-out prompts each] The unedited models' top 20 hold a median 0.9996
+  and 0.9998, but 13% and 10% of prompts fall below 0.995. Cutting there misses about 0.5% of KL; the
+  floor for a base token the edit doesn't list may put heretic's Trial 161 2-7% low against 0.3-1.6%
+  for candor's edits. llama-server b11524 sums the softmax in float32, so tokens below about 6e-8 of
+  the top one are lost and the remainder is understated, by an unmeasured amount.
+  (`evidence-2026-10-19/method-evidence.md`, F119) [Hypothesis] 200 tokens shrink the first two;
+  test against transformers' full logits at the same ids on the 27B pilot, summed in float64 and in
+  float32 in llama-server's order.
 - **Until 2026-10-19 every sampled thinking-on answer replayed its thinking's random draws.**
   [Measured: llama-server b11524 on test models; the effect on counts a Hypothesis] llama-server
   starts its random numbers again at each request, and the answer was sent with the thinking's seed,
@@ -107,8 +124,8 @@ entry is corrected, dropped or overturned is in CLAUDE.md ("Finished, dropped an
   Measured at 8 and at 16 slots, the unedited model kept every held-out label and KL 0.0000, but at
   least 6 of its 588 held-out answers and 31 of 1,319 maths answers changed, 5 of those flipping
   correct. (`history.md`, the slots change; `phase-2-rude-llama.md`, the noise floor) [Hypothesis]
-  It may blur KL between edits whose KL differs little. Test: score one edit twice at its slots and
-  compare per-prompt KL.
+  It may blur KL between edits whose KL differs little; re-reads at the same slots moved a median
+  3.4% (the KL read again, below), and that entry holds the test.
 - **KL depends on the machine: compare it only within one.** [Measured: K2-Horizon-7B, 3 search
   trials, 99 KL prompts] Read on the Mac, trials 45, 57 and 58 came out 2-7% lower than the search's
   reads on an A40. Per prompt the KL was spread across many prompts, with no floor or single prompt
@@ -148,16 +165,42 @@ entry is corrected, dropped or overturned is in CLAUDE.md ("Finished, dropped an
 - **"full" row normalisation against "pre" rests on one pair of searches.** [Measured: Qwen3.5-9B,
   69 and 70 trials from the same 40 Sobol starts, thinking off] "pre" was at 50 of 100 (KL 0.059),
   "full" at 32 (KL 0.069), both still falling. K2 used "full" untested; init still defaults to
-  "pre". (`evidence-2026-10-14/data-report.md`)
+  "pre". (`evidence-2026-10-14/data-report.md`) [Measured: the 6 K2 and Qwen finalists rebuilt both
+  ways] The two differ by a median 1.0% of the edit on Qwen and 4.1% on K2 (0.025% and 0.13% of the
+  weight), mostly rows rescaled off the direction; for down projections larger at low strength,
+  K2's attention high at any strength; neither keeps row lengths. Only scoring edits both ways can
+  settle it. (`evidence-2026-10-19/method-evidence.md`)
 - **Per-layer edits press the 3.0 ceiling on attention.** [Measured: Qwen3.5-9B, one search] Every
   per-layer best puts attention at 2.9-3.0, so a better per-layer edit may lie beyond it. (step 6)
 - **Refusals fall gradually as strength rises; there is no cliff.** [Measured: 8 searches on 3
   models] [Published] The literature agrees. (`evidence-2026-10-14/data-report.md`,
   `lit-refusal.md`)
-- **A trial scored again repeats within a refusal and 3% KL.** [Hypothesis] `candor score` takes a
-  repeat within that as the same score. rude-llama's one repeat, greedy, came back with the same
-  refusals and KL within 0.3% (`phase-2-rude-llama.md`, the search fix); untested for a sampled
-  thinking model. Test: score one K2 trial twice at its slots.
+- **A trial's KL read again can move more than 3%.** [Measured: Qwen3.5-9B, 18 thinking-off re-reads
+  by `candor proxy`, same prompts, slots and file, another session, 6 on another A40 pod] A median
+  3.4%, at most 25.5% (at KL 0.005): 9 of 18 beyond the 3% within which `candor score` takes a
+  repeat as the same score. rude-llama's one greedy repeat was within 0.3% (`phase-2-rude-llama.md`,
+  the search fix). (`evidence-2026-10-19/method-evidence.md`, F117) [Hypothesis] About 11% with a
+  0.002 floor fits all 18 (fitted on them), and a repeat stays within a refusal; test: score one K2
+  trial twice at its slots and compare per-prompt KL.
+- **Small KL gaps between trials are noise, and the search keeps no per-prompt KL to tell.**
+  [Measured: K2-Horizon-7B and Qwen3.5-9B, 10 pairs of measured finalists, about 300 held-out
+  prompts] At 100 test prompts the SE of a KL difference is an estimated 9-32% of the KL (scaled by
+  KL level; by prompt count it would be larger); K2's 207 led 205 on the test prompts within that,
+  and 205 led held out by 0.0096, of which 207's export alone may account for 0.0061. "Every
+  within-cap trial within 2 SE of the best" would send 11-115 trials to measurement, too many as
+  the finalist rule. [Hypothesis] Per-prompt KL
+  kept and gaps under 2 SE taken as ties would make picks honest; test on the 27B search.
+  (`evidence-2026-10-19/method-evidence.md`, F117)
+- **The KL reads beside the answer start decide nothing.** [Measured: K2-Horizon-7B 313 trials,
+  Qwen3.5-9B 545] Within the caps `kl_empty` tracks `kl` (Spearman 0.62 and 0.80); `kl_thinking`
+  less on K2 and Qwen's one-layer edits (0.36, 0.14), level on Qwen's per-layer ones (0.79 against
+  0.76). No pick reads either; under today's code they cost about 0.5% (K2) and 3% (Qwen) of the
+  search, and `measure` reads both for every finalist. (`evidence-2026-10-19/method-evidence.md`, F5)
+- **Skipping a trial's answers once 25 of its kind have lower KL saves little on K2, loses on
+  Qwen.** [Measured: replays of K2-Horizon-7B's 313 and Qwen3.5-9B's 545 trials] Under 1.2% on K2,
+  and a 19% loss on Qwen, where KL costs more than the answers. No skipped trial was a pick under
+  today's rules, but 13 refused 0 within the caps and 10 of Qwen's 33 sit inside a 2-SE tie set.
+  (`evidence-2026-10-19/method-evidence.md`, F3)
 - **The simulator's cached wide-range bests were stale.** [Measured: `tools/misscheck/harness`, the
   base landscape recomputed] The backup's cache put the wide range's best one-layer edit at layer 12
   at KL 0.0839 and its best per-layer edit at 0.10277, above the normal range's 0.0683 and 0.10258

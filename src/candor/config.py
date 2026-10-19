@@ -313,8 +313,10 @@ class Scoring(Section):
         ge=1,
         le=1000,
         description="How many of the most likely first tokens KL divergence is measured over (20 came "
-        "within 0.5% of the full vocabulary on Llama-3.2-3B's first answer token without thinking; it is "
-        "unchecked where the answer starts after thinking).",
+        "within 0.5% of the full vocabulary on Llama-3.2-3B's first answer token without thinking; the cut "
+        "alone costs an estimated 0.4-0.7% where K2-Horizon-7B's and Qwen3.5-9B's answers start after "
+        "thinking, and the floor given to the base's tokens an edited read doesn't list can understate "
+        "KL more for an edit that pushes them out, an estimated 2-7% for heretic's Trial 161).",
     )
     thinking: Literal["on", "off"] = Field(
         default="on",

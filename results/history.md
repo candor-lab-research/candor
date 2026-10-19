@@ -900,3 +900,22 @@ fail without them.
   (findings); no doc result uses it.
 
 Reviewed in three rounds; 886 tests pass.
+
+### Evidence for the phase-end discussion (the user, 2026-10-19)
+
+Gathered on the Mac from the K2 and Qwen runs, numbers only, each part checked by an independent
+reviewer who recomputed its numbers (`evidence-2026-10-19/method-evidence.md`).
+- heretic upstream: master 3a5c864, default edit still ARA, nothing merged but a PR template; its
+  thinking-model prefix bug (#487) is open and, by its fix (#501), reaches Qwen3.5/3.8 templates
+  too, against 2026-10-14's reading.
+- Six of the review's 11 method questions, with recommendations for the discussion, none adopted:
+  the beside KL reads decide nothing (drop them); KL gaps under about 2 SE are noise, and the search
+  keeps no per-prompt KL (store it); skipping answers once 25 trials have lower KL saves little on
+  K2 and loses on Qwen (don't adopt); 20 KL tokens miss about 0.5%, with two biases beyond it (200
+  for the 27B run shrinks truncation and the floor, not llama-server's float32 loss); "pre" and
+  "full" differ by 1% of the edit on Qwen and 4% on K2, so only scoring both ways decides; a bigger
+  judge changes no decision but finds more refusals on edited models, so the 0.6B's recall there
+  stays open.
+- Corrected on the way: Qwen's 205 and 175 didn't flip between test and held-out KL; the beside
+  reads cost K2 20 min, not 30-50; `candor score`'s 3% repeat tolerance is exceeded by half of 18
+  real re-reads (a small fix in STATUS). The e2e test passes (9 of 9).

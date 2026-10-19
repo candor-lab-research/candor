@@ -33,8 +33,8 @@ thinking on (next, e.g. Qwen3.8-27B). A 9B model must not take days.
   or hypothesis.
 - At each phase start, check heretic upstream as a reference point, not to copy: master's commit
   and default edit, PRs merged since the last check, issues on the model family (commands in
-  `results/evidence-2026-10-14/ara-missed.md`). Tools checked 2026-10-14: heretic master 66a952b
-  (2.0.0.dev0, default edit ARA); last release 1.4.0.
+  `results/evidence-2026-10-14/ara-missed.md`). Tools checked 2026-10-19: heretic master 3a5c864
+  (2.0.0.dev0, default edit ARA); last release 1.4.0; its thinking-model prefix bug (#487) is open.
 - At each phase end, run the e2e test (`CANDOR_E2E=1 uv run pytest tests/test_e2e.py`): nothing else
   runs it.
 
@@ -49,14 +49,16 @@ thinking on (next, e.g. Qwen3.8-27B). A 9B model must not take days.
   corrected), 3 (27B cost and safety: packages 6-10, 14 and 17) and 4 (the answer's own seed and the
   maths reading, in one measurements change) and 5 (the rest, 2026-10-19) done, but for package 11
   (with the 27B pilot, below) and three items left with reasons (history).
+- Evidence for the discussion (2026-10-19, `results/evidence-2026-10-19/method-evidence.md`): the
+  upstream check, and six of the review's method questions answered from the K2 and Qwen runs; the
+  e2e test passes.
 
 ## Next
 
-1. The phase-end discussion. It opens with the heretic
-   upstream check (How we work), missed at phase 4's start, its result recorded there, so the 27B
-   phase can't start without it; then where to go next, from `results/findings.md`,
+1. The phase-end discussion: where to go next, from `results/findings.md`,
    `results/new-features.md` (chiefly the search's cost for 27B) and the review's 11 method
-   questions, including how to score Qwen3.8-27B thinking off; no method changes until agreed. The
+   questions, six with evidence (`results/evidence-2026-10-19/method-evidence.md`), including the
+   27B decision rule and how to score Qwen3.8-27B thinking off; no method changes until agreed. The
    answer reusing its thinking's cache (package 11) changes draws too, so its timed pilot belongs in
    the 27B pilot, before the 27B reference is measured.
 2. Phase 4, later: low effort's two closes; Uno not now. The budget limit
@@ -76,9 +78,10 @@ thinking on (next, e.g. Qwen3.8-27B). A 9B model must not take days.
      tiny model only); K2's budget message was written for a close that starts with a newline;
    - the directions stage keeps the embedding output it never reads and pads residual batches
      unsorted (F80, F132): fixed at the next directions change, as it rebuilds every run's directions;
-   - small fixes: an interrupted `candor proxy` scores the unedited model again; an `inspect`
-     warning when weights were quantised before; the export's file name when some tensors are Q8_0
-     or F32; a local model copied to a pod rebuilds every stage;
+   - small fixes: `candor score`'s 3% KL repeat tolerance (findings); an interrupted `candor
+     proxy` scores the unedited model again; an `inspect` warning when weights were quantised
+     before; the export's file name when some tensors are Q8_0 or F32; a local model copied to a pod
+     rebuilds every stage;
    - heretic 2.x journals aren't read (they record no refusals for a trial).
 
 ## Phase 3: in force
