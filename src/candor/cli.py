@@ -107,9 +107,9 @@ def _examples(names: list[str], limit: int = 3) -> str:
     return shown + (f" and {len(names) - limit} more" if len(names) > limit else "")
 
 
-def _target_rows(model: str, hidden: int, layers: int, arch: str | None) -> list[Row]:
+def _target_rows(model: str, hidden: int, layers: int, arch: str | None, revision: str | None) -> list[Row]:
     try:
-        shapes = source.tensor_shapes(model)
+        shapes = source.tensor_shapes(model, revision)
     except Exception as error:
         return [("Edit targets", "fail", f"couldn't read the tensor shapes: {error}")]
     found = targets.find_targets(shapes, hidden, layers)
@@ -156,10 +156,10 @@ def _target_rows(model: str, hidden: int, layers: int, arch: str | None) -> list
     return rows
 
 
-def _tokenizer_rows(model: str) -> list[Row]:
+def _tokenizer_rows(model: str, revision: str | None) -> list[Row]:
     try:
         with _quiet_transformers():
-            tokenizer = AutoTokenizer.from_pretrained(model, trust_remote_code=False)
+            tokenizer = AutoTokenizer.from_pretrained(model, revision=revision, trust_remote_code=False)
     except Exception as error:
         return [("Tokenizer", "fail", f"couldn't load it without running remote code: {error}")]
     template = checks.chat_template(tokenizer)
@@ -232,9 +232,10 @@ def _efforts(efforts: checks.Efforts) -> str:
     return f"the chat template takes {listed}{default}"
 
 
-def _rows(model: str) -> list[Row]:
+def _rows(model: str, revision: str | None = None) -> list[Row]:
+    """The checks of a model at a Hub commit, or as it is now."""
     try:
-        config = source.read_config(model)
+        config = source.read_config(model, revision)
     except Exception as error:
         raise CannotInspect(f"candor couldn't read {model}: {error}") from None
     sizes = source.sizes(config)
@@ -247,7 +248,7 @@ def _rows(model: str) -> list[Row]:
     converts = f"llama.cpp calls it {arch}" if arch else "the pinned llama.cpp can't convert it"
     summary = f"{names}, {layers} layers, hidden size {hidden}; {converts}"
     rows: list[Row] = [("Architecture", "ok" if arch else "fail", summary)]
-    code = checks.remote_code(config, source.read_json(model, "tokenizer_config.json"))
+    code = checks.remote_code(config, source.read_json(model, "tokenizer_config.json", revision))
     if checks.needs_remote_code(config):
         detail = f"transformers can only load it by running {_examples(code)}; a run does, so read it first"
         rows.append(("Remote code", "warn", detail))
@@ -258,8 +259,8 @@ def _rows(model: str) -> list[Row]:
         rows.append(("Remote code", "ok", "none"))
     return (
         rows
-        + _target_rows(model, hidden, layers, arch)
-        + _tokenizer_rows(model)
+        + _target_rows(model, hidden, layers, arch, revision)
+        + _tokenizer_rows(model, revision)
         + _kv_cache_rows(config, arch)
     )
 
@@ -270,9 +271,9 @@ def _resolved(model: str) -> str:
     return str(folder.resolve()) if folder.is_dir() else model
 
 
-def _checked_rows(console: Console, model: str) -> list[Row]:
+def _checked_rows(console: Console, model: str, revision: str | None = None) -> list[Row]:
     try:
-        return _rows(model)
+        return _rows(model, revision)
     except CannotInspect as error:
         console.print(f"[red]{escape(str(error))}[/]")
     except Exception as error:
@@ -360,7 +361,13 @@ def init(
         console.print(f"[red]{existing} already exists.[/] Pick another name, or delete that folder first.")
         raise typer.Exit(FAILED_CHECK)
     model = _resolved(model)
-    rows = _checked_rows(console, model)
+    # The commit the run pins is the one checked.
+    try:
+        revision = _revision(model)
+    except Exception as error:
+        console.print(f"[red]candor couldn't find the commit {escape(model)} is at:[/] {escape(str(error))}")
+        raise typer.Exit(COULD_NOT_INSPECT) from None
+    rows = _checked_rows(console, model, revision)
     _print_table(console, f"candor init {name}: checking {model}", rows)
     blocking = [check for check, status, _ in rows if status == "fail"]
     if blocking:
@@ -371,12 +378,11 @@ def init(
         raise typer.Exit(FAILED_CHECK)
 
     try:
-        revision = _revision(model)
         pinned_date, template_settings, close, efforts = _from_template(model, revision)
         model_settings = config.Model(
             source=model,
             revision=revision,
-            trust_remote_code=checks.needs_remote_code(source.read_config(model)),
+            trust_remote_code=checks.needs_remote_code(source.read_config(model, revision)),
             date=pinned_date,
         )
         deployment = config.Deployment(
@@ -551,10 +557,12 @@ def _awake() -> Iterator[None]:
 
 
 def _where(error: Exception) -> str:
-    """An unexpected error by its type and the line that raised it. Its message could quote a prompt
-    or an answer, so it is never shown."""
-    frame = traceback.extract_tb(error.__traceback__)[-1]
-    return f"{type(error).__name__} at {Path(frame.filename).name}:{frame.lineno}"
+    """An unexpected error by its type, the line that raised it and the lines of candor's own that led
+    there, innermost first. Its message could quote a prompt or an answer, so it is never shown."""
+    frames = traceback.extract_tb(error.__traceback__)
+    ours = [f for f in frames[:-1] if Path(f.filename).parent == Path(__file__).parent]
+    shown = [f"{Path(f.filename).name}:{f.lineno}" for f in reversed([*ours, frames[-1]])]
+    return f"{type(error).__name__} at {shown[0]}" + (f", from {', '.join(shown[1:])}" if ours else "")
 
 
 def _edit_name(trial: int, heretic: bool) -> str:
@@ -675,6 +683,11 @@ def measure_command(
                 return done
 
             run = Run.open(folder, report)
+            if seed is not None and run.settings.sampling.temperature == 0:
+                raise RunError(
+                    "--seed samples the answers with other draws, but this run answers greedily, which "
+                    "every seed answers alike"
+                )
             slots = run.settings.slots.measure if slots is None else slots
             default = _measurement_name(trial, heretic is not None, slots, limit, exported, seed, outside)
             if name not in (None, default) and export.RESERVED.fullmatch(name):
@@ -805,6 +818,8 @@ def export_command(
         raise typer.BadParameter(
             "--name names a model given with --outside, and only that", param_hint="--name"
         )
+    if outside is not None and heretic is not None:
+        raise typer.BadParameter("exports a model edited elsewhere on its own", param_hint="--outside")
     if name is not None:
         try:
             config.check_run_name(name)
@@ -843,25 +858,33 @@ def export_command(
         raise typer.Exit(COULD_NOT_INSPECT) from None
     shown = name or _edit_name(trial or 0, heretic is not None)
     console.print(f"{escape(shown)}: {escape(str(shipped))}, {shipped.stat().st_size / 1e9:.1f} GB")
+    # Named as candor measure names them at the run's slots.
+    slots = run.settings.slots.measure
+    base = _measurement_name(None, False, slots, None, False, None)
     if outside is not None:
         console.print("Measure this file, then compare it with the unedited model:")
+        measured = _measurement_name(None, False, slots, None, False, None, name)
         commands = [
-            f"uv run candor measure {folder} --outside {name}",
-            f"uv run candor compare {folder} base {name}",
+            ["measure", str(folder), "--outside", str(name)],
+            ["compare", str(folder), base, measured],
         ]
     else:
+        assert trial is not None
         console.print(
             "Measure this file, then compare it with the unedited model, and with the trial as measured "
             "with adapters to see what writing it into the weights and quantising changed:"
         )
-        picked = f"--trial {trial}" + (f" --heretic {heretic}" if heretic is not None else "")
+        picked = ["--trial", str(trial), *(["--heretic", str(heretic)] if heretic is not None else [])]
+        adapters, exported = (
+            _measurement_name(trial, heretic is not None, slots, None, made, None) for made in (False, True)
+        )
         commands = [
-            f"uv run candor measure {folder} {picked} --exported",
-            f"uv run candor compare {folder} base {shown}-exported",
-            f"uv run candor compare {folder} {shown} {shown}-exported",
+            ["measure", str(folder), *picked, "--exported"],
+            ["compare", str(folder), base, exported],
+            ["compare", str(folder), adapters, exported],
         ]
     for command in commands:
-        console.print(escape(f"  {command}"), soft_wrap=True)
+        console.print(escape("  " + shlex.join(["uv", "run", "candor", *command])), soft_wrap=True)
 
 
 @app.command("serve", short_help="Chat with the unedited model or a trial's export, as measured.")
@@ -994,9 +1017,10 @@ def serve_command(
                 )
                 console.print(f"Chat at http://127.0.0.1:{port}, llama-server's own page. Ctrl-C stops it.")
                 code = process.wait()
-                console.print(
-                    f"llama-server stopped by itself with code {code}; its log is {escape(str(log))}"
-                )
+                stopped = f"llama-server stopped by itself with code {code}; its log is {log}"
+                if code:
+                    raise serve.ServeError(stopped)
+                console.print(escape(stopped))
             except KeyboardInterrupt:
                 console.print("Stopped.")
             finally:
@@ -1127,11 +1151,11 @@ def search_command(
             picks.append(candidate.trial)
     if run.settings.deployment.think_close:
         _thinking_summary(console, run, found)
-    if len(found.trials) < total:
+    if (left := total - len(found.trials)) > 0:
         console.print(
-            f"Trials took about {seconds:.0f} s each, so all {total} would take about "
-            f"{duration(seconds * total)}. Trials that refuse almost nothing take longest, and later "
-            "trials aim at them, so allow more. Run candor search again to carry on."
+            f"Trials took about {seconds:.0f} s each, so the {left} left of {total} would take about "
+            f"{duration(seconds * left)}. Trials that refuse almost nothing take longest, and later trials "
+            "aim at them, so allow more. Run candor search again to carry on."
         )
     elif picks:
         console.print("Measure each on the held-out prompts:")
@@ -1153,14 +1177,16 @@ def _thinking_summary(console: Console, run: Run, found: search.Found) -> None:
     scores = [search.searched_score(found, number) for number in found.trials]
     if not scores:
         return
-    judged = sum(score.judged for score in scores)
-    means = sorted(score.thinking for score in scores)
-    budget = run.settings.scoring.thinking_budget or run.settings.deployment.thinking_budget
-    console.print(
-        f"Thinking: {means[0]:.0f} to {means[-1]:.0f} tokens per answer on average across trials (median "
-        f"{statistics.median(means):.0f}); {sum(s.forced for s in scores)} of {judged} answers reached the "
-        f"search's budget of {budget} and were made to stop."
-    )
+    # A search scored with thinking off has no thinking to show.
+    if search.Search(run).thinks:
+        judged = sum(score.judged for score in scores)
+        means = sorted(score.thinking for score in scores)
+        budget = run.settings.scoring.thinking_budget or run.settings.deployment.thinking_budget
+        console.print(
+            f"Thinking: {means[0]:.0f} to {means[-1]:.0f} tokens per answer on average across trials "
+            f"(median {statistics.median(means):.0f}); {sum(s.forced for s in scores)} of {judged} answers "
+            f"reached the search's budget of {budget} and were made to stop."
+        )
     read = [
         (s.kl, s.kl_empty, s.kl_thinking)
         for s in scores
@@ -1222,7 +1248,12 @@ def score_command(
                 edits += [(edit, None)] + ([(nearest, None)] if nearest else [])
                 if front:
                     edits.append((search.trial_edit(run, front[0].trial), front[0].trial))
-            scored = search.Search(run).score([edit for edit, _ in edits])
+            # A trial the search scored in full, scored again, shows whether scoring repeats, so the
+            # unedited model is scored again only where there is none.
+            repeated = found is not None and any(
+                number and not found.trials[number].user_attrs["stopped"] for _, number in edits
+            )
+            scored = search.Search(run).score([edit for edit, _ in edits], base=not repeated)
             searched = {
                 number: search.searched_score(found, number) for _, number in edits if found and number
             }
@@ -1251,16 +1282,13 @@ def score_command(
     console.print(f"Scored as the search scores its trials, on its {scored.prompts} test prompts:")
     console.print(table)
     base = found.base_refusals if found else None
-    console.print(
-        f"The unedited model refuses {scored.base_refusals} of {scored.prompts}"
-        + (f" ({base} in the search)." if base is not None else ".")
-    )
-    if not found or not front:
+    if scored.base_refusals is None:
+        console.print(f"The unedited model refuses {base} of {scored.prompts} in the search.")
+    else:
         console.print(
-            f"The search has no {'finished trials' if found else 'trials'} yet to set these beside."
+            f"The unedited model refuses {scored.base_refusals} of {scored.prompts}"
+            + (f" ({base} in the search)." if base is not None else ".")
         )
-        return
-    reliable = True
     for (edit, number), score in zip(edits, scored.edits, strict=True):
         if number:
             if searched[number].judged < scored.prompts:
@@ -1268,17 +1296,21 @@ def score_command(
                     f"{escape(edit.name)} was stopped early in the search, after {searched[number].judged} "
                     "prompts, so there's no full score of it to repeat."
                 )
-            elif search.repeats(score, searched[number]):
+            elif differs := search.differences(score, searched[number]):
                 console.print(
-                    f"{escape(edit.name)} scores as it did in the search, so the scores above can be set "
-                    "beside the search's."
+                    f"{escape(edit.name)} scores differently from the search, by more than noise: "
+                    f"{'; '.join(differs)}. The scores above can't be set beside the search's, so the "
+                    "verdicts below don't hold."
                 )
             else:
-                reliable = False
                 console.print(
-                    f"{escape(edit.name)} scores differently from the search (the last column), so the "
-                    "scores above can't be set beside the search's, and the verdicts below don't hold."
+                    f"{escape(edit.name)} scores as it did in the search, within noise, so the scores "
+                    "above can be set beside the search's."
                 )
+    if not front:
+        what = "trial scored in full" if found and found.trials else "trials"
+        console.print(f"The search has no {what} yet to set these beside.")
+        return
     components = sorted({writer.component for writer in writers})
     for (edit, number), score in zip(edits, scored.edits, strict=True):
         if number:
@@ -1295,7 +1327,7 @@ def score_command(
             + (f"; it ties with {_trials(tied)}" if tied else "")
             + (f"; it beats the search's best {_trials(beaten)} on both." if beaten else ".")
         )
-        console.print(verdict if reliable else f"Not reliable: {verdict}")
+        console.print(verdict)
         scope = search.PER_LAYER if edit.direction_layer is None else search.ONE_LAYER
         drawn_from = search.kind_space(run.settings.search, found, scope)
         if outside := search.outside_space(edit, drawn_from, layers, components):
@@ -1361,7 +1393,7 @@ def proxy_command(
             edit.name,
             str(number),
             search.direction(edit.direction_layer, edit.answering),
-            f"x{factor:g}",
+            f"x{factor[0]:.3g}" + (f"-{factor[1]:.3g}" if factor[1] != factor[0] else ""),
             str(off.refusals),
             str(on.refusals),
             f"{on.thinking:.0f}",

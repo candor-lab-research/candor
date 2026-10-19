@@ -179,6 +179,21 @@ def test_the_gpus_are_listed_once_and_named_to_every_server(release, monkeypatch
     assert listed.read_text() == "\n"
 
 
+def test_the_machine_names_the_platform_and_the_gpus_listed(tmp_path, monkeypatch):
+    monkeypatch.setattr(toolchain, "this_platform", lambda: "linux-cuda")
+    server = tmp_path / "llama-server"
+    gpus = (
+        "Available devices:\\n  CUDA0: NVIDIA A40 (45498 MiB, 45229 MiB free)\\n"
+        "  BLAS: OpenBLAS (0 MiB, 0 MiB free)\\n"
+    )
+    server.write_text(listing_devices(gpus, ""))
+    server.chmod(0o755)
+    assert toolchain.machine(tmp_path) == {"platform": "linux-cuda", "gpus": ["NVIDIA A40"]}
+    assert toolchain.described(toolchain.machine(tmp_path)) == "NVIDIA A40 (linux-cuda)"
+    # One that can't list its devices still names the platform.
+    assert toolchain.machine(tmp_path / "missing") == {"platform": "linux-cuda", "gpus": []}
+
+
 def test_an_override_on_linux_must_see_the_gpu_too(tmp_path, monkeypatch):
     monkeypatch.setattr(toolchain, "on_cuda", lambda: True)
     server = tmp_path / "llama-server"

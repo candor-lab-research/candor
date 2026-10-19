@@ -32,6 +32,15 @@ def searched_thinking_off(tiny, monkeypatch, trials: int = 12):
     return tiny
 
 
+def test_a_thinking_off_search_shows_no_thinking_it_didnt_do(tiny, monkeypatch):
+    searched_thinking_off(tiny, monkeypatch, trials=2)
+    config.write(tiny.folder.parent, "cli", tiny.settings, "made by a test")
+    result = CliRunner(env={"COLUMNS": "200"}).invoke(app, ["search", str(tiny.folder.parent / "cli")])
+    assert result.exit_code == 0, result.output
+    assert "reached the search's budget" not in result.output
+    assert "after an empty thinking block" in result.output
+
+
 def test_the_edits_are_each_kind_and_places_best_of_a_thinking_off_search(tiny, monkeypatch):
     searched_thinking_off(tiny, monkeypatch)
     tiny.settings.search.widest_strength = (0.5, 1.6)
@@ -47,16 +56,19 @@ def test_the_edits_are_each_kind_and_places_best_of_a_thinking_off_search(tiny, 
             ]
             expected += [c.trial for c in sorted(group, key=lambda c: (c.refusals, c.kl))[: proxy.BEST]]
     assert trials == [trial for trial in expected for _ in proxy.FACTORS] and len(set(expected)) > 2
-    assert factors == list(proxy.FACTORS) * len(expected)
     assert [edit.name for edit in edits] == [f"edit-{n}" for n in range(1, len(edits) + 1)]
     _, layers, _, _ = tiny.shape
-    for edit, trial, factor in zip(edits, trials, factors, strict=True):
+    for edit, trial, factor, held in zip(edits, trials, proxy.FACTORS * len(expected), factors, strict=True):
         found_edit = search.edit_from(found.trials[trial].params, trial, layers)
         assert edit.direction_layer == found_edit.direction_layer and edit.answering == found_edit.answering
+        made = []
         for component, kernel in edit.kernels.items():
-            assert kernel.max_weight == pytest.approx(
-                min(found_edit.kernels[component].max_weight * factor, 1.6)
-            )
+            before = found_edit.kernels[component].max_weight
+            assert kernel.max_weight == pytest.approx(min(before * factor, 1.6))
+            made.append(kernel.max_weight / before)
+        # Shown as the multiple each strength became, once held within the widest strength.
+        assert held == pytest.approx((min(made), max(made)))
+    assert any(low < factor for (low, _), factor in zip(factors, proxy.FACTORS * len(expected), strict=True))
 
 
 def test_the_trials_named_are_checked_once_each_in_order_and_must_be_scored_in_full(tiny, monkeypatch):
@@ -65,7 +77,7 @@ def test_the_trials_named_are_checked_once_each_in_order_and_must_be_scored_in_f
     assert found is not None
     first, *_, last = sorted(c.trial for c in search.scored_in_full(found))
     edits, trials, factors = proxy.edits(tiny, [last, first, last])
-    assert trials == [last, last, first, first] and factors == list(proxy.FACTORS) * 2
+    assert trials == [last, last, first, first] and [high for _, high in factors] == list(proxy.FACTORS) * 2
     assert [edit.name for edit in edits] == ["edit-1", "edit-2", "edit-3", "edit-4"]
     _, layers, _, _ = tiny.shape
     assert edits[0].kernels == search.edit_from(found.trials[last].params, last, layers).kernels
@@ -102,7 +114,7 @@ def fixed(monkeypatch, count: int = 24) -> int:
     """proxy.edits giving count edits named by their place, as if from search trials 101 on."""
     edits = [Edit(f"edit-{n}", None, {}) for n in range(1, count + 1)]
     trials = [101 + n // len(proxy.FACTORS) for n in range(count)]
-    factors = list(proxy.FACTORS) * (count // len(proxy.FACTORS))
+    factors = [(f, f) for f in proxy.FACTORS] * (count // len(proxy.FACTORS))
     monkeypatch.setattr(proxy, "edits", lambda run, chosen=(): (edits, trials, factors))
     return count
 
@@ -235,7 +247,8 @@ def test_the_check_scores_a_real_thinking_model_both_ways(tiny, monkeypatch):
     assert sum(score.thinking for score in checked.on) > 0
     assert checked.repeat.judged == checked.on[checked.repeated].judged
     saved = json.loads(tiny.path("proxy", "scores.json").read_text())
-    assert set(saved) == {"inputs", "base", "off", "on", "repeat"}
+    assert set(saved) == {"inputs", "base", "off", "on", "repeat", "machines"}
+    assert saved["machines"] == [tiny.machine()]
 
 
 def test_proxy_shows_both_counts_and_whether_the_cheap_score_may_be_used(tiny, monkeypatch):
@@ -312,6 +325,6 @@ def scored(refusals: list[int], judged: int = 100) -> list[Score]:
 )
 def test_the_verdict_needs_alike_ranks_and_no_leniency_where_edits_nearly_work(off, on, verdict):
     edits = [Edit(f"edit-{i}", None, {}) for i in range(len(off))]
-    ones = [1.0] * len(off)
+    ones = [(1.0, 1.0)] * len(off)
     checked = proxy.Check(edits, [1] * len(off), ones, scored(off), scored(on), {}, 0, scored([0])[0])
     assert checked.verdict() == verdict

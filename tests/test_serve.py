@@ -10,9 +10,10 @@ from datetime import date
 import pytest
 from typer.testing import CliRunner
 
-from candor import config, engine, serve, toolchain
+from candor import cli, config, engine, serve, toolchain
+from candor import run as run_module
 from candor.cli import app
-from candor.engine import ServerError
+from candor.engine import LLAMA_CPP_RELEASE, ServerError
 from candor.run import Run, RunError
 
 from .test_engine import KV_FAILED, NO_ROOM, stub
@@ -60,6 +61,8 @@ def test_the_server_runs_at_the_runs_settings(tiny, monkeypatch):
     model = tiny.folder / "model.gguf"
     args = serve.arguments(tiny, model, 8080, 4096)
     assert args[1:3] == ["-m", str(model)] and args[args.index("-c") + 1] == "4096"
+    # llama-server fits what it can on the GPU, as it can't if told how many layers to put there.
+    assert "-ngl" not in args
     assert args[args.index("--cache-type-k") + 1] == "f16" and "-fa" not in args
     assert "--chat-template-kwargs" not in args  # the only setting is the pinned date
     tiny.settings.deployment.kv_cache = "q8_0"
@@ -105,6 +108,33 @@ def test_serve_shows_the_mode_then_serves_until_ctrl_c(tiny, stopped_by_ctrl_c):
     assert f"Chat at http://127.0.0.1:{port}" in shown and shown.rstrip().endswith("Stopped.")
     assert stopped_by_ctrl_c[0].poll() is not None
     assert (folder / "private" / "logs" / "serve.log").exists()
+
+
+def test_a_server_that_crashes_while_serving_ends_serve_with_an_error(tiny, monkeypatch):
+    folder = cli_folder(tiny)
+    real = serve.start
+    started = []
+
+    def start(args, log):
+        process = real(args, log)
+        waiting = process.wait
+
+        def crash(timeout=None):
+            if timeout is None:
+                process.kill()
+                waiting()
+                return 1
+            return waiting(timeout)
+
+        process.wait = crash
+        started.append(process)
+        return process
+
+    monkeypatch.setattr(serve, "start", start)
+    result = CliRunner(env={"COLUMNS": "250"}).invoke(app, ["serve", str(folder), "--port", str(free_port())])
+    assert result.exit_code == cli.FAILED_CHECK, result.output
+    assert "llama-server stopped by itself with code 1" in " ".join(result.output.split())
+    assert started[0].poll() is not None
 
 
 def test_serve_runs_a_trials_export_and_only_that_edits(tiny, converting, monkeypatch, stopped_by_ctrl_c):  # noqa: F811
@@ -153,6 +183,26 @@ def test_serve_runs_a_search_trial_without_the_weights(tiny, converting, monkeyp
     served = runner.invoke(app, ["serve", str(folder), "--trial", "2", "--port", str(free_port())])
     assert served.exit_code == 0, served.output
     assert "Serving trial-2" in served.output and "256 tokens of context" in served.output
+
+
+def test_a_hub_model_pinned_to_a_commit_finds_its_gguf_without_the_weights(tiny, monkeypatch):
+    # As a Hub model at the commit init pins: its headers can be read, its weights aren't here.
+    stored = run_module.source.float_type(tiny.settings.model.source)
+    monkeypatch.setattr(run_module.source, "float_type", lambda source, revision=None: stored)
+    monkeypatch.setattr(run_module.source, "is_local", lambda source: False)
+
+    def needs_the_weights(run):
+        raise RunError("this needs the original weights")
+
+    monkeypatch.setattr(Run, "model_folder", property(needs_the_weights))
+    tiny.settings.model.source, tiny.settings.model.revision = "org/model", "a" * 40
+    model = {
+        "model": run_module.digest({"repo": "org/model", "commit": "a" * 40}),
+        "llama.cpp": LLAMA_CPP_RELEASE,
+    }
+    assert tiny.model_file() == run_module.digest(
+        {"base": run_module.digest(model), "quantization": "Q4_K_M"}
+    )
 
 
 def test_the_sample_shows_the_servers_own_template_settings(tiny, tmp_path, monkeypatch, stopped_by_ctrl_c):

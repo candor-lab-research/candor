@@ -429,6 +429,7 @@ class Measurement:
             "tokens": [a.tokens for a in answers],
             "answer_seconds": before + answering,
             "seed": self.seed,
+            "machine": run.machine(),
         }
         if thinking:
             result["thinking"] = [a.thinking for a in answers]
@@ -543,6 +544,7 @@ class Measurement:
             "judge_safety": [v.safety for v in verdicts],
             "judge": digest(inputs["judge"]),
             "judge_seconds": time.perf_counter() - started,
+            "judge_machine": self.guard.machine,
         }
         self._write_private(f"{name}.judged.json", {"judge_replies": replies})
         partial = path.with_name(path.name + ".building")
@@ -674,7 +676,8 @@ def load(run: Run, name: str) -> dict[str, dict[str, Any]]:
 def compare(a: dict[str, dict[str, Any]], b: dict[str, dict[str, Any]]) -> list[tuple[str, ...]]:
     """Two measurements of the same prompts, prompt by prompt: each count for both, the change, how
     many prompts went each way, the McNemar p-value of that split and a 95% interval for the change;
-    then the KL divergence of b's first tokens from a's, with a 95% interval for it."""
+    then the KL divergence of b's first tokens from a's, with a 95% interval for it, unless they were
+    read on different backends; and the seeds, slots and machines where they differ."""
     for name in SETS:
         if a[name]["paired"] != b[name]["paired"]:
             raise RunError(
@@ -715,7 +718,14 @@ def compare(a: dict[str, dict[str, Any]], b: dict[str, dict[str, Any]]) -> list[
         )
         if key in harmless_a and key in harmless_b
     ]
+    machines = [m["maths"].get("machine") for m in (a, b)]
+    # KL read on another backend is a few percent off whatever the edit does (findings).
+    platforms = {m["platform"] for m in machines if m}
+    apart = len(platforms) > 1
     for key, label in places:
+        if apart:
+            rows.append((label, "", "other backend"))
+            continue
         divergences = _kl(harmless_a[key], harmless_b[key])
         interval = mean_interval(divergences)
         shown = f"{interval[0]:.3f}, {interval[1]:.3f}" if interval else ""
@@ -724,4 +734,20 @@ def compare(a: dict[str, dict[str, Any]], b: dict[str, dict[str, Any]]) -> list[
     for label, key in (("Sampling seed", "seed"), ("Slots", "slots")):
         if a["maths"].get(key) != b["maths"].get(key):
             rows.append((label, str(a["maths"].get(key)), str(b["maths"].get(key)), "", "", "", ""))
+    if machines[0] != machines[1]:
+        rows.append(
+            ("GPU", *(", ".join(m["gpus"]) if m else "not recorded" for m in machines), "", "", "", "")
+        )
+    judges = [m["harmful_held_out"].get("judge_machine") for m in (a, b)]
+    if judges[0] != judges[1]:
+        rows.append(
+            (
+                "Judged on",
+                *(f"{j['device']}, {j['dtype']}" if j else "not recorded" for j in judges),
+                "",
+                "",
+                "",
+                "",
+            )
+        )
     return rows

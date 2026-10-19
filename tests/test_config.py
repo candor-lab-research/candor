@@ -119,8 +119,9 @@ def test_a_missing_setting_is_an_error_not_a_default(tmp_path, line, name):
 def test_bad_values_are_explained(tmp_path, old, new, message):
     text = config.render(settings(), "h")
     assert old in text
-    with pytest.raises(ConfigError, match=message):
+    with pytest.raises(ConfigError, match=message) as raised:
         config.load(write_text(tmp_path, text.replace(old, new)))
+    assert "Value error" not in str(raised.value) and "\n  : " not in str(raised.value)
 
 
 def test_chat_template_settings_read_back_and_a_file_from_before_them_loads(tmp_path):

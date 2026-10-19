@@ -33,6 +33,7 @@ where it would sit among the search's trials and whether the search could have d
 
 import json
 import math
+import shutil
 import time
 import warnings
 from collections.abc import Callable, Iterable, Iterator, Sequence
@@ -50,7 +51,8 @@ from optuna.storages import JournalStorage
 from optuna.storages.journal import JournalFileBackend
 from optuna.trial import BaseTrial, FrozenTrial, TrialState
 
-from . import config, kl
+from . import config, kl, residuals, toolchain
+from .edit import full_device
 from .engine import GREEDY, LlamaServer, Thinking
 from .files import write_atomic
 from .judge import Guard, is_refusal, judged_refusal, read_verdict
@@ -83,6 +85,9 @@ POSITIONS = (THINK_START, ANSWER_START)
 ROUNDING = 1e-9
 # KL is shown to this many decimals; edits closer than that are not told apart.
 KL_DIGITS = 4
+# How far a trial scored again may stray from its score in the search through batching noise alone:
+# its refusals by this many, its KL by this share.
+REPEAT_REFUSALS, REPEAT_KL = 1, 0.03
 # A setting within this share of its range from an end of it presses on that end.
 EDGE = 0.05
 # A trial stops early only once this many trials of its kind, scored in full, refused fewer. TPE learns
@@ -327,33 +332,37 @@ def _ends(value: float, low: float, high: float) -> tuple[bool, bool]:
     return value - low <= margin, high - value <= margin
 
 
+def _limits(layers: int) -> dict[str, tuple[float, float]]:
+    """How far each setting of an edit can go at most, whatever the search's ranges: strength above 0,
+    the peak and the edges' strength as fractions, and a reach of at least one layer."""
+    return {
+        "strength": (0.0, math.inf),
+        "peak_layer": (0.0, 1.0),
+        "edge_strength": (0.0, 1.0),
+        "reach": (1 / (layers - 1), 1.0),
+    }
+
+
 def at_edges(params: dict[str, Any], space: config.Search, layers: int) -> list[str]:
     """The ends of the search's ranges a trial's settings press on, where a better edit may lie just
-    outside them: either end of the strength and of the direction layers read, the peak's floor and
-    the reach's ceiling, unless that end is already the model's own. The other ends always are."""
+    outside them, unless that end is already as far as the setting can go (see _limits) or, for the
+    direction layers read, the model's own first or last layer."""
     pressed = []
     if "direction_layer" in params:
         low, high = space.direction_layers(layers)
         for end, word, limit in ((low, "first", 0), (high, "last", layers - 1)):
             if params["direction_layer"] == end != limit:
                 pressed.append(f"direction layer {end}, the {word} the search reads")
-    ranges = _ranges(space, layers)
-    # Which ends can move: the floor, and the ceiling, short of the model's own limits.
-    ends = {
-        "strength": (True, True),
-        "peak_layer": (ranges["peak_layer"][0] > 0, False),
-        "reach": (False, ranges["reach"][1] < 1),
-    }
+    ranges, limits = _ranges(space, layers), _limits(layers)
     for name, value in sorted(params.items()):
         setting = name.split(".")[-1]
-        if setting not in ends:
+        if setting not in limits:
             continue
-        low, high = ranges[setting]
-        floor, ceiling = ends[setting]
+        (low, high), (least, most) = ranges[setting], limits[setting]
         at_floor, at_ceiling = _ends(value, low, high)
-        if floor and at_floor:
+        if at_floor and low > least:
             pressed.append(f"{name} {value:.3g}, at its floor {low:.3g}")
-        if ceiling and at_ceiling:
+        if at_ceiling and high < most:
             pressed.append(f"{name} {value:.3g}, at its ceiling {high:.3g}")
     return pressed
 
@@ -408,13 +417,19 @@ def ties(a: "Score | Candidate", b: "Score | Candidate") -> bool:
     return a.refusals == b.refusals and round(a.kl, KL_DIGITS) == round(b.kl, KL_DIGITS)
 
 
-def repeats(score: Score, searched: Score) -> bool:
-    """Whether a trial scored again matches its score in the search, as shown."""
-    return (
-        ties(score, searched)
-        and score.keyword_refusals == searched.keyword_refusals
-        and score.judged == searched.judged
-    )
+def differences(score: Score, searched: Score) -> list[str]:
+    """How a trial scored again differs from its score in the search by more than batching noise moves
+    a score, none if it repeats it."""
+    found = [] if score.judged == searched.judged else [f"judged {score.judged}, not {searched.judged}"]
+    for what, now, before in (
+        ("refused", score.refusals, searched.refusals),
+        ("refused by keywords", score.keyword_refusals, searched.keyword_refusals),
+    ):
+        if abs(now - before) > REPEAT_REFUSALS:
+            found.append(f"{what} {now}, not {before}")
+    if not math.isclose(score.kl, searched.kl, rel_tol=REPEAT_KL):
+        found.append(f"KL {score.kl:.4f}, not {searched.kl:.4f}")
+    return found
 
 
 def _key(params: dict[str, Any]) -> str:
@@ -632,6 +647,24 @@ def _changed(before: dict[str, Any], now: dict[str, Any], keys: Iterable[str] | 
     return sorted("candor code" if key == "code" else key for key in keys if before.get(key) != now.get(key))
 
 
+def _moved(
+    folder: Path, study: optuna.Study, name: str, trials: list[FrozenTrial], *dropped: str
+) -> optuna.Study:
+    """A new study of this name holding these trials and study's user attributes, but "widened" and
+    those dropped, which the caller writes: "widened" last, as a study without it was left part made
+    by a search stopped while moving its trials, and is made again."""
+    storage = _storage(folder)
+    if name in optuna.get_all_study_names(storage):
+        optuna.delete_study(study_name=name, storage=storage)
+    new = optuna.create_study(study_name=name, storage=storage, direction="minimize")
+    for key, value in study.user_attrs.items():
+        if key not in ("widened", *dropped):
+            new.set_user_attr(key, value)
+    for trial in trials:
+        new.add_trial(trial)
+    return new
+
+
 def _study_name(scope: str, widenings: int) -> str:
     """The name of a kind's study after this many widenings of its strength range. Each holds every
     finished trial of the kind."""
@@ -795,6 +828,8 @@ class Search:
         self.positions = POSITIONS if run.settings.deployment.think_close else ()
         # Whether trials think, as the model is used: a thinking model's do unless scoring.thinking is off.
         self.thinks = bool(run.settings.deployment.think_close) and run.settings.scoring.thinking == "on"
+        # Where this session's trials run, recorded with each.
+        self.machine: dict[str, Any] = {}
 
     @property
     def slots(self) -> int:
@@ -820,21 +855,26 @@ class Search:
         with run.locked():
             run.check_remote_code()
             run.check_residuals()
+            # A search made from other inputs is refused before the model files and adapters it was
+            # scored with are rebuilt, and before a thinking model's unedited thinking is sampled; a new
+            # search is recorded only once that thinking exists.
+            self._check(self.inputs(), known=True)
             if self.positions and not self.thinks:
                 self.check_thinking_off()
-            adapters = run.adapters()
             _, quantized = run.gguf()
             ids = run.prompt_ids()
-            # A search made from other inputs is refused before a thinking model's unedited thinking is
-            # sampled, and a new search is recorded only once that thinking exists.
+            run.directions()
             self._check(self.inputs(ids), known=True)
             harmful, harmless = ids["harmful_test"], run.kl_ids(ids, "harmless_test")
             studies = self._studies(self.inputs(ids, harmless), len(harmful))
             target = min(target, len(SCOPES) * space.trials_per_scope)
             started(self._done(studies), target)
             if self._done(studies) < target:
+                self.machine = run.machine()
+                self._moved_machine(studies)
+                adapters = run.adapters()
                 files = [path for made in adapters.values() for path in made.values()]
-                with self._scorer(quantized, files, ids, harmless, _beside(run, ids)) as scorer:
+                with self._scorer(quantized, files, ids, harmless, _beside(run, ids), kept=True) as scorer:
                     first = studies[SCOPES[0]]
                     base = first.user_attrs.get("base_refusals")
                     if base is None:
@@ -901,14 +941,16 @@ class Search:
         run = self.run
         run.check_remote_code()
         run.check_residuals()
+        # Checked before the model files and adapters are brought up to date and before a thinking
+        # model's unedited thinking is sampled, so a mismatch leaves the run as it was. The Optuna
+        # version decides which trials the search draws, not how one is scored.
+        if beside_search:
+            self._check(self.inputs(), known=True, scoring=True)
         if self.positions and not (self.thinks if thinks is None else thinks):
             self.check_thinking_off()
         _, quantized = run.gguf()
         ids = run.prompt_ids()
         run.directions()
-        # Checked before the adapters are brought up to date and before a thinking model's unedited
-        # thinking is sampled, so a mismatch leaves the run as it was.
-        # The Optuna version decides which trials the search draws, not how one is scored.
         if beside_search:
             self._check(self.inputs(ids), known=True, scoring=True)
         harmful, harmless = ids["harmful_test"], run.kl_ids(ids, "harmless_test")
@@ -918,7 +960,14 @@ class Search:
         made = [self._edit_files(edit, adapters) for edit in edits] if run.linear else []
         files = [path for found in [*adapters.values(), *made] for path in found.values()]
         with self._scorer(
-            quantized, list(dict.fromkeys(files)), ids, harmless, _beside(run, ids), thinks, seed
+            quantized,
+            list(dict.fromkeys(files)),
+            ids,
+            harmless,
+            _beside(run, ids),
+            thinks,
+            seed,
+            beside_search,
         ) as scorer:
             base_refusals = scorer.score({}, read_kl=False).refusals if base else None
             scores = []
@@ -960,7 +1009,11 @@ class Search:
         strength has one adapter built for it, in folder, and the server is restarted with it."""
         if self.run.linear:
             return self._scales(edit, self._edit_files(edit, adapters))
+        # Built with the server stopped, as building it may take the GPU, whose memory is given back
+        # before the server starts again.
+        scorer.server.stop()
         path, _ = self.run.edit_adapter(folder, edit)
+        residuals.free_memory(full_device())
         scorer.load([path])
         return {path: 1.0}
 
@@ -979,15 +1032,18 @@ class Search:
         beside: dict[str, list[list[int]]],
         thinks: bool | None = None,
         seed: int | None = None,
+        kept: bool = False,
     ) -> Iterator["_Scorer"]:
         """A scorer on llama-server with these adapters loaded, and the judge, for the test prompts; it
         also reads KL on the harmless prompts beside, by the name of the score that keeps it. A thinking
         model thinks when thinks is True, by default as the search's trials do, and otherwise answers
-        greedily after an empty thinking block. seed replaces the sampling seed."""
+        greedily after an empty thinking block. seed replaces the sampling seed. With kept, the unedited
+        model's first tokens are kept in the search's folder, and read again only when what they are
+        read from or the machine changes."""
         run, settings = self.run, self.run.settings
         thinks = self.thinks if thinks is None else thinks
         closed = bool(settings.deployment.think_close) and not thinks
-        texts = run.prompt_texts()[0]["harmful_test"]
+        texts = run.searched_texts("harmful_test")
         harmful = ids["harmful_test" + ANSWERING] if closed else ids["harmful_test"]
         budget = settings.scoring.thinking_budget
         tokens = settings.scoring.closed_answer_tokens if closed else settings.scoring.answer_tokens
@@ -1019,6 +1075,15 @@ class Search:
                     run.thinking(server, budget),
                 )
             )
+            reads = {
+                "model file": run.inputs["quantized"],
+                "KV cache": settings.deployment.kv_cache,
+                "slots": slots,
+                "KL tokens": settings.scoring.kl_tokens,
+                "prompts": digest([harmless, beside]),
+                "machine": run.machine(),
+            }
+            base = _base_reads(server, harmless, beside, settings.scoring.kl_tokens, self.folder, reads, kept)
             scorer = _Scorer(
                 server,
                 guard,
@@ -1029,6 +1094,7 @@ class Search:
                 answering,
                 beside,
                 server_with,
+                base,
             )
             yield scorer
         finally:
@@ -1036,12 +1102,13 @@ class Search:
             guard.close()
 
     def inputs(
-        self, ids: dict[str, list[list[int]]], harmless: list[list[int]] | None = None
+        self, ids: dict[str, list[list[int]]] | None = None, harmless: list[list[int]] | None = None
     ) -> dict[str, Any]:
         """What the search's scores depend on. A search is only carried on while these are the same. For a
         thinking model that includes the unedited thinking KL is read after: named by what it was
         sampled from, known before any is sampled, and given the KL prompts, the thinking itself, as
-        thinking sampled afresh from the same settings comes out differently."""
+        thinking sampled afresh from the same settings comes out differently. Without ids, only those
+        known before anything is built, so a search they refuse leaves the run as it was."""
         settings = self.run.settings
         # Nothing for a greedy model that doesn't think, so searches made before candor sampled still
         # carry on.
@@ -1059,10 +1126,8 @@ class Search:
         )
         recorded = settings.deployment.think_close or self.slots != config.SEARCH_SLOTS
         slots = {"slots": self.slots} if recorded else {}
-        return {
-            "model file": self.run.inputs["quantized"],
-            **_rebuilt_from(self.run),
-            "test prompts": digest([ids["harmful_test"], ids["harmless_test"]]),
+        known = {
+            "model file": self.run.model_file(),
             "answer length": settings.scoring.answer_tokens,
             **how,
             "KL tokens": settings.scoring.kl_tokens,
@@ -1071,7 +1136,14 @@ class Search:
             "search settings": settings.search.model_dump(exclude=unrecorded),
             **slots,
             "Optuna": optuna.__version__,
-        } | (self._thinking(harmless) if settings.deployment.think_close else {})
+        }
+        if ids is None:
+            return known
+        built = {
+            **_rebuilt_from(self.run),
+            "test prompts": digest([ids["harmful_test"], ids["harmless_test"]]),
+        }
+        return known | built | (self._thinking(harmless) if settings.deployment.think_close else {})
 
     def _thinking(self, harmless: list[list[int]] | None) -> dict[str, Any]:
         scoring = self.run.settings.scoring
@@ -1160,28 +1232,26 @@ class Search:
         if not finished:
             study.set_user_attr("budget hits", [*changes, [0, hits]])
             return study
-        storage = _storage(self.folder)
-        name = _judged_name(scope, len(changes) + 1)
-        # Left part made by a search stopped while judging its trials again.
-        if name in optuna.get_all_study_names(storage):
-            optuna.delete_study(study_name=name, storage=storage)
-        new = optuna.create_study(study_name=name, storage=storage, direction="minimize")
-        for key, value in study.user_attrs.items():
-            if key not in ("widened", "budget hits"):
-                new.set_user_attr(key, value)
+        moved = []
         for trial in finished:
             attrs = {key: value for key, value in trial.user_attrs.items() if key != "budget violation"}
             if hits is not None:
                 attrs["budget violation"] = budget_violation(_score(trial), prompts, hits)
-            new.add_trial(
+            told = list(_constraints(attrs))
+            if trial.user_attrs["stopped"]:
+                # A trial that stopped early, as one too far over a cap the search judged it by then,
+                # stays outside the caps however they change: its counts so far could be within them.
+                told[0] = max(told[0], 0.5)
+            moved.append(
                 optuna.trial.create_trial(
                     params=trial.params,
                     distributions=trial.distributions,
                     value=trial.value,
                     user_attrs=attrs,
-                    system_attrs=trial.system_attrs | {_CONSTRAINTS_KEY: list(_constraints(attrs))},
+                    system_attrs=trial.system_attrs | {_CONSTRAINTS_KEY: told},
                 )
             )
+        new = _moved(self.folder, study, _judged_name(scope, len(changes) + 1), moved, "budget hits")
         new.set_user_attr("budget hits", [*changes, [len(finished), hits]])
         # Written last, as at a widening: a study without it was left part made.
         new.set_user_attr("widened", _widenings(study))
@@ -1221,6 +1291,17 @@ class Search:
                 constraints_func=_violation,
             )
 
+    def _moved_machine(self, studies: dict[str, optuna.Study]) -> None:
+        """Say so when the search's last trial ran on another machine than this session's trials will."""
+        trials = [t for study in studies.values() for t in _completed(study)]
+        last = max(trials, key=lambda t: t.user_attrs["number"], default=None)
+        if last is not None and (before := last.user_attrs.get("machine")) and before != self.machine:
+            self.run.report(
+                f"The search's trials so far ran on {toolchain.described(before)}, and this session's run "
+                f"on {toolchain.described(self.machine)}: KL read on different machines can differ by a "
+                "few percent, so trials either side of this aren't quite like for like"
+            )
+
     def _widen(self, studies: dict[str, optuna.Study], scope: str) -> None:
         """At a check, widen the kind's strength range if its best edit says to (see widened). Its finished
         trials move to a new study of the kind over the wider range, since the sampler only learns
@@ -1241,30 +1322,21 @@ class Search:
         wider = widened(found, scope, before)
         if wider == before.strength:
             return
-        storage = _storage(self.folder)
-        name = _study_name(scope, len(widenings) + 1)
-        # Left part made by a search stopped while widening.
-        if name in optuna.get_all_study_names(storage):
-            optuna.delete_study(study_name=name, storage=storage)
-        new = optuna.create_study(study_name=name, storage=storage, direction="minimize")
-        for key, value in study.user_attrs.items():
-            if key != "widened":
-                new.set_user_attr(key, value)
         strength = FloatDistribution(*wider)
-        for trial in _completed(study):
-            distributions = {
-                param: strength if param.endswith(".strength") else distribution
-                for param, distribution in trial.distributions.items()
-            }
-            new.add_trial(
-                optuna.trial.create_trial(
-                    params=trial.params,
-                    distributions=distributions,
-                    value=trial.value,
-                    user_attrs=trial.user_attrs,
-                    system_attrs=trial.system_attrs,
-                )
+        moved = [
+            optuna.trial.create_trial(
+                params=trial.params,
+                distributions={
+                    param: strength if param.endswith(".strength") else distribution
+                    for param, distribution in trial.distributions.items()
+                },
+                value=trial.value,
+                user_attrs=trial.user_attrs,
+                system_attrs=trial.system_attrs,
             )
+            for trial in _completed(study)
+        ]
+        new = _moved(self.folder, study, _study_name(scope, len(widenings) + 1), moved)
         # Written last: a study without it was left part made.
         new.set_user_attr("widened", [*widenings, [finished, *wider]])
         self._ready(new, scope)
@@ -1340,6 +1412,10 @@ class Search:
                 )
             edit = edit_from(trial.params, number, layers)
             started = time.perf_counter()
+            # Each trial's own adapter replaces the last one's, which goes first, so nothing says it is
+            # rebuilt.
+            if not run.linear:
+                shutil.rmtree(run.path("scores", "trial"), ignore_errors=True)
             scales = self._applied(edit, adapters, scorer, run.path("scores", "trial"))
             cap, hits = space.max_refusals, space.max_budget_hits
             full = sorted(_over_caps(t) for t in _completed(study) if not t.user_attrs["stopped"])
@@ -1362,10 +1438,45 @@ class Search:
             if hits is not None:
                 trial.set_user_attr("budget violation", budget_violation(score, prompts, hits))
             trial.set_user_attr("seconds", time.perf_counter() - started)
+            trial.set_user_attr("machine", self.machine)
         except BaseException:
             study.tell(trial, state=TrialState.FAIL)
             raise
         return study.tell(trial, score.kl)
+
+
+def _base_reads(
+    server: LlamaServer,
+    harmless: list[list[int]],
+    beside: dict[str, list[list[int]]],
+    kl_tokens: int,
+    folder: Path,
+    reads: dict[str, Any],
+    kept: bool,
+) -> tuple[list[dict[int, float]], dict[str, list[dict[int, float]]]]:
+    """The unedited model's first tokens on the KL prompts and those beside. With kept, those a session
+    read from the same reads before are used again, so every session of a search sets its trials
+    against the same ones; otherwise they are read and, with kept, kept."""
+    path = folder / "base-first-tokens.json"
+    # Kept only beside a search.
+    kept = kept and folder.is_dir()
+    if kept and path.exists():
+        saved = json.loads(path.read_text())
+        if saved["reads"] == json.loads(json.dumps(reads)):
+            return [_read(top) for top in saved["kl"]], {
+                name: [_read(top) for top in found] for name, found in saved["beside"].items()
+            }
+    base = server.top_logprobs(harmless, kl_tokens)
+    others = {name: server.top_logprobs(prompts, kl_tokens) for name, prompts in beside.items()}
+    if kept:
+        made = {"reads": reads, "kl": base, "beside": others}
+        # In the order read, so KL sums them as it would have.
+        write_atomic(path, json.dumps(made))
+    return base, others
+
+
+def _read(top: dict[str, float]) -> dict[int, float]:
+    return {int(token): p for token, p in top.items()}
 
 
 @dataclass(frozen=True)
@@ -1393,13 +1504,13 @@ class _Scorer:
         answering: _Answering,
         beside: dict[str, list[list[int]]],
         server_with: Callable[[list[Path]], LlamaServer],
+        base: tuple[list[dict[int, float]], dict[str, list[dict[int, float]]]],
     ):
         self.server, self.guard, self.texts = server, guard, texts
         self.server_with = server_with
         self.harmful, self.harmless, self.kl_tokens = harmful, harmless, kl_tokens
         self.answering, self.beside = answering, beside
-        self.base = server.top_logprobs(harmless, kl_tokens)
-        self.base_beside = {name: server.top_logprobs(prompts, kl_tokens) for name, prompts in beside.items()}
+        self.base, self.base_beside = base
 
     def load(self, adapters: list[Path]) -> None:
         """Restart the server with these adapters: an edit that isn't linear in strength has one built for

@@ -132,6 +132,14 @@ def test_one_adapter_per_target_for_each_direction_set(current):
         assert all(path.exists() for path in paths.values())
 
 
+def test_each_weight_is_read_once_for_every_adapter_set(current, monkeypatch):
+    read, real = [], ModelFiles.tensor
+    monkeypatch.setattr(ModelFiles, "tensor", lambda self, name: read.append(name) or real(self, name))
+    made = current[0].adapters()
+    # 4 targets, for 3 sets.
+    assert len(made) == 3 and sorted(read) == sorted(set(read)) and len(read) == 4
+
+
 @pytest.mark.parametrize("row_norm", ["pre", "none"])
 def test_adapters_hold_the_edit_for_their_layers_direction(current, model, directions_by_seed, row_norm):
     this, _ = current

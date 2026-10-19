@@ -13,6 +13,7 @@ import fcntl
 import hashlib
 import json
 import math
+import re
 import shutil
 from collections.abc import Callable, Iterator, Sequence
 from contextlib import contextmanager
@@ -326,10 +327,15 @@ class Run:
     @cached_property
     def model_fingerprint(self) -> str:
         """Local folders by the names, sizes and times of the files a run reads; Hub models by their
-        commit. Nothing else, so editing a README or moving the folder rebuilds nothing."""
+        commit, found without downloading them when the run pins it. Nothing else, so editing a README
+        or moving the folder rebuilds nothing."""
+        model = self.settings.model
+        if not source.is_local(model.source):
+            # A download is kept under the commit it is at.
+            pinned = model.revision is not None and re.fullmatch(r"[0-9a-f]{40}", model.revision)
+            commit = model.revision if pinned else self.model_folder.name
+            return digest({"repo": model.source, "commit": commit})
         folder = self.model_folder
-        if not source.is_local(self.settings.model.source):
-            return digest({"repo": self.settings.model.source, "commit": folder.name})
         read = [
             p
             for p in folder.iterdir()
@@ -433,17 +439,28 @@ class Run:
                 f"converting needs about {needed / 1e9:.1f} GB free here; there is {free / 1e9:.1f} GB"
             )
 
+    def _planned_gguf(self) -> tuple[Path, dict[str, Any], Path, dict[str, Any]]:
+        """Where the model's unquantised and deployed GGUFs go, and what each is built from."""
+        out = self.path("gguf")
+        quantization = self.settings.deployment.quantization
+        # From the weights' headers, which a Hub model's need no download for.
+        base_type = source.float_type(self._model_without_download, self.settings.model.revision)
+        base = out / f"model-{base_type}.gguf"
+        base_inputs = {"model": self.model_fingerprint, "llama.cpp": LLAMA_CPP_RELEASE}
+        quantized = base if quantization == base_type else out / f"model-{quantization}.gguf"
+        return base, base_inputs, quantized, {"base": digest(base_inputs), "quantization": quantization}
+
+    def model_file(self) -> str:
+        """What the deployed GGUF is built from, without building it."""
+        return digest(self._planned_gguf()[3])
+
     def gguf(self) -> tuple[Path, Path]:
         """The model as an unquantised GGUF of its own float type, every edit target checked, and in
         the deployment quantisation."""
         out = self.path("gguf")
         out.mkdir(exist_ok=True)
+        base, base_inputs, quantized, quantized_inputs = self._planned_gguf()
         quantization = self.settings.deployment.quantization
-        base_type = convert.float_type(self.model_folder)
-        base = out / f"model-{base_type}.gguf"
-        base_inputs = {"model": self.model_fingerprint, "llama.cpp": LLAMA_CPP_RELEASE}
-        quantized = base if quantization == base_type else out / f"model-{quantization}.gguf"
-        quantized_inputs = {"base": digest(base_inputs), "quantization": quantization}
         for leftover in out.iterdir():
             kept = {base.name, quantized.name, record_of(base).name, record_of(quantized).name, "convert.log"}
             if leftover.name not in kept:
@@ -497,6 +514,10 @@ class Run:
         return LlamaServer(
             binary, model, log, adapters, parallel, context_per_slot, extra=extra, slots_setting=slots_setting
         )
+
+    def machine(self) -> dict[str, Any]:
+        """Where the run's llama-server runs (see toolchain.machine)."""
+        return toolchain.machine(toolchain.binaries())
 
     def cache_flags(self) -> list[str]:
         """llama-server's flags for the KV cache type the run deploys with."""
@@ -746,6 +767,14 @@ class Run:
         texts["maths"] = [f"{question}\n\n{instruction}" for question in texts["maths"]]
         return texts, dropped
 
+    def searched_texts(self, name: str) -> list[str]:
+        """One of the sets the search sees, as prompt_texts gives it, read from its dataset alone: only
+        the held-out sets and maths are changed by the others."""
+        assert name not in (*HELD_OUT, "maths")
+        if not (texts := load_prompts(spec := getattr(self.settings.prompts, name))):
+            raise RunError(f"the {name} prompt set ({spec.dataset}, {spec.split}) is empty")
+        return texts
+
     def check_prompts(self, server: LlamaServer, name: str, texts: list[str], ids: list[list[int]]) -> None:
         """Prompts read again from their dataset must be the ones prompts.json was built from, before
         a judge reads them or answers are checked against their rows."""
@@ -941,23 +970,37 @@ class Run:
     ) -> dict[str, Path]:
         """One rank-1 adapter per edit target along its layer's direction in set_directions, named by its
         GGUF tensor. Written to folder unless it already holds them, built from these inputs."""
+        return self.adapter_sets({folder: (set_directions, inputs)})[folder]
+
+    def adapter_sets(
+        self, sets: dict[Path, tuple[torch.Tensor, dict[str, Any]]]
+    ) -> dict[Path, dict[str, Path]]:
+        """adapter_set for each folder, its directions and inputs. Each weight is read once for every set
+        that needs writing, rather than once a set."""
         _, _, arch, writers = self.shape
         names = self.target_names
-        if not self.fresh(folder, inputs):
+        stale = {folder: made for folder, made in sets.items() if not self.fresh(folder, made[1])}
+        if stale:
             files = ModelFiles(self.model_folder)
             model_config = source.read_config(str(self.model_folder))
             row_norm = RowNorm(self.settings.edit.row_norm)
-            self.report(f"Writing adapters for {folder.relative_to(self.folder)}")
-            partial = folder.with_name(f"{folder.name}.building")
-            _remove(partial)
-            partial.mkdir(parents=True)
+            [first, *more] = [str(folder.relative_to(self.folder)) for folder in stale]
+            self.report(
+                f"Writing adapters for {first}" + (f" and {len(more)} more direction sets" if more else "")
+            )
+            partials = {folder: folder.with_name(f"{folder.name}.building") for folder in stale}
+            for partial in partials.values():
+                _remove(partial)
+                partial.mkdir(parents=True)
             for writer in writers:
                 name = names[writer.name]
                 weight = convert.as_converted(files.tensor(writer.name), writer.name, arch, model_config)
-                factors = rank_one(weight, set_directions[writer.layer], row_norm)
-                write_adapter(partial / f"{name}.gguf", arch, {name: factors})
-            self.commit(partial, folder, inputs)
-        return {names[w.name]: folder / f"{names[w.name]}.gguf" for w in writers}
+                for folder, (set_directions, _) in stale.items():
+                    factors = rank_one(weight, set_directions[writer.layer], row_norm)
+                    write_adapter(partials[folder] / f"{name}.gguf", arch, {name: factors})
+            for folder, (_, inputs) in stale.items():
+                self.commit(partials[folder], folder, inputs)
+        return {folder: {names[w.name]: folder / f"{names[w.name]}.gguf" for w in writers} for folder in sets}
 
     @property
     def linear(self) -> bool:
@@ -984,7 +1027,8 @@ class Run:
         for leftover in root.iterdir():
             if leftover.name.removesuffix(".inputs.json") not in sets:
                 _remove(leftover)
-        return {name: self.adapter_set(root / name, made, inputs) for name, (made, inputs) in sets.items()}
+        built = self.adapter_sets({root / name: made for name, made in sets.items()})
+        return {name: built[root / name] for name in sets}
 
     def changes(self, edit: "Edit") -> dict[str, tuple[torch.Tensor, torch.Tensor]]:
         """Each weight the edit changes, by its name in the model, and the change as factors (b, a), the
@@ -1058,4 +1102,6 @@ class Run:
             if made
             else {}
         )
-        return {**shared, "prompts": sum(map(len, ids.values())), **thought}
+        # Each prompt once: a thinking model's sets also hold each prompt with its thinking closed.
+        prompts = sum(len(found) for name, found in ids.items() if not name.endswith(ANSWERING))
+        return {**shared, "prompts": prompts, **thought}

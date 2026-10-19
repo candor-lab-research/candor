@@ -293,6 +293,30 @@ def test_measurements_with_other_settings_are_not_compared(tiny):
     assert measure.compare(first, Measurement(tiny, None, "again", slots=2).measure())
 
 
+def test_compare_names_the_machines_and_leaves_out_kl_read_on_another_backend(tiny):
+    here = Measurement(tiny, None, "base").measure()
+    assert here["maths"]["machine"] == tiny.machine()
+    assert here["harmful_held_out"]["judge_machine"] == FakeGuard.machine
+    assert measure.compare(here, here)[-1][0] == "Harmless KL from A"
+
+    def on(machine, judged=None):
+        sets = {name: dict(results, machine=machine) for name, results in here.items()}
+        sets["harmful_held_out"]["judge_machine"] = judged or FakeGuard.machine
+        return sets
+
+    a40 = {"platform": "linux-cuda", "gpus": ["NVIDIA A40"]}
+    rows = {row[0]: row for row in measure.compare(here, on(a40, {"device": "cuda", "dtype": "bfloat16"}))}
+    assert rows["Harmless KL from A"][1:3] == ("", "other backend")
+    assert rows["GPU"][1:3] == (", ".join(tiny.machine()["gpus"]), "NVIDIA A40")
+    assert rows["Judged on"][1:3] == ("cpu, float32", "cuda, bfloat16")
+    # Another card on the same backend is named, and its KL still shown.
+    h100 = {"platform": "linux-cuda", "gpus": ["NVIDIA H100"]}
+    rows = {row[0]: row for row in measure.compare(on(a40), on(h100))}
+    assert (
+        rows["GPU"][1:3] == ("NVIDIA A40", "NVIDIA H100") and rows["Harmless KL from A"][2] != "other backend"
+    )
+
+
 def test_measurements_by_other_measuring_code_are_measured_again_and_not_compared(tiny, monkeypatch):
     before = Measurement(tiny, None, "base").measure()
     monkeypatch.setitem(run.STAGES, "measurements", run.STAGES["measurements"] + 1)
@@ -794,6 +818,20 @@ def test_the_same_seed_samples_the_same_answers_and_another_is_still_compared(ti
     rows = {row[0]: row for row in measure.compare(first, other)}
     assert rows["Sampling seed"][1:3] == ("0", "5") and "Harmful, thinking cut" in rows
     assert "Sampling seed" not in {row[0] for row in measure.compare(first, again)}
+
+
+def test_a_thinking_runs_prompts_are_each_counted_once(tiny, monkeypatch):
+    thinks_through(monkeypatch)
+    done = thinking(tiny).prepare()
+    texts, _ = tiny.prompt_texts()
+    assert done["prompts"] == sum(map(len, texts.values()))
+
+
+def test_another_seed_is_refused_for_a_run_that_answers_greedily(tiny):
+    config.write(tiny.folder.parent, "cli", tiny.settings, "made by a test")
+    result = CliRunner().invoke(app, ["measure", str(tiny.folder.parent / "cli"), "--seed", "1"])
+    assert result.exit_code == cli.FAILED_CHECK and "answers greedily" in result.output
+    assert not (tiny.folder.parent / "cli" / "measurements").exists()
 
 
 def test_measurements_after_different_unedited_thinking_arent_compared(tiny, monkeypatch):

@@ -57,6 +57,7 @@ class FakeGuard:
 
     judged: ClassVar[list[int]] = []
     read: ClassVar[list[str]] = []
+    machine: ClassVar[dict[str, str]] = {"device": "cpu", "dtype": "float32", "torch": "fake"}
 
     def __init__(self, model: str, revision: str | None):
         FakeGuard.judged = []

@@ -22,6 +22,7 @@ from collections.abc import Iterator
 from contextlib import contextmanager
 from dataclasses import dataclass
 from pathlib import Path
+from typing import Any
 
 from .engine import LLAMA_CPP_RELEASE
 
@@ -219,15 +220,21 @@ def device_flags(folder: Path) -> list[str]:
 
 
 @functools.cache
-def _check_gpu(folder: Path) -> tuple[str, ...]:
-    """The CUDA devices llama-server lists, such as CUDA0, refusing one that lists none: it would
-    silently run on the CPU. Listing them starts CUDA, so it is done once."""
+def _listed(folder: Path) -> subprocess.CompletedProcess[str]:
+    """What folder's llama-server says when asked for its devices. Listing them starts CUDA, so it is
+    done once."""
     try:
-        devices = subprocess.run(
+        return subprocess.run(
             [str(folder / "llama-server"), "--list-devices"], capture_output=True, text=True, timeout=120
         )
     except (OSError, subprocess.TimeoutExpired) as error:
         raise ToolchainError(f"llama-server couldn't list the GPUs: {error}") from None
+
+
+def _check_gpu(folder: Path) -> tuple[str, ...]:
+    """The CUDA devices llama-server lists, such as CUDA0, refusing one that lists none: it would
+    silently run on the CPU."""
+    devices = _listed(folder)
     # The devices are listed on stdout. When CUDA fails to start, stderr says so, naming CUDA too.
     found = tuple(re.findall(r"^\s*(CUDA\d+): ", devices.stdout, re.MULTILINE))
     if not found:
@@ -236,6 +243,21 @@ def _check_gpu(folder: Path) -> tuple[str, ...]:
             f"llama-server can't see the GPU, so it would silently run on the CPU: {' / '.join(said)}"
         )
     return found
+
+
+def machine(folder: Path) -> dict[str, Any]:
+    """Where folder's llama-server runs: this platform's build, which decides the backend, and the
+    GPUs it lists, such as "NVIDIA A40". Numbers read on one machine can differ slightly on another."""
+    try:
+        listed = _listed(folder).stdout
+    except ToolchainError:
+        listed = ""
+    gpus = re.findall(r"^\s*(?!BLAS|CPU)\w+: (.+?) \(\d+ MiB", listed, re.MULTILINE)
+    return {"platform": this_platform(), "gpus": gpus}
+
+
+def described(machine: dict[str, Any]) -> str:
+    return f"{', '.join(machine['gpus']) or 'no GPU'} ({machine['platform']})"
 
 
 def _git(source: Path, *args: str) -> str:

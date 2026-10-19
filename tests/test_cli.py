@@ -1,6 +1,7 @@
 import contextlib
 import json
 import os
+import re
 import signal
 import subprocess
 import sys
@@ -319,6 +320,50 @@ def test_a_failure_while_writing_exits_3_and_leaves_nothing(tmp_path, monkeypatc
     assert list((tmp_path / "runs").iterdir()) == []
 
 
+def test_init_checks_the_commit_it_pins(tmp_path, monkeypatch):
+    folder = str(model_folder(tmp_path))
+    real_config, real_json, real_shapes = (
+        cli.source.read_config,
+        cli.source.read_json,
+        cli.source.tensor_shapes,
+    )
+    real_tokenizer = cli.AutoTokenizer.from_pretrained
+    read = []
+
+    # Each read of the Hub model, by the commit it asks for, made from the local copy.
+    def read_config(model, revision=None):
+        read.append((model, revision))
+        return real_config(folder)
+
+    def read_json(model, name, revision=None):
+        read.append((model, revision))
+        return real_json(folder, name)
+
+    def tensor_shapes(model, revision=None):
+        read.append((model, revision))
+        return real_shapes(folder)
+
+    def from_pretrained(model, revision=None, **kwargs):
+        read.append((model, revision))
+        return real_tokenizer(folder, **kwargs)
+
+    monkeypatch.setattr(cli.source, "read_config", read_config)
+    monkeypatch.setattr(cli.source, "read_json", read_json)
+    monkeypatch.setattr(cli.source, "tensor_shapes", tensor_shapes)
+    monkeypatch.setattr(cli.AutoTokenizer, "from_pretrained", from_pretrained)
+    cli._rows("org/model", "abc")
+    asked = [revision for model, revision in read if model == "org/model"]
+    assert len(asked) == 4 and set(asked) == {"abc"}
+    # init checks the commit the model is at, which it pins.
+    checked = []
+    monkeypatch.setattr(cli, "_revision", lambda model: "abc")
+    monkeypatch.setattr(
+        cli, "_checked_rows", lambda console, model, revision=None: checked.append(revision) or []
+    )
+    init(tmp_path, folder)
+    assert checked == ["abc"]
+
+
 def test_init_pins_the_prompt_datasets(tmp_path):
     assert init(tmp_path, model_folder(tmp_path)).exit_code == 0
     prompts = config.load(tmp_path / "runs" / "first").prompts
@@ -523,6 +568,9 @@ def test_run_says_how_it_ended(tmp_path, monkeypatch, outcome, code, message):
     result = candor_run(tmp_path)
     assert result.exit_code == code, result.output
     assert message in result.output and "odd" not in result.output
+    if code == 3:
+        # The lines of candor's own that led there too.
+        assert re.search(r"ValueError at test_cli\.py:\d+, from cli\.py:\d+", " ".join(result.output.split()))
     assert "Removing gguf/model [old].gguf" in result.output
     assert (signal.getsignal(signal.SIGTERM), signal.getsignal(signal.SIGHUP)) == handlers
 

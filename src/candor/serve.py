@@ -35,9 +35,11 @@ def context_limit(model: Path) -> int | None:
 
 def arguments(run: Run, model: Path, port: int, context: int, mcp: Path | None = None) -> list[str]:
     binaries = toolchain.binaries()
+    # No -ngl, so llama-server fits as many layers on the GPU as it can and runs the rest on the CPU, as
+    # chatting can; a measurement needs them all on the GPU.
     args = [
         str(binaries / "llama-server"), "-m", str(model), "--host", "127.0.0.1", "--port", str(port),
-        "-ngl", "999", "-np", "1", "-c", str(context), *run.cache_flags(), *toolchain.device_flags(binaries),
+        "-np", "1", "-c", str(context), *run.cache_flags(), *toolchain.device_flags(binaries),
     ]  # fmt: skip
     if settings := chat_settings(run):
         args += ["--chat-template-kwargs", json.dumps(settings)]

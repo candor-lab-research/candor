@@ -64,6 +64,12 @@ class Guard:
         self.model = AutoModelForCausalLM.from_pretrained(
             model, revision=revision, dtype=dtype, device_map=self.device
         ).eval()
+        # Labels from another device or type can differ on a few borderline answers.
+        self.machine = {
+            "device": self.device,
+            "dtype": str(dtype).removeprefix("torch."),
+            "torch": torch.__version__,
+        }
 
     def replies(
         self, prompts: list[str], answers: list[str], batch: int = 16, done: Callable[[], None] | None = None

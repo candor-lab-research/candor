@@ -166,7 +166,8 @@ def test_a_search_isnt_carried_on_or_scored_beside_once_anything_its_scores_depe
 ):
     small(tiny)
     Search(tiny).search(1)
-    records = {p: p.read_bytes() for p in tiny.path("adapters").glob("*.inputs.json")}
+    # What the search was scored with is left as it was by a refusal.
+    scored_with = model_files(tiny)
     change(tiny.settings, monkeypatch)
     edits = [Edit("each", None, KERNELS)]
     if named == "Optuna":
@@ -175,9 +176,66 @@ def test_a_search_isnt_carried_on_or_scored_beside_once_anything_its_scores_depe
     else:
         with pytest.raises(RunError, match=f"the search was made with different {named} from this run's now"):
             Search(tiny).score(edits)
-        assert {p: p.read_bytes() for p in tiny.path("adapters").glob("*.inputs.json")} == records
+        assert model_files(tiny) == scored_with
     with pytest.raises(RunError, match=f"holds a search made with a different {named}; move it aside"):
         Search(tiny).search(2)
+    assert model_files(tiny) == scored_with
+
+
+def model_files(run) -> dict[str, str]:
+    """The run's GGUFs and adapters, by path, as digests of their bytes."""
+    found = [p for folder in ("gguf", "adapters") for p in run.path(folder).rglob("*") if p.is_file()]
+    return {str(p.relative_to(run.folder)): hashlib.sha256(p.read_bytes()).hexdigest() for p in found}
+
+
+def test_each_trial_records_its_machine_and_a_search_moved_to_another_says_so(tiny, monkeypatch):
+    small(tiny, trials=2)
+    Search(tiny).search(2)
+    assert all(t.user_attrs["machine"] == tiny.machine() for t in finished(tiny))
+    said = []
+    tiny.report = said.append
+    a40 = {"platform": "linux-cuda", "gpus": ["NVIDIA A40"]}
+    monkeypatch.setattr(run.Run, "machine", lambda self: a40)
+    Search(tiny).search(3)
+    [moved] = [line for line in said if "ran on" in line]
+    assert "and this session's run on NVIDIA A40 (linux-cuda)" in moved
+    assert max(finished(tiny), key=lambda t: t.user_attrs["number"]).user_attrs["machine"] == a40
+    said.clear()
+    Search(tiny).search(4)
+    assert not [line for line in said if "ran on" in line]
+
+
+def test_the_unedited_models_first_tokens_are_read_once_a_search_until_the_machine_changes(tiny, monkeypatch):
+    small(tiny, trials=2)
+    Search(tiny).search(1)
+    read, real = [], LlamaServer.top_logprobs
+
+    def top(self, prompts, k, scales=None, done=None):
+        read.append(bool(scales))
+        return real(self, prompts, k, scales, done)
+
+    monkeypatch.setattr(LlamaServer, "top_logprobs", top)
+    Search(tiny).search(2)
+    assert read == [True]
+    read.clear()
+    monkeypatch.setattr(run.Run, "machine", lambda self: {"platform": "linux-cuda", "gpus": ["NVIDIA A40"]})
+    Search(tiny).search(3)
+    assert read == [False, True]
+
+
+def test_a_search_session_reads_only_the_harmful_test_prompts_from_their_dataset(tiny, monkeypatch):
+    small(tiny)
+    Search(tiny).search(1)
+    loaded, real = [], run.load_prompts
+
+    def load(spec):
+        loaded.append(spec)
+        return real(spec)
+
+    monkeypatch.setattr(run, "load_prompts", load)
+    Search(tiny).search(2)
+    assert loaded == [tiny.settings.prompts.harmful_test]
+    assert run.load_prompts(tiny.settings.prompts.harmful_test) == tiny.prompt_texts()[0]["harmful_test"]
 
 
 def test_more_trials_carry_on_the_same_search(tiny):
@@ -362,7 +420,7 @@ def test_search_and_measure_a_trial_from_the_command_line(tiny):
     assert searched.exit_code == 0, searched.output
     shown = flat(searched.output)
     assert "Fully scored trials no other beats on both refusals and KL" in shown
-    assert "so all 4 would take about" in shown
+    assert "so the 2 left of 4 would take about" in shown
     assert "Trial 1, one layer: 1 of 3 refused, KL" in shown
     assert "Trial 2, per layer: 1 of 3 refused, KL" in shown
     assert "The least KL of each kind at each count within the cap (2 refused)" in shown
@@ -1039,10 +1097,18 @@ def test_an_edit_beats_another_only_if_no_worse_on_both_and_better_on_one_as_sho
     assert search.ties(score(1, 0.101109), score(1, 0.101112))
     assert not search.ties(score(1, 0.1011), score(2, 0.1011))
     assert search.beats(search.Candidate(5, "per layer", 0, 4, 0.1, {}), score(1, 0.1))
-    assert search.repeats(score(1, 0.1, 3), score(1, 0.10001, 3))
-    assert not search.repeats(score(1, 0.1, 3), score(1, 0.1, 4))
-    assert not search.repeats(score(1, 0.1, 3), score(1, 0.1002, 3))
-    assert not search.repeats(score(1, 0.1, 3), score(1, 0.1, 3, judged=8))
+
+
+def test_a_trial_scored_again_repeats_its_score_within_noise():
+    def score(refusals, kl, keywords=0, judged=100):
+        return Score(refusals, keywords, 0, kl, judged)
+
+    # Batching noise alone moves a refusal or so, and KL by a few percent.
+    assert search.differences(score(1, 0.1, 3), score(2, 0.102, 4)) == []
+    assert search.differences(score(1, 0.1, 3), score(3, 0.1, 3)) == ["refused 1, not 3"]
+    assert search.differences(score(1, 0.1, 3), score(1, 0.1, 5)) == ["refused by keywords 3, not 5"]
+    assert search.differences(score(1, 0.1, 3), score(1, 0.104, 3)) == ["KL 0.1000, not 0.1040"]
+    assert search.differences(score(1, 0.1, 3), score(1, 0.1, 3, judged=8)) == ["judged 100, not 8"]
 
 
 def test_the_searched_score_is_the_trials_own():
@@ -1113,7 +1179,8 @@ def test_score_a_trial_and_a_heretic_trial_from_the_command_line(tiny):
     shown = flat(again.output)
     assert "Scored as the search scores its trials, on its 3 test prompts:" in shown
     assert "trial-2 scores as it did in the search" in shown
-    assert "The unedited model refuses 1 of 3 (1 in the search)." in shown
+    # Trial 2 scored again shows scoring repeats, so the unedited model isn't scored again.
+    assert "The unedited model refuses 1 of 3 in the search." in shown
 
     heretic = runner.invoke(app, ["score", str(folder), "--heretic", str(journal), "--trial", "1"])
     assert heretic.exit_code == 0, heretic.output
@@ -1142,7 +1209,7 @@ def test_the_command_line_says_which_trials_beat_an_edit_and_which_it_beats(tiny
     trials = cli._trials([c.trial for c in front])
 
     def scoring(*scores):
-        monkeypatch.setattr(Search, "score", lambda self, edits: search.Scores(3, 1, list(scores)))
+        monkeypatch.setattr(Search, "score", lambda self, edits, base=True: search.Scores(3, 1, list(scores)))
         result = runner.invoke(app, args)
         assert result.exit_code == 0, result.output
         return flat(result.output)
@@ -1153,9 +1220,9 @@ def test_the_command_line_says_which_trials_beat_an_edit_and_which_it_beats(tiny
     assert f"heretic-1: the search's best {trials} beat" in shown
     assert f"{best.refusals}, {best.keyword_refusals}, {best.kl:.4f}" in shown
 
-    shown = scoring(worse, Score(best.refusals, best.keyword_refusals, 0, best.kl + 0.01, 3))
-    assert f"trial-{front[0].trial} scores differently from the search" in shown
-    assert "the verdicts below don't hold. Not reliable: heretic-1: the search's best" in shown
+    shown = scoring(worse, Score(best.refusals, best.keyword_refusals, 0, best.kl * 1.1 + 0.01, 3))
+    assert f"trial-{front[0].trial} scores differently from the search, by more than noise: KL" in shown
+    assert "so the verdicts below don't hold. heretic-1: the search's best" in shown
 
     shown = scoring(Score(0, 0, 0, 0.0, 3), best)
     none = "heretic-1: no trial of the search beats it on both refusals and KL"
@@ -1166,7 +1233,7 @@ def test_the_command_line_says_which_trials_beat_an_edit_and_which_it_beats(tiny
 
     monkeypatch.setattr(search, "candidates", lambda study: [])
     shown = scoring(worse)
-    assert "The search has no finished trials yet to set these beside." in shown
+    assert "The search has no trial scored in full yet to set these beside." in shown
     assert "beats it" not in shown
 
 
@@ -1308,6 +1375,22 @@ def test_settings_near_but_not_at_an_end_arent_flagged():
     assert search.at_edges(inside, config.Search(), 28) == []
 
 
+def test_an_end_short_of_how_far_a_setting_can_go_is_flagged():
+    space = config.Search(peak_layer=(0.5, 0.9), edge_strength=(0.2, 0.8), reach=(0.1, 0.6))
+    low = {"attn.strength": 1.2, "attn.peak_layer": 0.5, "attn.edge_strength": 0.2, "attn.reach": 0.1}
+    high = {"attn.strength": 1.2, "attn.peak_layer": 0.9, "attn.edge_strength": 0.8, "attn.reach": 0.6}
+    assert search.at_edges(low, space, 28) == [
+        "attn.edge_strength 0.2, at its floor 0.2",
+        "attn.peak_layer 0.5, at its floor 0.5",
+        "attn.reach 0.1, at its floor 0.1",
+    ]
+    assert search.at_edges(high, space, 28) == [
+        "attn.edge_strength 0.8, at its ceiling 0.8",
+        "attn.peak_layer 0.9, at its ceiling 0.9",
+        "attn.reach 0.6, at its ceiling 0.6",
+    ]
+
+
 def test_an_end_that_is_already_the_models_own_isnt_flagged():
     space = config.Search(direction_layer=(0.0, 1.0), peak_layer=(0.0, 1.0), reach=(0.01, 1.0))
     pressed = {"direction_layer": 0, "attn.strength": 1.2, "attn.peak_layer": 0.0, "attn.reach": 1.0}
@@ -1399,14 +1482,26 @@ def test_scoring_a_trial_stopped_early_says_so(tiny, monkeypatch):
     scripted(monkeypatch, [Score(1, 0, 0, 0.0, 3), Score(3, 0, 0, math.inf, 1), Score(1, 0, 0, 0.2, 3)])
     runner = CliRunner(env={"COLUMNS": "200"})
     assert runner.invoke(app, ["search", str(folder)]).exit_code == 0
-    monkeypatch.setattr(Search, "score", lambda self, edits: search.Scores(3, 1, [Score(3, 0, 0, 0.1, 3)]))
+    based = []
+    monkeypatch.setattr(
+        Search,
+        "score",
+        lambda self, edits, base=True: based.append(base) or search.Scores(3, 1, [Score(3, 0, 0, 0.1, 3)]),
+    )
     result = runner.invoke(app, ["score", str(folder), "--trial", "1"])
     assert result.exit_code == 0, result.output
     shown = flat(result.output)
     assert "trial-1 was stopped early in the search, after 1 prompts" in shown
+    # With no full score to repeat, the unedited model is scored again as the check.
+    assert based == [True] and "The unedited model refuses 1 of 3 (1 in the search)." in shown
     assert "scores differently" not in shown
     # Its KL in the search was never read, so the table doesn't show one.
     assert "3 of 1, stopped early" in shown and "inf" not in shown
+    # Said too when no trial of the search was scored in full.
+    monkeypatch.setattr(search, "candidates", lambda found: [])
+    shown = flat(runner.invoke(app, ["score", str(folder), "--trial", "1"]).output)
+    assert "trial-1 was stopped early in the search" in shown
+    assert "The search has no trial scored in full yet to set these beside." in shown
 
 
 def test_the_search_scores_a_thinking_model_at_its_own_budget_with_the_same_seeds(tiny, monkeypatch):
@@ -1520,12 +1615,19 @@ def test_a_search_after_other_unedited_thinking_is_refused_before_any_is_sampled
     real = LlamaServer.thoughts
     monkeypatch.setattr(LlamaServer, "thoughts", lambda *a, **k: sampled.append(1) or real(*a, **k))
     tiny.settings.deployment.thinking_budget = 9
-    with pytest.raises(RunError, match="unedited thinking"):
+    # Refused on the budget it thinks to, before the unedited thinking is even named.
+    with pytest.raises(RunError, match="a different thinking; move it aside"):
         Search(tiny).search(2)
-    with pytest.raises(RunError, match="unedited thinking"):
+    with pytest.raises(RunError, match="made with different thinking from this run's now"):
         Search(tiny).score([search.edit_from(finished(tiny)[0].params, 1, 2)])
     assert sampled == []
     tiny.settings.deployment.thinking_budget = 8
+    # Or on the unedited thinking alone, as with it sampled at other slots.
+    tiny.settings.slots.thinking = 3
+    with pytest.raises(RunError, match="unedited thinking"):
+        Search(tiny).search(2)
+    assert sampled == []
+    tiny.settings.slots.thinking = config.Slots().thinking
     Search(tiny).search(2)
     assert sampled == [] and len(finished(tiny)) == 2
 
@@ -2083,19 +2185,35 @@ def test_a_search_carries_on_with_its_slots_set_to_the_number_it_used_unset(tiny
 def test_a_full_edits_trials_each_restart_the_server_with_an_adapter_built_for_them(tiny, monkeypatch):
     small(tiny, trials=2)
     tiny.settings.edit.row_norm = "full"
-    started = []
-    real = LlamaServer.start
+    started, running, beside = [], set(), []
+    real_start, real_stop, real_build = LlamaServer.start, LlamaServer.stop, run.Run.edit_adapter
 
     def start(self, *args, **kwargs):
         started.append([path.name for path in self.adapters])
-        return real(self, *args, **kwargs)
+        running.add(id(self))
+        return real_start(self, *args, **kwargs)
+
+    def stop(self):
+        running.discard(id(self))
+        return real_stop(self)
+
+    def build(self, folder, edit):
+        beside.append(len(running))
+        return real_build(self, folder, edit)
 
     monkeypatch.setattr(LlamaServer, "start", start)
+    monkeypatch.setattr(LlamaServer, "stop", stop)
+    monkeypatch.setattr(run.Run, "edit_adapter", build)
+    said = []
+    tiny.report = said.append
     Search(tiny).search(4)
+    assert not [line for line in said if line.startswith("Rebuilding")]
     assert tiny.adapters() == {}
-    # The unedited model first, with no adapters, then each trial with its own.
+    # The unedited model first, with no adapters, then each trial with its own, built with no server
+    # running beside it.
     scoring = started[-5:]
     assert scoring == [[], ["edit.gguf"], ["edit.gguf"], ["edit.gguf"], ["edit.gguf"]]
+    assert beside == [0, 0, 0, 0]
     scores = [search._score(trial) for trial in finished(tiny)]
     assert len(scores) == 4 and len({s.kl for s in scores}) == 4
     # A search of "full" edits isn't carried on as one of "pre" edits.
@@ -2320,7 +2438,7 @@ def test_with_max_budget_hits_unset_a_seeded_search_draws_records_and_tells_the_
         "trials": [
             [
                 t.params,
-                {key: value for key, value in t.user_attrs.items() if key != "seconds"},
+                {key: value for key, value in t.user_attrs.items() if key not in ("seconds", "machine")},
                 t.system_attrs["constraints"],
             ]
             for t in found.trials.values()
@@ -2654,6 +2772,29 @@ def test_a_search_killed_while_judging_its_trials_again_loses_and_repeats_no_tri
         done = study.get_trials(states=(TrialState.COMPLETE,))
         assert len({search._key(t.params) for t in done}) == len(done) == 4
         assert all(len(t.system_attrs["constraints"]) == 2 for t in done)
+
+
+def test_a_trial_stopped_early_stays_outside_the_caps_when_they_are_judged_again(tiny, monkeypatch):
+    thinking_search(tiny, monkeypatch, hits=None)
+    folder = tiny.path("search")
+    folder.mkdir()
+    study = optuna.create_study(study_name=search.STUDIES[search.PER_LAYER], storage=search._storage(folder))
+    # Stopped by its answers at the budget, refusing none of the prompts it was judged on by then.
+    stopped, full = made(1, 0, 0.2, judged=1), made(2, 0, 0.3)
+    for trial in (stopped, full):
+        attrs = trial.user_attrs | {"violation": -2.5, "budget violation": 1.5, "forced": 1}
+        study.add_trial(
+            optuna.trial.create_trial(
+                params=trial.params, distributions=trial.distributions, value=trial.value, user_attrs=attrs
+            )
+        )
+    moved = {
+        t.user_attrs["number"]: t for t in Search(tiny)._judge_again(study, search.PER_LAYER, 3).get_trials()
+    }
+    assert list(moved[1].system_attrs["constraints"]) == [0.5]
+    assert list(moved[2].system_attrs["constraints"]) == [-2.5]
+    # What it was scored as is kept as it was.
+    assert moved[1].user_attrs["violation"] == -2.5
 
 
 def test_a_widened_search_judged_again_goes_on_in_its_new_study(tiny, monkeypatch):

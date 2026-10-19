@@ -82,7 +82,8 @@ def last_token_residuals(
     def capture(index: int):
         def hook(_module, _args, output):
             hidden = output[0] if isinstance(output, tuple) else output
-            captured[index] = hidden[:, -1, :].float()
+            # A copy, so the layer's whole output isn't kept alive by a view of its last token.
+            captured[index] = hidden[:, -1, :].to(torch.float32, copy=True)
 
         return hook
 

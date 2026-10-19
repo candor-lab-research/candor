@@ -630,7 +630,13 @@ def _validated(
     try:
         return RunConfig.model_validate(data)
     except ValidationError as error:
-        problems = [f"{'.'.join(map(str, e['loc']))}: {e['msg']}" for e in error.errors()]
+        problems = []
+        for found in error.errors():
+            # A check of candor's own words its problem itself; one of several settings together has
+            # no one setting to name.
+            message = found["msg"].removeprefix("Value error, ")
+            setting = ".".join(map(str, found["loc"]))
+            problems.append(f"{setting}: {message}" if setting else message)
         raise ConfigError(f"{where} has settings candor can't use:\n  " + "\n  ".join(problems)) from None
 
 

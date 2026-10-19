@@ -593,6 +593,23 @@ def test_export_and_measure_it_from_the_command_line(tiny, converting):
     assert re.search(r"Harmless KL from A +0\.0000", compared.output)
 
 
+def test_the_commands_export_suggests_name_the_measurements_measure_makes_at_the_runs_slots(tiny, converting):
+    tiny.settings.slots.measure = 3
+    config.write(tiny.folder.parent, "cli", tiny.settings, "made by a test")
+    folder = tiny.folder.parent / "cli"
+    journal = write_journal(tiny.folder.parent / "heretic.jsonl", 0.25)
+    runner = CliRunner(env={"COLUMNS": "250"})
+    exported = runner.invoke(app, ["export", str(folder), "--heretic", str(journal), "--trial", "1"])
+    assert exported.exit_code == 0, exported.output
+    suggested = [line.split()[3:] for line in exported.output.splitlines() if "uv run candor" in line]
+    assert suggested[1:] == [
+        ["compare", str(folder), "base-slots-3", "heretic-1-exported-slots-3"],
+        ["compare", str(folder), "heretic-1-slots-3", "heretic-1-exported-slots-3"],
+    ]
+    measured = runner.invoke(app, suggested[0])
+    assert "candor measure: heretic-1-exported-slots-3" in measured.output
+
+
 def test_exported_needs_a_trial(tiny):
     result = CliRunner().invoke(app, ["measure", str(tiny.folder), "--exported"])
     assert result.exit_code == 2 and "--trial" in result.output
@@ -758,6 +775,11 @@ def test_the_command_line_exports_and_measures_a_model_edited_elsewhere(tiny, co
         app, ["export", str(run_folder), "--trial", "1", "--outside", str(folder), "--name", "x"]
     )
     assert both.exit_code == 2
+    heretic = ["--heretic", str(folder / "study.jsonl")]
+    ignored = runner.invoke(
+        app, ["export", str(run_folder), "--outside", str(folder), "--name", "x", *heretic]
+    )
+    assert ignored.exit_code == 2 and "edited elsewhere on its own" in " ".join(ignored.output.split())
     exported = runner.invoke(app, ["export", str(run_folder), "--outside", str(folder), "--name", "saved"])
     assert exported.exit_code == 0, exported.output
     assert f"uv run candor measure {run_folder} --outside saved" in exported.output

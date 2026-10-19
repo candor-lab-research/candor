@@ -39,9 +39,10 @@ MODES = {"off": False, "on": True}
 @dataclass(frozen=True)
 class Check:
     edits: list[Edit]
-    # The search trial each edit comes from, and its strength as a multiple of that trial's.
+    # The search trial each edit comes from, and its strength as a multiple of that trial's, once held
+    # within search.widest_strength: the least and most over its strengths.
     trials: list[int]
-    factors: list[float]
+    factors: list[tuple[float, float]]
     off: list[Score]
     on: list[Score]
     base: dict[str, int]
@@ -73,7 +74,7 @@ class Check:
         return "offset" if self.offset > OFFSET else "holds"
 
 
-def edits(run: Run, chosen: Sequence[int] = ()) -> tuple[list[Edit], list[int], list[float]]:
+def edits(run: Run, chosen: Sequence[int] = ()) -> tuple[list[Edit], list[int], list[tuple[float, float]]]:
     """The edits checked: from the run's search, scored with thinking off, the trials chosen, or else
     the BEST trials scored in full of each kind and position, fewest refusals first and then least KL;
     each as found and at the other FACTORS of its strength, held within search.widest_strength. Each
@@ -112,7 +113,8 @@ def edits(run: Run, chosen: Sequence[int] = ()) -> tuple[list[Edit], list[int], 
             }
             made.append(replace(edit_from(params, best.trial, layers), name=f"edit-{len(made) + 1}"))
             trials.append(best.trial)
-            factors.append(factor)
+            held = [params[name] / value for name, value in best.params.items() if name.endswith(".strength")]
+            factors.append((min(held), max(held)))
     if not made:
         raise RunError("the search has no trials scored in full yet")
     return made, trials, factors
@@ -154,6 +156,9 @@ def check(run: Run, chosen: Sequence[int] = ()) -> Check:
         # Trials named are kept apart, so checking them never replaces the check of the best.
         name = "trials.json" if chosen else "scores.json"
         saved = _load(run, inputs, name)
+        # Scores read on another machine can differ slightly, so each one the check was scored on is kept.
+        if (here := run.machine()) not in saved.setdefault("machines", []):
+            saved["machines"].append(here)
         for mode, thinks in MODES.items():
             todo = [i for i in range(len(made)) if str(i) not in saved[mode]]
             if not todo and mode in saved["base"]:

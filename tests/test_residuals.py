@@ -21,6 +21,19 @@ def test_shape(tiny_llama):
     assert residuals.dtype == torch.float32
 
 
+def test_only_the_last_tokens_are_kept_while_the_model_runs(tiny_llama, monkeypatch):
+    kept, stack = [], torch.stack
+
+    def stacked(tensors, dim=0):
+        kept.extend(t.untyped_storage().nbytes() for t in tensors)
+        return stack(tensors, dim=dim)
+
+    monkeypatch.setattr(torch, "stack", stacked)
+    last_token_residuals(tiny_llama, [SHORT, LONG], pad_id=0)
+    # Each layer's capture holds its 2 prompts' last tokens alone, not the layer's whole output.
+    assert kept == [2 * 32 * 4] * 4
+
+
 def test_left_padding_does_not_change_residuals(tiny_llama):
     alone = last_token_residuals(tiny_llama, [SHORT], pad_id=0)
     padded = last_token_residuals(tiny_llama, [LONG, SHORT], pad_id=0)[1:]
