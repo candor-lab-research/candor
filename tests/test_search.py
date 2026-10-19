@@ -120,16 +120,31 @@ def test_a_search_runs_its_trials_and_keeps_only_numbers(tiny, monkeypatch):
     assert all(len(a.strip()) < 4 or a.strip() not in kept for a in answers)
 
 
-def test_a_judge_the_gpu_cant_hold_stops_the_search_before_it_loads(tiny, monkeypatch):
-    small(tiny)
+def too_big_a_judge(tiny, monkeypatch) -> None:
+    """Give the run a judge this machine's GPU can't hold, checked as candor checks a real one."""
     monkeypatch.setattr(run.Run, "check_judge", CHECK_JUDGE)
     # Only the judge's memory: the residuals' check comes first.
     monkeypatch.setattr(run.Run, "check_memory", lambda self: None)
     tiny.settings.measure.judge = tiny.settings.model.source
     monkeypatch.setattr(run.residuals, "memory_budget", lambda device: 1)
+
+
+def test_a_judge_the_gpu_cant_hold_stops_the_search_before_it_loads(tiny, monkeypatch):
+    small(tiny)
+    too_big_a_judge(tiny, monkeypatch)
     with pytest.raises(RunError, match=r"the judge .* needs about 0\.0 GB of GPU memory"):
         Search(tiny).search(1)
     assert FakeGuard.events == []
+    assert not tiny.path("search", "inputs.json").exists()
+
+
+def test_a_judge_the_gpu_cant_hold_stops_scoring_before_it_loads_and_writes_nothing(tiny, monkeypatch):
+    too_big_a_judge(tiny, monkeypatch)
+    before = {path for path in tiny.folder.rglob("*") if path.name != ".lock"}
+    with pytest.raises(RunError, match=r"the judge .* needs about 0\.0 GB of GPU memory"):
+        Search(tiny).score([])
+    assert FakeGuard.events == []
+    assert {path for path in tiny.folder.rglob("*") if path.name != ".lock"} == before
 
 
 def test_each_kind_gets_its_share_of_trials_and_no_more(tiny):
@@ -1226,6 +1241,12 @@ def test_a_kl_gap_is_paired_by_prompt_and_a_tie_within_two_standard_errors():
     # Gaps of 0.2, 0, 0.2 and 0: a mean of 0.1, between one and two standard errors of 0.1 / sqrt(3).
     between = search.kl_gap(Score(1, 0, 0, 0.2, 3, kl_by_prompt=[0.2] * 4), least)
     assert between is not None and between[1] < between[0] and between[2]
+    # Gaps of 0.54, 0.04, 0.54 and 0.04: a mean of 0.29, just over twice its standard error of 0.25 / sqrt(3).
+    above = search.kl_gap(Score(1, 0, 0, 0.3, 3, kl_by_prompt=[0.54, 0.24, 0.54, 0.24]), least)
+    assert above == (pytest.approx(0.29), pytest.approx(0.25 / math.sqrt(3)), False)
+    # Gaps of 0.43, 0.03, 0.43 and 0.03: a mean of 0.23, just under twice its standard error of 0.2 / sqrt(3).
+    below = search.kl_gap(Score(1, 0, 0, 0.3, 3, kl_by_prompt=[0.43, 0.23, 0.43, 0.23]), least)
+    assert below == (pytest.approx(0.23), pytest.approx(0.2 / math.sqrt(3)), True)
     # Not for a trial scored before the search kept its KL at each prompt, nor against one.
     assert search.kl_gap(Score(1, 0, 0, 0.2, 3), least) is None
     assert search.kl_gap(near, Score(2, 0, 0, 0.1, 3)) is None

@@ -861,6 +861,7 @@ class Search:
         with run.locked():
             run.check_remote_code()
             run.check_residuals()
+            run.check_judge(run.settings.measure.judge, run.settings.measure.judge_revision)
             # A search made from other inputs is refused before the model files and adapters it was
             # scored with are rebuilt, and before a thinking model's unedited thinking is sampled; a new
             # search is recorded only once that thinking exists.
@@ -947,6 +948,7 @@ class Search:
         run = self.run
         run.check_remote_code()
         run.check_residuals()
+        run.check_judge(run.settings.measure.judge, run.settings.measure.judge_revision)
         # Checked before the model files and adapters are brought up to date and before a thinking
         # model's unedited thinking is sampled, so a mismatch leaves the run as it was. The Optuna
         # version decides which trials the search draws, not how one is scored.
@@ -1036,7 +1038,8 @@ class Search:
         thinking model thinks when thinks is True, by default as the search's trials do, and otherwise
         answers greedily after an empty thinking block. seed replaces the sampling seed. With kept, the
         unedited model's first tokens are kept in the search's folder, and read again only when what
-        they are read from or the machine changes."""
+        they are read from or the machine changes. For a caller that has checked the judge
+        (Run.check_judge) before anything was recorded."""
         run, settings = self.run, self.run.settings
         thinks = self.thinks if thinks is None else thinks
         closed = bool(settings.deployment.think_close) and not thinks
@@ -1054,7 +1057,6 @@ class Search:
                 quantized, adapters, context_per_slot=room, parallel=slots, slots_setting=setting
             )
 
-        run.check_judge(settings.measure.judge, settings.measure.judge_revision)
         guard = Guard(settings.measure.judge, settings.measure.judge_revision)
         scorer = None
         server = server_with(files)
