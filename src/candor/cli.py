@@ -1075,7 +1075,7 @@ def search_command(
         f"The least KL of each kind at each count within the cap ({caps}), unless a trial "
         "refusing fewer has less:"
     )
-    picks = []
+    picks, paired = [], False
     for scope in search.SCOPES:
         best = search.to_measure(found, scope, space)
         fewest = search.fewest_refused(found, scope)
@@ -1093,7 +1093,9 @@ def search_command(
                 f"KL {candidate.kl:.4f}"
             )
             if best:
-                console.print(f"  {scope}: {described}")
+                against = _against_least(found, candidate, best[-1])
+                paired = paired or bool(against)
+                console.print(f"  {scope}: {described}{against}")
             else:
                 none = f"none refused {cap} or fewer" if hits is None else "none within the cap"
                 console.print(f"  {scope}: {none}; the fewest refused: {described}")
@@ -1103,6 +1105,11 @@ def search_command(
                     "so a better edit may lie outside them."
                 )
             picks.append(candidate.trial)
+    if paired:
+        console.print(
+            f"A gap within {search.TIE_SE} standard errors is a tie: the test prompts can't tell the two "
+            "apart by KL."
+        )
     if run.settings.deployment.think_close:
         _thinking_summary(console, run, found)
     if (left := total - len(found.trials)) > 0:
@@ -1115,6 +1122,21 @@ def search_command(
         console.print("Measure each on the held-out prompts:")
         for number in picks:
             console.print(escape(f"  uv run candor measure {folder} --trial {number}"), soft_wrap=True)
+
+
+def _against_least(found: search.Found, candidate: search.Candidate, least: search.Candidate) -> str:
+    """How much more KL a trial has than its kind's least within the cap, paired by prompt, and whether
+    that is a tie; nothing for the least itself, or where either kept no KL at each prompt."""
+    if candidate.trial == least.trial:
+        return ""
+    paired = search.kl_gap(
+        search.searched_score(found, candidate.trial), search.searched_score(found, least.trial)
+    )
+    if paired is None:
+        return ""
+    gap, error, tie = paired
+    verdict = "a tie" if tie else "not a tie"
+    return f"; {gap:.4f} more KL than trial {least.trial}, paired by prompt (SE {error:.4f}): {verdict}"
 
 
 def _searched(score: search.Score, prompts: int) -> str:

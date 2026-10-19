@@ -34,6 +34,7 @@ where it would sit among the search's trials and whether the search could have d
 import json
 import math
 import shutil
+import statistics
 import time
 import warnings
 from collections.abc import Callable, Iterable, Iterator, Sequence
@@ -88,6 +89,10 @@ KL_DIGITS = 4
 # How far a trial scored again may stray from its score in the search through batching noise alone:
 # its refusals by this many, its KL by this share.
 REPEAT_REFUSALS, REPEAT_KL = 1, 0.03
+# Two trials' KL is a tie when their gap, paired by prompt, is within this many standard errors: on 100
+# test prompts that error was an estimated 9-32% of the KL (results/evidence-2026-10-19/method-evidence.md,
+# F117).
+TIE_SE = 2
 # A setting within this share of its range from an end of it presses on that end.
 EDGE = 0.05
 # A trial stops early only once this many trials of its kind, scored in full, refused fewer. TPE learns
@@ -115,6 +120,9 @@ class Score:
     # answers reached the budget, so the model was made to stop thinking and answer.
     thinking: float = 0.0
     forced: int = 0
+    # KL at each prompt it is read on, in order, whose mean is kl; none where KL wasn't read, or for a
+    # trial scored before the search kept it.
+    kl_by_prompt: list[float] = field(default_factory=list)
 
 
 @dataclass(frozen=True)
@@ -428,6 +436,17 @@ def differences(score: Score, searched: Score) -> list[str]:
     return found
 
 
+def kl_gap(a: Score, b: Score) -> tuple[float, float, bool] | None:
+    """How much more KL a has than b, paired by prompt on the same test prompts, that mean gap's
+    standard error, and whether it is a tie (see TIE_SE); None unless both kept their KL at each
+    prompt."""
+    if len(a.kl_by_prompt) < 2 or len(a.kl_by_prompt) != len(b.kl_by_prompt):
+        return None
+    gaps = [x - y for x, y in zip(a.kl_by_prompt, b.kl_by_prompt, strict=True)]
+    gap, error = statistics.fmean(gaps), statistics.stdev(gaps) / math.sqrt(len(gaps))
+    return gap, error, abs(gap) <= TIE_SE * error
+
+
 def _key(params: dict[str, Any]) -> str:
     return json.dumps(params, sort_keys=True)
 
@@ -450,6 +469,7 @@ def _score(trial: FrozenTrial) -> Score:
         attrs["judged"],
         attrs.get("thinking", 0.0),
         attrs.get("forced", 0),
+        attrs.get("kl_by_prompt", []),
     )
 
 
@@ -1530,5 +1550,8 @@ class _Scorer:
         if not read_kl or (stop_above is not None and refusals > stop_above):
             return Score(refusals, keyword_refusals, unlabelled, math.inf, judged, thought / judged, forced)
         top = self.server.top_logprobs(self.harmless, self.kl_tokens, scales)
-        divergence = kl.mean_from_top(self.base, top)
-        return Score(refusals, keyword_refusals, unlabelled, divergence, judged, thought / judged, forced)
+        by_prompt = list(map(kl.from_top, self.base, top))
+        divergence = sum(by_prompt) / len(by_prompt)
+        return Score(
+            refusals, keyword_refusals, unlabelled, divergence, judged, thought / judged, forced, by_prompt
+        )

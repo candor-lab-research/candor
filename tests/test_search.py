@@ -6,6 +6,7 @@ import json
 import math
 import re
 import shutil
+import statistics
 from pathlib import Path
 
 import optuna
@@ -820,7 +821,8 @@ def test_scoring_stops_at_the_end_of_the_chunk_that_goes_over(tiny, monkeypatch)
         stopped = scorer.score({}, stop_above=1)
         assert (stopped.refusals, stopped.judged, asked) == (2, 2, [2])
         # A trial stopped on its refusals can't win, so its KL is never read.
-        assert math.isinf(stopped.kl) and whole.kl == 0.0 and not read
+        assert math.isinf(stopped.kl) and whole.kl == 0.0 and not read and not stopped.kl_by_prompt
+        assert whole.kl_by_prompt == [0.0] * len(scorer.harmless)
         labels[:] = [True, True, True]
         assert math.isinf(scorer.score({}, read_kl=False).kl) and not read
         # One stopped on its thinking reads it: it could count once search.max_budget_hits rises.
@@ -1172,9 +1174,85 @@ def test_the_searched_score_is_the_trials_own():
         search.searched_score(found, 1)
 
 
+def test_each_trial_keeps_its_kl_at_every_harmless_test_prompt_whose_mean_is_its_kl(tiny):
+    small(tiny)
+    Search(tiny).search(2)
+    prompts = len(tiny.prompt_ids()["harmless_test"])
+    for trial in finished(tiny):
+        by_prompt = trial.user_attrs["kl_by_prompt"]
+        assert len(by_prompt) == prompts and sum(by_prompt) / prompts == trial.user_attrs["kl"]
+        assert search._score(trial).kl_by_prompt == by_prompt
+
+
+def test_a_kl_gap_is_paired_by_prompt_and_a_tie_within_two_standard_errors():
+    least = Score(2, 0, 0, 0.1, 3, kl_by_prompt=[0.0, 0.2, 0.0, 0.2])
+    # Gaps of 0.3, -0.1, 0.3 and -0.1: a mean of 0.1 with a standard error of 0.2 / sqrt(3).
+    near = Score(1, 0, 0, 0.2, 3, kl_by_prompt=[0.3, 0.1, 0.3, 0.1])
+    found = search.kl_gap(near, least)
+    assert found is not None
+    assert found[0] == pytest.approx(0.1) and found[1] == pytest.approx(0.2 / math.sqrt(3)) and found[2]
+    # Gaps of 0.5, 0.3, 0.5 and 0.3: a mean of 0.4, more than twice its standard error of 0.1 / sqrt(3).
+    far = Score(0, 0, 0, 0.5, 3, kl_by_prompt=[0.5] * 4)
+    assert search.kl_gap(far, least) == (
+        pytest.approx(0.4),
+        pytest.approx(statistics.stdev([0.5, 0.3, 0.5, 0.3]) / 2),
+        False,
+    )
+    # Not for a trial scored before the search kept its KL at each prompt, nor against one.
+    assert search.kl_gap(Score(1, 0, 0, 0.2, 3), least) is None
+    assert search.kl_gap(near, Score(2, 0, 0, 0.1, 3)) is None
+
+
 def cli_run(tiny, trials=2):
     small(tiny, trials=trials)
     return on_disk(tiny)
+
+
+def test_the_trials_to_measure_show_their_kl_gap_from_their_kinds_least_and_whether_it_ties(
+    tiny, monkeypatch
+):
+    folder = cli_run(tiny, trials=3)
+    runner = CliRunner(env={"COLUMNS": "200"})
+    # Trials 1 and 2 recorded as candor recorded them before the search kept KL at each prompt.
+    with monkeypatch.context() as before:
+        before.setattr(
+            search,
+            "asdict",
+            lambda score: {k: v for k, v in dataclasses.asdict(score).items() if k != "kl_by_prompt"},
+        )
+        scripted(before, [Score(3, 0, 0, 0.0, 3), Score(0, 0, 0, 0.5, 3), Score(0, 0, 0, 0.4, 3)])
+        assert runner.invoke(app, ["search", str(folder), "--trials", "2"]).exit_code == 0
+    scripted(
+        monkeypatch,
+        [
+            Score(1, 0, 0, 0.2, 3, kl_by_prompt=[0.3, 0.1, 0.3, 0.1]),  # 3, one layer
+            Score(1, 0, 0, 0.25, 3, kl_by_prompt=[0.25, 0.3, 0.2, 0.25]),  # 4, per layer
+            Score(2, 0, 0, 0.1, 3, kl_by_prompt=[0.0, 0.2, 0.0, 0.2]),  # 5, one layer: its least
+            Score(2, 0, 0, 0.15, 3, kl_by_prompt=[0.1, 0.2, 0.1, 0.2]),  # 6, per layer: its least
+        ],
+    )
+    result = runner.invoke(app, ["search", str(folder)])
+    assert result.exit_code == 0, result.output
+    found = search.load(Run.open(folder, lambda _: None))
+    assert found is not None and ["kl_by_prompt" in t.user_attrs for t in found.trials.values()] == [
+        False,
+        False,
+        *[True] * 4,
+    ]
+    lines = {
+        int(m.group(1)): line
+        for line in result.output.splitlines()
+        if (m := re.match(r"\s+(?:one|per) layer: trial (\d+),", line))
+    }
+    assert sorted(lines) == [1, 2, 3, 4, 5, 6]
+    assert lines[3].endswith("0.1000 more KL than trial 5, paired by prompt (SE 0.1155): a tie")
+    assert lines[4].endswith("0.1000 more KL than trial 6, paired by prompt (SE 0.0204): not a tie")
+    # Nothing for each kind's least, nor for a trial that kept no KL at each prompt.
+    assert not any("more KL than" in lines[n] for n in (1, 2, 5, 6))
+    assert "A gap within 2 standard errors is a tie" in flat(result.output)
+    # The trials to measure are the same as without the gaps.
+    commands = [line.split() for line in result.output.splitlines() if "candor measure" in line]
+    assert sorted(int(words[-1]) for words in commands) == [1, 2, 3, 4, 5, 6]
 
 
 def test_score_a_trial_and_a_heretic_trial_from_the_command_line(tiny):
@@ -2085,8 +2163,8 @@ def test_a_search_whose_trials_read_kl_beside_the_answer_start_carries_on_and_sh
         monkeypatch,
         [
             Score(3, 0, 0, 0.0, 3),
-            ReadBeside(1, 0, 0, 0.2, 3, 9.0, 0, 0.3, 0.1),
-            ReadBeside(2, 0, 0, 0.4, 3, 9.0, 0, 0.5, 0.3),
+            ReadBeside(1, 0, 0, 0.2, 3, 9.0, 0, kl_thinking=0.3, kl_empty=0.1),
+            ReadBeside(2, 0, 0, 0.4, 3, 9.0, 0, kl_thinking=0.5, kl_empty=0.3),
         ],
     )
     assert runner.invoke(app, ["search", str(folder), "--trials", "2"]).exit_code == 0

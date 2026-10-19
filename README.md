@@ -187,8 +187,11 @@ uv run candor                                                  # or all of it fr
   so, as KL read there can differ by a few percent. It ends with the fully scored trials no other
   beats on both refusals and KL; for each kind, any strength it widened to, and the least-KL trial at
   each count within the cap unless one refusing fewer has less (or, failing that, the one that refused
-  fewest), each flagged if it presses on the edge of a range; and the commands to measure each on the
-  held-out prompts, since 100 test prompts can't tell 0 refused from 2. Every `search.report_every`
+  fewest), each flagged if it presses on the edge of a range and shown with how much more KL it has
+  than its kind's least, paired by prompt, a tie within 2 standard errors (each trial keeps its KL at
+  every prompt KL is read on; one scored before candor kept them shows none); and the commands to
+  measure each on the held-out prompts, since 100 test prompts can't tell 0 refused from 2. The ties
+  only guide: they change none of the trials named. Every `search.report_every`
   trials (25; 0 for never) it shows its pace and the time left, and for each kind its trials, how
   many stopped early, its best so far as the end picks it (least KL within the cap, or else fewest
   refused) with that trial's strengths against the kind's range, and the trials since that best
