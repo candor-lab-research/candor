@@ -64,10 +64,10 @@ thinking on (next, e.g. Qwen3.8-27B). A 9B model must not take days.
    answer reusing its thinking's cache (package 11) changes draws too, so its timed pilot belongs in
    the 27B pilot, before the 27B reference is measured.
 2. Approved: one A40 pod to judge K2's and Qwen's held-out answers with Qwen3Guard-Gen-8B and to
-   score one finalist each with both row normalisations, quoted after timing the first units; the
-   second judge in `measure` and `compare`, the beside reads out of the search, per-prompt KL with
-   ties shown, and 200 KL tokens from `init`, before 27B; then the 27B pilot (about $7-8), quoted
-   from its first units.
+   score one finalist each with both row normalisations, quoted after timing the first units; then
+   the 27B pilot (about $7-8), quoted from its first units. The code for 27B (a second judge, the
+   beside reads out of the search, per-prompt KL with ties shown, 200 KL tokens from `init`) is in
+   (history).
 3. Phase 4, later: low effort's two closes; Uno not now. The budget limit
    (`search.max_budget_hits`, on K2 from trial 138) costs no measurable hits on the simulator and
    stays on (results file, step 5).
@@ -89,7 +89,10 @@ thinking on (next, e.g. Qwen3.8-27B). A 9B model must not take days.
      proxy` scores the unedited model again; an `inspect` warning when weights were quantised
      before; the export's file name when some tensors are Q8_0 or F32; a local model copied to a pod
      rebuilds every stage;
-   - heretic 2.x journals aren't read (they record no refusals for a trial).
+   - heretic 2.x journals aren't read (they record no refusals for a trial);
+   - llama-server b11524 can deadlock when stopped mid-answer (its SIGTERM handler takes a lock the
+     generating thread holds; about 1 stop in 500): `stop` then waits 60 s and kills it, losing
+     nothing.
 
 ## Phase 3: in force
 

@@ -967,3 +967,23 @@ the simulator shows roughly halves the chance of finding the best edit. The user
 next model is Qwen3.8-27B as they use it, at reasoning effort xhigh; the must-not-miss standard
 stays, and the release gate is set again from a pilot's measured speed and thinking length; the
 pilot (about $7-8) runs once the approved code changes land and the K2/Qwen pod checks are done.
+
+### The code for 27B: a second judge, per-prompt KL, the beside reads out (2026-10-19)
+
+The changes decided at the phase-end discussion so far, each reviewed independently and its
+findings fixed with tests that fail without them.
+- `measure.second_judge`: `init` gives a new run Qwen3Guard-Gen-8B, pinned; `measure` judges the
+  held-out answers with it after the run's judge, one judge loaded at a time, in files of its own;
+  `compare` shows its refusals beside the first judge's and never pairs different second judges.
+  Every judge is sized against the GPU before it loads (the 8B needs about 18 GB, so not on this
+  Mac). Runs without the setting are unchanged.
+- The search no longer reads KL where the thinking starts or after an empty block (`measure` still
+  does); each trial keeps its per-prompt KL, and the search's summary shows each suggested
+  finalist's paired gap from its kind's least and whether it ties within 2 SE. Picks are unchanged;
+  no search version bump, as no score the sampler or picks read changed.
+- `init` writes 200 KL tokens for new runs; the default stays 20.
+- The engine's stop test failed about 1 run in 500: llama-server b11524 deadlocks when SIGTERM lands
+  mid-generation (its handler takes a lock the generating thread holds). The test now stops the
+  server once it has dropped the answer; production keeps its 60 s wait and kill (STATUS).
+
+905 tests pass.

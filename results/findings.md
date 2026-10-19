@@ -82,7 +82,9 @@ entry is corrected, dropped or overturned is in CLAUDE.md ("Finished, dropped an
   the 256-token answer limit. Of the 156 that keywords call refusals and the 0.6B doesn't, it calls
   9. No decision changed, but K2's 114 went from 3 to 9 against a bar of 10. The 0.6B's recall on
   edited models is unchecked against ground truth. (`evidence-2026-10-19/method-evidence.md`, F104)
-  [Hypothesis] Test: the 8B at 16 bits, or a judge of another family, on the disagreements.
+  [Hypothesis] Test: the 8B at 16 bits, or a judge of another family, on the disagreements. Since
+  2026-10-19 a new run's finalists and reference are also judged by the 8B (`measure.second_judge`),
+  and the 27B's harmful bar holds under both.
 - **The best public Qwen3.5-9B edit's 0/400 may not be as used.** [Published, with caveats]
   DreamFast judged trohrbaugh's heretic edit (`Qwen3.5-9B-heretic-v2`) at 0 of 400 HarmBench
   refusals, GSM8K 87.64 to 85.97; its report notes a 2,048-token cap and truncated thinking. Edited
@@ -182,20 +184,21 @@ entry is corrected, dropped or overturned is in CLAUDE.md ("Finished, dropped an
   the search fix). (`evidence-2026-10-19/method-evidence.md`, F117) [Hypothesis] About 11% with a
   0.002 floor fits all 18 (fitted on them), and a repeat stays within a refusal; test: score one K2
   trial twice at its slots and compare per-prompt KL.
-- **Small KL gaps between trials are noise, and the search keeps no per-prompt KL to tell.**
+- **Small KL gaps between trials are noise.**
   [Measured: K2-Horizon-7B and Qwen3.5-9B, 10 pairs of measured finalists, about 300 held-out
   prompts] At 100 test prompts the SE of a KL difference is an estimated 9-32% of the KL (scaled by
   KL level; by prompt count it would be larger); K2's 207 led 205 on the test prompts within that,
   and 205 led held out by 0.0096, of which 207's export alone may account for 0.0061. "Every
   within-cap trial within 2 SE of the best" would send 11-115 trials to measurement, too many as
-  the finalist rule. [Hypothesis] Per-prompt KL
-  kept and gaps under 2 SE taken as ties would make picks honest; test on the 27B search.
+  the finalist rule. Since 2026-10-19 each trial keeps its per-prompt KL, and the search shows
+  which suggested finalists tie their kind's least within 2 SE, as guidance only.
   (`evidence-2026-10-19/method-evidence.md`, F117)
 - **The KL reads beside the answer start decide nothing.** [Measured: K2-Horizon-7B 313 trials,
   Qwen3.5-9B 545] Within the caps `kl_empty` tracks `kl` (Spearman 0.62 and 0.80); `kl_thinking`
   less on K2 and Qwen's one-layer edits (0.36, 0.14), level on Qwen's per-layer ones (0.79 against
-  0.76). No pick reads either; under today's code they cost about 0.5% (K2) and 3% (Qwen) of the
-  search, and `measure` reads both for every finalist. (`evidence-2026-10-19/method-evidence.md`, F5)
+  0.76). No pick read either, and they cost about 0.5% (K2) and 3% (Qwen) of the search; since
+  2026-10-19 only `measure` reads them, for every finalist. (`evidence-2026-10-19/method-evidence.md`,
+  F5)
 - **Skipping a trial's answers once 25 of its kind have lower KL saves little on K2, loses on
   Qwen.** [Measured: replays of K2-Horizon-7B's 313 and Qwen3.5-9B's 545 trials] Under 1.2% on K2,
   and a 19% loss on Qwen, where KL costs more than the answers. No skipped trial was a pick under
