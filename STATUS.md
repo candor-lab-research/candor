@@ -55,16 +55,20 @@ thinking on (next, e.g. Qwen3.8-27B). A 9B model must not take days.
 
 ## Next
 
-1. The phase-end discussion: where to go next, from `results/findings.md`,
-   `results/new-features.md` (chiefly the search's cost for 27B) and the review's 11 method
-   questions, six with evidence (`results/evidence-2026-10-19/method-evidence.md`), including the
-   27B decision rule and how to score Qwen3.8-27B thinking off; no method changes until agreed. The
+1. The phase-end discussion, under way: the 27B decision rule (two judges, margins fixed) is signed
+   off and the search's beside KL reads go (history). Next in it: the search's cost for 27B (the
+   gate: about a day and $20), the 27B model and whether it may be scored thinking off, from
+   `results/findings.md`, `results/new-features.md` and the method questions left
+   (`results/evidence-2026-10-19/method-evidence.md`); no other method changes until agreed. The
    answer reusing its thinking's cache (package 11) changes draws too, so its timed pilot belongs in
    the 27B pilot, before the 27B reference is measured.
-2. Phase 4, later: low effort's two closes; Uno not now. The budget limit
+2. Approved: one A40 pod to judge K2's and Qwen's held-out answers with Qwen3Guard-Gen-8B and to
+   score one finalist each with both row normalisations, quoted after timing the first units; the
+   second judge in `measure` and `compare`, and the beside reads out of the search, before 27B.
+3. Phase 4, later: low effort's two closes; Uno not now. The budget limit
    (`search.max_budget_hits`, on K2 from trial 138) costs no measurable hits on the simulator and
    stays on (results file, step 5).
-3. Not blocking, each when there is a reason:
+4. Not blocking, each when there is a reason:
    - speed: 64 slots (15% faster than 32), weights cached on the GPU for "full" trials, the proxy's
      adapters loaded into one server;
    - a reference measured before 2026-10-19 is measured again before a new measurement is compared
