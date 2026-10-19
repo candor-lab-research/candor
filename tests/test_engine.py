@@ -274,6 +274,26 @@ def test_a_server_that_ignores_terminate_is_killed(tmp_path):
             process.kill()
 
 
+def test_a_server_that_ignores_terminate_is_killed_if_candor_is_stopped_while_it_waits(tmp_path):
+    binary = stub(tmp_path, "trap '' TERM\necho ready\nexec sleep 60")
+
+    def stop(signum, _frame):
+        raise SystemExit(128 + signum)
+
+    previous = signal.signal(signal.SIGALRM, stop)
+    with subprocess.Popen([binary], stdout=subprocess.PIPE, text=True) as process:
+        try:
+            assert process.stdout is not None and process.stdout.readline() == "ready\n"
+            signal.setitimer(signal.ITIMER_REAL, 0.5)
+            with pytest.raises(SystemExit):
+                engine.terminate(process, timeout=30)
+            assert process.returncode == -signal.SIGKILL
+        finally:
+            signal.setitimer(signal.ITIMER_REAL, 0)
+            signal.signal(signal.SIGALRM, previous)
+            process.kill()
+
+
 def test_a_starting_server_is_asked_often_whether_its_ready(tmp_path, monkeypatch):
     answers = iter([False, False, True])
     slept = []
@@ -595,7 +615,7 @@ def one_slot(folder: Path, model: str) -> LlamaServer:
 
 
 @pytest.mark.parametrize("batch", ["generate", "thoughts"])
-def test_a_server_stopped_while_answering_stops_at_once(tmp_path, monkeypatch, batch):
+def test_a_batch_stopped_while_answering_is_dropped_at_once(tmp_path, monkeypatch, batch):
     # Big enough that a long answer takes seconds.
     weights = random_weights(hidden=512, ffn=2048, layers=8)
     write_model(tmp_path / "slow.gguf", weights, context=8192, thinking=True)
@@ -633,8 +653,9 @@ def test_a_server_stopped_while_answering_stops_at_once(tmp_path, monkeypatch, b
             # once it has dropped it: llama-server's SIGTERM handler takes a lock its main loop holds
             # while it answers, so a signal landing there hangs it.
             waited(lambda: not answering(), seconds=6, every=1.5)
-    # llama-server waits for the answer it is working on to be closed before it stops: not killed
-    # after the wait, as it would be were that answer still open.
+    # llama-server logs this only for a request it dropped, never for an answer it finished.
+    assert "cancel task, id_task" in (tmp_path / "server.log").read_text()
+    # Stopped once idle, the server exits with code 0 rather than being killed after the wait.
     assert s.process is not None and s.process.returncode == 0
 
 

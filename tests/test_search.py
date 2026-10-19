@@ -130,6 +130,7 @@ def test_a_judge_the_gpu_cant_hold_stops_the_search_before_it_loads(tiny, monkey
     with pytest.raises(RunError, match=r"the judge .* needs about 0\.0 GB of GPU memory"):
         Search(tiny).search(1)
     assert FakeGuard.events == []
+    assert not tiny.path("search", "inputs.json").exists()
 
 
 def test_each_kind_gets_its_share_of_trials_and_no_more(tiny):
@@ -1226,6 +1227,9 @@ def test_a_kl_gap_is_paired_by_prompt_and_a_tie_within_two_standard_errors():
     # Gaps of 0.2, 0, 0.2 and 0: a mean of 0.1, between one and two standard errors of 0.1 / sqrt(3).
     between = search.kl_gap(Score(1, 0, 0, 0.2, 3, kl_by_prompt=[0.2] * 4), least)
     assert between is not None and between[1] < between[0] and between[2]
+    # Gaps of 0.35, 0.05, 0.35 and 0.05: a mean of 0.2, just over twice its standard error of 0.15 / sqrt(3).
+    above = search.kl_gap(Score(1, 0, 0, 0.3, 3, kl_by_prompt=[0.35, 0.25, 0.35, 0.25]), least)
+    assert above == (pytest.approx(0.2), pytest.approx(0.15 / math.sqrt(3)), False)
     # Not for a trial scored before the search kept its KL at each prompt, nor against one.
     assert search.kl_gap(Score(1, 0, 0, 0.2, 3), least) is None
     assert search.kl_gap(near, Score(2, 0, 0, 0.1, 3)) is None

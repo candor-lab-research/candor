@@ -707,7 +707,10 @@ def terminate(process: subprocess.Popen, timeout: float = 60) -> None:
     if process.poll() is None:
         process.terminate()
         try:
-            process.wait(timeout)
-        except subprocess.TimeoutExpired:
-            process.kill()
-            process.wait()
+            with suppress(subprocess.TimeoutExpired):
+                process.wait(timeout)
+        finally:
+            # Also when candor is stopped again while it waits, so the server isn't left running.
+            if process.poll() is None:
+                process.kill()
+                process.wait()
