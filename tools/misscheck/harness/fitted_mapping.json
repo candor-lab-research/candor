@@ -1,0 +1,13 @@
+{
+ "keyword_floor": -3.4038631175563046,
+ "keyword_shift": -0.45396828966194724,
+ "keyword_slope": 0.9313038692474019,
+ "kl_shift": -1.110953677461667,
+ "kl_shift_one": -0.1860620419193315,
+ "keyword_shift_one": -0.17617406534636454,
+ "kl_slope": 0.8794361708405076,
+ "log_sigma_candor": -1.749525476582459,
+ "log_sigma_heretic": -1.8484711885233558,
+ "log_conc_candor": 5.100993921708091,
+ "log_conc_heretic": 4.040695707348315
+}

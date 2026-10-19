@@ -54,6 +54,8 @@ allow-direct-references = true
 
 [tool.ruff]
 line-length = 110
+# The miss-rate simulator is kept exactly as its results ran, so it isn't linted or reformatted.
+extend-exclude = ["tools/misscheck"]
 
 [tool.ruff.lint]
 select = ["E", "F", "I", "B", "UP", "SIM", "RUF"]

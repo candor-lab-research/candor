@@ -309,5 +309,5 @@ prompt judged + 27.1 a budget hit - 3.85 a refusal, R² 0.83), off / on / switch
   held (switch +3.0 to +7.0 penalised, -1.4 to -2.7 free, not significant).
 - On from trial 1 matched or beat the mid-search switch and saved more time.
 - Limits: the budget model rests on one model's trials, its field length weakly identified; which
-  landscape K2 resembles is unknown; only a limit of 8 and the search's pick were tested. Code,
-  tables and runs: `.claude/search-design-backup/misscheck/` (`budget-report.txt`).
+  landscape K2 resembles is unknown; only a limit of 8 and the search's pick were tested. Code:
+  `tools/misscheck/misscheck/`, where `budget_run.sh` remakes the runs and tables.

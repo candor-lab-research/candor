@@ -138,7 +138,8 @@ entry is corrected rather than deleted when later evidence changes it.
   passed were second and fourth by the search's KL. So measuring several finalists in full is part
   of not missing, and its cost belongs in a 27B quote. (`phase-4-k2-horizon-7b.md`, step 5)
 - **A cap on budget hits saves pod time and, pooled, costs no picks.** [Measured: a replay on
-  K2-Horizon-7B's journal, then K2 from trial 138; the miss-rate simulator, 45,360 searches] With
+  K2-Horizon-7B's journal, then K2 from trial 138; the miss-rate simulator (`tools/misscheck/`),
+  45,360 searches] With
   `search.max_budget_hits` at 8, K2's trials took 22% less time (584 to 458 s), mostly from the
   sampler drawing fewer edits that think long. On the simulator it cost no measurable share of picks
   pooled, but some landscapes lose up to 6.5 points, beyond chance. So: on for a thinking model
