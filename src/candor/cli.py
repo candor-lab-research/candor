@@ -1075,7 +1075,7 @@ def search_command(
         f"The least KL of each kind at each count within the cap ({caps}), unless a trial "
         "refusing fewer has less:"
     )
-    picks, paired = [], False
+    picks, gaps_shown = [], False
     for scope in search.SCOPES:
         best = search.to_measure(found, scope, space)
         fewest = search.fewest_refused(found, scope)
@@ -1094,7 +1094,7 @@ def search_command(
             )
             if best:
                 against = _against_least(found, candidate, best[-1])
-                paired = paired or bool(against)
+                gaps_shown = gaps_shown or bool(against)
                 console.print(f"  {scope}: {described}{against}")
             else:
                 none = f"none refused {cap} or fewer" if hits is None else "none within the cap"
@@ -1105,7 +1105,7 @@ def search_command(
                     "so a better edit may lie outside them."
                 )
             picks.append(candidate.trial)
-    if paired:
+    if gaps_shown:
         console.print(
             f"A gap within {search.TIE_SE} standard errors is a tie: the test prompts can't tell the two "
             "apart by KL."

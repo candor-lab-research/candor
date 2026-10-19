@@ -22,7 +22,3 @@ def from_top(base: dict[int, float], edited: dict[int, float]) -> float:
     if base_rest > 0:
         kl += base_rest * math.log(base_rest / max(1.0 - edited_total, 1e-12))
     return kl
-
-
-def mean_from_top(base: list[dict[int, float]], edited: list[dict[int, float]]) -> float:
-    return sum(map(from_top, base, edited)) / len(base)

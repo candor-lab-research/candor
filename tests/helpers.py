@@ -11,7 +11,7 @@ import gguf
 import torch
 from safetensors.torch import load_file, save_file
 
-from candor import config, files, run, toolchain
+from candor import config, files, kl, run, toolchain
 from candor.config import Model, RunConfig
 from candor.kernel import Kernel
 from candor.measure import Edit
@@ -194,6 +194,12 @@ def write_journal(path, direction_index, settings=None, parameters=HERETIC_KERNE
     ]
     path.write_text("".join(json.dumps(op) + "\n" for op in ops))
     return path
+
+
+def mean_from_top(base: list[dict[int, float]], edited: list[dict[int, float]]) -> float:
+    """Mean KL(base || edited) over prompts, from the top tokens a server lists for each (see
+    kl.from_top)."""
+    return sum(map(kl.from_top, base, edited)) / len(base)
 
 
 def flat(output: str) -> str:

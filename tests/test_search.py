@@ -18,7 +18,7 @@ from optuna.study import StudyDirection
 from optuna.trial import FixedTrial, TrialState
 from typer.testing import CliRunner
 
-from candor import cli, config, menu, proxy, run, search
+from candor import cli, config, kl, menu, proxy, run, search
 from candor.cli import app
 from candor.engine import GREEDY, Answer, LlamaServer
 from candor.judge import is_refusal
@@ -1174,14 +1174,26 @@ def test_the_searched_score_is_the_trials_own():
         search.searched_score(found, 1)
 
 
-def test_each_trial_keeps_its_kl_at_every_harmless_test_prompt_whose_mean_is_its_kl(tiny):
+def test_each_trial_keeps_its_kl_at_every_harmless_test_prompt_whose_mean_is_its_kl(tiny, monkeypatch):
     small(tiny)
+    read, real = [], LlamaServer.top_logprobs
+
+    def top(self, prompts, k, scales=None, done=None):
+        read.append(real(self, prompts, k, scales, done))
+        return read[-1]
+
+    monkeypatch.setattr(LlamaServer, "top_logprobs", top)
     Search(tiny).search(2)
-    prompts = len(tiny.prompt_ids()["harmless_test"])
-    for trial in finished(tiny):
+    base, *edited = read
+    trials = finished(tiny)
+    for trial, tops in zip(trials, edited, strict=True):
         by_prompt = trial.user_attrs["kl_by_prompt"]
-        assert len(by_prompt) == prompts and sum(by_prompt) / prompts == trial.user_attrs["kl"]
+        # The edited model's first tokens' KL from the unedited model's, at each prompt.
+        assert by_prompt == [kl.from_top(b, e) for b, e in zip(base, tops, strict=True)]
+        assert sum(by_prompt) / len(by_prompt) == trial.user_attrs["kl"]
         assert search._score(trial).kl_by_prompt == by_prompt
+    assert len(base) == len(tiny.prompt_ids()["harmless_test"])
+    assert any(trial.user_attrs["kl"] > 0 for trial in trials)
 
 
 def test_a_kl_gap_is_paired_by_prompt_and_a_tie_within_two_standard_errors():
@@ -1198,6 +1210,9 @@ def test_a_kl_gap_is_paired_by_prompt_and_a_tie_within_two_standard_errors():
         pytest.approx(statistics.stdev([0.5, 0.3, 0.5, 0.3]) / 2),
         False,
     )
+    # Gaps of 0.2, 0, 0.2 and 0: a mean of 0.1, between one and two standard errors of 0.1 / sqrt(3).
+    between = search.kl_gap(Score(1, 0, 0, 0.2, 3, kl_by_prompt=[0.2] * 4), least)
+    assert between is not None and between[1] < between[0] and between[2]
     # Not for a trial scored before the search kept its KL at each prompt, nor against one.
     assert search.kl_gap(Score(1, 0, 0, 0.2, 3), least) is None
     assert search.kl_gap(near, Score(2, 0, 0, 0.1, 3)) is None
@@ -2173,6 +2188,8 @@ def test_a_search_whose_trials_read_kl_beside_the_answer_start_carries_on_and_sh
     assert result.exit_code == 0, result.output
     shown = flat(result.output)
     assert "tokens per answer on average across trials" in shown and "KL across trials" not in shown
+    # Its trials kept no KL at each prompt, so no gap is shown and none explained.
+    assert "more KL than" not in shown and "A gap within" not in shown
     searched = Run.open(folder, lambda _: None)
     found = search.load(searched)
     assert found is not None
