@@ -1,6 +1,7 @@
 # Phase 3 results: Qwen3.5-9B
 
-Numbers only; answers stay in each run's private folder. The plan and decisions are in STATUS.md.
+Numbers only; answers stay in each run's private folder. The plan is in STATUS.md; the decisions,
+with their reasons and the decision rule, are in `history.md`.
 
 ## Step 2: candor on a pod, checked on rude-llama (2026-10-13)
 

@@ -1,6 +1,6 @@
 """Regenerate src/candor/data/llama_cpp_architectures.json from a llama.cpp checkout.
 
-    python -I scripts/llama_cpp_architectures.py PATH_TO_LLAMA_CPP
+    uv run python -I scripts/llama_cpp_architectures.py PATH_TO_LLAMA_CPP
 
 Maps each Hugging Face architecture that llama.cpp's converter registers for a text model to the
 architecture name it writes into the GGUF, and lists the architectures for which the converter

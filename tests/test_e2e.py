@@ -1,5 +1,7 @@
-"""End to end on a small real model with the real converter. Run with CANDOR_E2E=1 (downloads ~270 MB
-the first time, and sets up llama.cpp's converter)."""
+"""End to end on small real models with the real converter: init, run, measure, compare, search, score
+and export on SmolLM2-135M, a real thinking model's budget on Qwen3.5-0.8B, Qwen3.8-27B's init and the
+judge. Run with CANDOR_E2E=1 (downloads about 3.6 GB the first time, and sets up llama.cpp's
+converter); nothing else runs it, so it is run at each phase end (STATUS, How we work)."""
 
 import filecmp
 import json

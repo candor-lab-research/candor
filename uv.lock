@@ -165,6 +165,7 @@ version = "0.1.0"
 source = { editable = "." }
 dependencies = [
     { name = "accelerate" },
+    { name = "click" },
     { name = "datasets" },
     { name = "gguf" },
     { name = "httpx" },
@@ -193,6 +194,7 @@ dev = [
 [package.metadata]
 requires-dist = [
     { name = "accelerate", specifier = ">=1.10" },
+    { name = "click", specifier = ">=8.1" },
     { name = "datasets", specifier = ">=4" },
     { name = "gguf", git = "https://github.com/ggml-org/llama.cpp?subdirectory=gguf-py&rev=b11524" },
     { name = "httpx", specifier = ">=0.28" },

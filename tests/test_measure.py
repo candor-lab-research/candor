@@ -276,7 +276,7 @@ def test_another_quantisation_is_measured_again_and_not_compared(tiny, monkeypat
     answered = counting_answers(monkeypatch)
     q8 = Measurement(tiny, None, "base").measure()
     assert answered == [3, 3, 3]
-    with pytest.raises(RunError, match="differ in more than the edit and slots"):
+    with pytest.raises(RunError, match="differ in more than the edit, seed, slots and machine"):
         measure.compare(q4, q8)
 
 
@@ -284,7 +284,7 @@ def test_measurements_with_other_settings_are_not_compared(tiny):
     first = Measurement(tiny, None, "base").measure()
     tiny.settings.measure.answer_tokens = 8
     other = Measurement(tiny, None, "shorter").measure()
-    with pytest.raises(RunError, match="held-out harmful prompts differ in more than the edit and slots"):
+    with pytest.raises(RunError, match="held-out harmful prompts differ in more than the edit, seed, slots"):
         measure.compare(first, other)
     tiny.settings.measure.answer_tokens = 16
     assert measure.compare(first, Measurement(tiny, None, "again", slots=2).measure())
@@ -454,7 +454,7 @@ def test_a_limit_measures_the_first_prompts_and_knows_the_full_sizes(tiny):
 def test_measurements_of_different_prompts_are_not_compared(tiny):
     whole = Measurement(tiny, None, "base").measure()
     part = Measurement(tiny, None, "base-first-2", limit=2).measure()
-    with pytest.raises(RunError, match="held-out harmful prompts differ in more than the edit and slots"):
+    with pytest.raises(RunError, match="held-out harmful prompts differ in more than the edit, seed, slots"):
         measure.compare(whole, part)
 
 

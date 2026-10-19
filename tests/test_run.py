@@ -22,6 +22,8 @@ from candor.weights import ModelFiles
 
 from .custom_code import write_custom_code_model
 from .helpers import (
+    HIDDEN,
+    LAYERS,
     LLAMA_SERVER,
     TEMPLATE,
     adapter_factors,
@@ -35,7 +37,6 @@ from .helpers import (
 )
 from .tiny_gguf import random_weights, write_model
 
-HIDDEN, LAYERS = 64, 2
 GGUF = {"gguf/model-BF16.gguf", "gguf/model-Q4_K_M.gguf"}
 ADAPTERS = {"adapters/per-layer", "adapters/layer-0", "adapters/layer-1"}
 

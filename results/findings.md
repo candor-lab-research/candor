@@ -8,8 +8,8 @@ flagged by what supports it:
 - **Published**: a paper or others' public results, cited.
 - **Hypothesis**: not tested yet; says what would test it.
 
-The numbers behind each are in the file named. New findings are added here as they come, and an
-entry is corrected rather than deleted when later evidence changes it.
+The numbers behind each are in the file named. New findings are added here as they come; how an
+entry is corrected, dropped or overturned is in CLAUDE.md ("Finished, dropped and replaced").
 
 ## Thinking models
 
@@ -154,6 +154,18 @@ entry is corrected rather than deleted when later evidence changes it.
 - **Refusals fall gradually as strength rises; there is no cliff.** [Measured: 8 searches on 3
   models] [Published] The literature agrees. (`evidence-2026-10-14/data-report.md`,
   `lit-refusal.md`)
+- **A trial scored again repeats within a refusal and 3% KL.** [Hypothesis] `candor score` takes a
+  repeat within that as the same score. rude-llama's one repeat, greedy, came back with the same
+  refusals and KL within 0.3% (`phase-2-rude-llama.md`, the search fix); untested for a sampled
+  thinking model. Test: score one K2 trial twice at its slots.
+- **The simulator's cached wide-range bests were stale.** [Measured: `tools/misscheck/harness`, the
+  base landscape recomputed] The backup's cache put the wide range's best one-layer edit at layer 12
+  at KL 0.0839 and its best per-layer edit at 0.10277, above the normal range's 0.0683 and 0.10258
+  in the same file, though the wide range holds the normal one; recomputed, the wide range gives
+  0.0683 and 0.10258.
+  The headline phase 2 numbers use the normal range, and no result in the docs cites the wide-range
+  values. Clearing `tools/misscheck`'s `cache/` after changing `landscape.py` or `optimum.py` avoids
+  it.
 
 ## Pods
 
@@ -242,8 +254,10 @@ entry is corrected rather than deleted when later evidence changes it.
   10% faster than an A40 at full load for 3 times the price, as sampling the whole vocabulary, not
   the GPU, was the limit (speed test). A 27B model reads 3 times the weights a step, so test again:
   a short timed pilot on an A100 and an H100 before quoting 27B.
-- **3-5 refusal directions,** if a single direction fails as used. [Hypothesis] **Optuna 5,** once
-  candor has a baseline. [Housekeeping]
+- **3-5 refusal directions,** if a single direction fails as used. [Hypothesis]
+- **Optuna 5,** once candor has a baseline. [Hypothesis] Its TPE changed multivariate bandwidth and
+  multi-objective weights (`history.md`, "Not in this plan"). Test: the miss-rate simulator with
+  each.
 - **A 27B for the 18 GB Mac: Ternary Bonsai 2 27B with candor's adapters, unmerged.** [Hypothesis;
   PrismML's numbers Published] Its ternary GGUF is 5.95-7.21 GB, against about 16 GB for a 27B at
   Q4, and decodes 32.1 tok/s on an L4 (300 GB/s), so roughly half that on the M3 Pro (150 GB/s).

@@ -12,10 +12,9 @@ from candor.convert import as_converted, check_targets, float_type
 from candor.edit import RowNorm, edit_factors
 from candor.targets import find_targets, gguf_name
 
-from .helpers import CONVERTER_ORDER, OUT_PROJ, TINY_QWEN35, llama, qwen35
+from .helpers import CONVERTER_ORDER, HIDDEN, OUT_PROJ, TINY_QWEN35, llama, qwen35
 from .tiny_tokenizer import tokenizer
 
-HIDDEN = 64
 GGUF_TYPE = {torch.bfloat16: gguf.GGMLQuantizationType.BF16, torch.float16: gguf.GGMLQuantizationType.F16}
 LLAMA = {"architectures": ["LlamaForCausalLM"], "hidden_size": HIDDEN, "num_hidden_layers": 2}
 

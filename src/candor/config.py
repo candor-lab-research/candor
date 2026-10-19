@@ -278,7 +278,9 @@ class Sampling(Section):
         description="Tokens less likely than this share of the likeliest token's chance are dropped.",
     )
     presence_penalty: Finite = Field(
-        default=0.0, description="Lowers the chance of every token already in the answer, against repetition."
+        default=0.0,
+        description="Lowers the chance of every token among the last 64 the model has seen, its prompt "
+        "included (llama-server's repeat_last_n), against repetition: not the whole answer, as vLLM's does.",
     )
     repeat_penalty: Finite = Field(
         default=1.0, gt=0, description="Divides the chance of recently used tokens; 1 changes nothing."
@@ -310,8 +312,9 @@ class Scoring(Section):
         default=20,
         ge=1,
         le=1000,
-        description="How many of the most likely first tokens KL divergence is measured over (20 is "
-        "within 0.5% of the full vocabulary).",
+        description="How many of the most likely first tokens KL divergence is measured over (20 came "
+        "within 0.5% of the full vocabulary on Llama-3.2-3B's first answer token without thinking; it is "
+        "unchecked where the answer starts after thinking).",
     )
     thinking: Literal["on", "off"] = Field(
         default="on",

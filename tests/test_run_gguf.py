@@ -17,9 +17,7 @@ from candor.measure import Edit
 from candor.run import Run, RunError
 from candor.weights import ModelFiles
 
-from .helpers import CONVERTER_ORDER, OUT_PROJ, TINY_QWEN35, adapter_factors, llama, qwen35
-
-HIDDEN, LAYERS = 64, 2
+from .helpers import CONVERTER_ORDER, HIDDEN, LAYERS, OUT_PROJ, TINY_QWEN35, adapter_factors, llama, qwen35
 
 
 def make_run(tmp_path, shapes, model_config, dtype):

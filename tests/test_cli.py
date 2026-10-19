@@ -21,11 +21,9 @@ from candor.run import Run, RunError
 from candor.toolchain import ToolchainError
 
 from .custom_code import write_custom_code_model
-from .helpers import LLAMA_3B, MESSAGE_WHEN_THINKING, OPENS_ITS_OWN, QWEN35, THINKING, llama
+from .helpers import HIDDEN, LLAMA_3B, MESSAGE_WHEN_THINKING, OPENS_ITS_OWN, QWEN35, THINKING, llama
 from .tiny_run import ALWAYS_THINKING_TEMPLATE
 from .tiny_tokenizer import DATED, PINNABLE, WITH_BOS, tokenizer
-
-HIDDEN = 64
 
 
 class FakeHub:

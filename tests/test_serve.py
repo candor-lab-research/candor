@@ -6,6 +6,7 @@ import socket
 import sys
 import time
 from datetime import date
+from types import SimpleNamespace
 
 import pytest
 from typer.testing import CliRunner
@@ -197,13 +198,19 @@ def test_a_hub_model_pinned_to_a_commit_finds_its_gguf_without_the_weights(tiny,
     )
 
 
-def test_a_hub_models_float_type_is_read_once_and_from_its_download_when_there_is_one(tiny, monkeypatch):
-    stored, local = run_module.source.float_type(tiny.settings.model.source), tiny.settings.model.source
+def test_a_hub_models_float_type_is_read_once_and_from_its_download_when_there_is_one(
+    tiny, monkeypatch, tmp_path
+):
+    real_float_type = run_module.source.float_type
+    stored, local = real_float_type(tiny.settings.model.source), tiny.settings.model.source
+    # The Hub's headers of a model stored as F16.
+    matrix = SimpleNamespace(dtype="F16", shape=[4, 4])
+    weights = SimpleNamespace(files_metadata={"model.safetensors": SimpleNamespace(tensors={"w": matrix})})
     asked = []
     monkeypatch.setattr(
         run_module.source, "float_type", lambda source, revision=None: asked.append(source) or stored
     )
-    monkeypatch.setattr(run_module.source, "is_local", lambda source: False)
+    monkeypatch.setattr(run_module.source, "is_local", lambda source: source != "org/model")
     tiny.settings.model.source, tiny.settings.model.revision = "org/model", "a" * 40
     monkeypatch.setattr(run_module, "snapshot_download", lambda *args, **kwargs: local)
     tiny.model_file()
@@ -219,6 +226,20 @@ def test_a_hub_models_float_type_is_read_once_and_from_its_download_when_there_i
     tiny.model_file()
     tiny.model_file()
     assert asked == ["org/model"]
+    # A download holding only the config, as the checks fetch it, isn't read as the weights.
+    config_only = tmp_path / "config-only"
+    config_only.mkdir()
+    (config_only / "config.json").write_text("{}")
+    monkeypatch.setattr(run_module.source, "float_type", real_float_type)
+    monkeypatch.setattr(run_module, "snapshot_download", lambda *args, **kwargs: str(config_only))
+    hub = []
+    monkeypatch.setattr(
+        run_module.source,
+        "get_safetensors_metadata",
+        lambda model, revision=None: hub.append(model) or weights,
+    )
+    del tiny.__dict__["float_type"]
+    assert tiny.float_type == "F16" and hub == ["org/model"]
 
 
 def test_the_sample_shows_the_servers_own_template_settings(tiny, tmp_path, monkeypatch, stopped_by_ctrl_c):

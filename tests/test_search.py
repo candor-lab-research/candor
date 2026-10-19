@@ -217,6 +217,9 @@ def test_a_search_refused_for_other_prompts_reads_no_directions_first(tiny, monk
         Search(tiny).search(2)
     with pytest.raises(RunError, match="different adapters"):
         Search(tiny).score([Edit("each", None, KERNELS)])
+    # Nor before a trial is rebuilt, to measure or export.
+    with pytest.raises(RunError, match="can't be rebuilt as they were scored"):
+        search.trial_edit(tiny, 1)
     assert read == [] and tiny.path("directions.pt").read_bytes() == kept
 
 

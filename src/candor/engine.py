@@ -85,9 +85,10 @@ class Answer:
 @dataclass(frozen=True)
 class Thinking:
     """How a thinking model thinks: every prompt ends by opening its thinking (opened, which starts
-    with the start tag), and the end tag closes it. Once budget tokens are thought, llama-server makes
-    the model write message and then close, the end tag with any text the template puts before it, as
-    the server's chat endpoint does for the model's template; then it answers."""
+    with the start tag), and the end tag closes it. Once budget tokens are thought, candor makes the
+    model finish any character it is part way through, then write message and then close, the end tag
+    with any text the template puts before it, as llama-server's own budget does for the model's
+    template; then it answers."""
 
     start: str
     end: str

@@ -7,6 +7,7 @@ requires-python = ">=3.12"
 dependencies = [
     # Never imported, but transformers needs it to load a model with device_map.
     "accelerate>=1.10",
+    "click>=8.1",
     "datasets>=4",
     # The same llama.cpp release as the engine, so tensor and architecture names always agree.
     "gguf @ git+https://github.com/ggml-org/llama.cpp@b11524#subdirectory=gguf-py",

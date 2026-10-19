@@ -427,7 +427,7 @@ def differences(score: Score, searched: Score) -> list[str]:
     ):
         if abs(now - before) > REPEAT_REFUSALS:
             found.append(f"{what} {now}, not {before}")
-    # Nor by less than KL is shown to.
+    # Nor by a gap too small to show in KL_DIGITS.
     if not math.isclose(score.kl, searched.kl, rel_tol=REPEAT_KL, abs_tol=0.5 * 10**-KL_DIGITS):
         found.append(f"KL {score.kl:.4f}, not {searched.kl:.4f}")
     return found
@@ -754,7 +754,7 @@ def searched_score(found: Found, number: int) -> Score:
 
 def _rebuilt_from(run: Run) -> dict[str, Any]:
     """What a search's trials are rebuilt from besides their settings: the adapters for every position
-    its directions are read at, and the code that scored them. Call after run.directions()."""
+    its directions are read at, and the code that scored them. Call after run.planned_directions()."""
     made = [run.adapter_inputs(answering) for answering in run.positions]
     return {
         # A model that doesn't think reads at one position, recorded as before there were two.
@@ -796,8 +796,8 @@ def trial_edit(run: Run, number: int) -> Edit:
     if not (folder / "study.jsonl").exists():
         raise RunError(f"{run.folder} has no search yet; run candor search")
     with run.locked():
-        run.gguf()
-        run.directions()
+        # Planned, not read: directions read before the check could be read again otherwise.
+        run.planned_directions()
         now = json.loads(json.dumps(_rebuilt_from(run)))
     if not (folder / "inputs.json").exists():
         raise RunError(f"{folder} holds a search with no record of its settings")

@@ -1,6 +1,7 @@
 # Phase 4 results: K2-Horizon-7B
 
-Numbers only; answers stay in each run's private folder. The plan and decisions are in STATUS.md.
+Numbers only; answers stay in each run's private folder. The plan is in STATUS.md; the decisions,
+with their reasons and the decision rule, are in `history.md`.
 
 ## Step 2: the timed pilot (2026-10-16)
 
@@ -23,7 +24,9 @@ the build stage's fixed 8 slots, about 30 minutes for 400 prompts. Its thinking 
 | `measure` | 9,216 | 41,472 MiB of KV: out of memory | 28 slots, 41,497 MiB in all |
 | `search` | 15,616 (the longest KL read plus a whole thinking answer) | | 28 slots asked 61,488 MiB of KV: out of memory; 16 slots, 43,370 MiB in all |
 
-The search fixes its thinking slots at 32 in code; the pilot ran it at 16 on the pod only.
+The search then fixed its thinking slots at 32 in code; the pilot ran it at 16 on the pod only.
+Slots have been run settings since 2026-10-16 (`[slots]`): `init` gives a thinking model 32 for its
+thinking and measuring, and its search takes 32 while `slots.search` is unset.
 
 **The unedited model and Avicennasis's heretic edit**, the first 64 prompts of each set, 28 slots,
 paired (`candor compare`). Avicennasis's 72 edited weights (every attention output and MLP down)

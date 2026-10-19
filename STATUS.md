@@ -35,29 +35,30 @@ thinking on (next, e.g. Qwen3.8-27B). A 9B model must not take days.
   and default edit, PRs merged since the last check, issues on the model family (commands in
   `results/evidence-2026-10-14/ara-missed.md`). Tools checked 2026-10-14: heretic master 66a952b
   (2.0.0.dev0, default edit ARA); last release 1.4.0.
+- At each phase end, run the e2e test (`CANDOR_E2E=1 uv run pytest tests/test_e2e.py`): nothing else
+  runs it.
 
 ## Now: between phases, waiting for the user
 
-- Phase 3: trial 175 beats Trial 161 (0/288 refused, maths at the unedited model's level);
-  `results/phase-3-qwen3.5-9b.md`. The phase-end discussion remains.
-- Phase 4: trial 205 released 2026-10-18 as `candor-lab/K2-Horizon-7B-Candor-Uncensored-GGUF`
-  after passing the decision rule and the user's test; numbers in
-  `results/phase-4-k2-horizon-7b.md`.
+- Phases 3 and 4 wait only on the phase-end discussion (Next, 1); trial 205 is released as
+  `candor-lab/K2-Horizon-7B-Candor-Uncensored-GGUF`.
 - 20 ideas from arXiv are ranked in `results/new-features.md`.
 - The repository review (2026-10-18): 24 work packages in the order agreed
   (`results/evidence-2026-10-18/repo-review.md`). Steps 1 (faster tests, one server launch), 2
   (the thinking check, measurements that can't pair stale labels, intervals in `compare`, findings
   corrected), 3 (27B cost and safety: packages 6-10, 14 and 17) and 4 (the answer's own seed and the
-  maths reading, in one measurements change, 2026-10-19) done; step 5, the rest, next.
-- `candor` alone opens menus over the runs and their commands (the user, 2026-10-18; README, Use).
+  maths reading, in one measurements change) and 5 (the rest, 2026-10-19) done, but for package 11
+  (with the 27B pilot, below) and three items left with reasons (history).
 
 ## Next
 
-1. The repository review's step 5, then the phase-end discussion: where to go next, from
-   `results/findings.md`, `results/new-features.md` (chiefly the search's cost for 27B) and the
-   review's 11 method questions, including how to score Qwen3.8-27B thinking off; no method
-   changes until agreed. The answer reusing its thinking's cache (package 11) changes draws too, so
-   its timed pilot belongs in the 27B pilot, before the 27B reference is measured.
+1. The phase-end discussion. It opens with the heretic
+   upstream check (How we work), missed at phase 4's start, its result recorded there, so the 27B
+   phase can't start without it; then where to go next, from `results/findings.md`,
+   `results/new-features.md` (chiefly the search's cost for 27B) and the review's 11 method
+   questions, including how to score Qwen3.8-27B thinking off; no method changes until agreed. The
+   answer reusing its thinking's cache (package 11) changes draws too, so its timed pilot belongs in
+   the 27B pilot, before the 27B reference is measured.
 2. Phase 4, later: low effort's two closes; Uno not now. The budget limit
    (`search.max_budget_hits`, on K2 from trial 138) costs no measurable hits on the simulator and
    stays on (results file, step 5).
@@ -73,27 +74,23 @@ thinking on (next, e.g. Qwen3.8-27B). A 9B model must not take days.
      both);
    - llama-server's chat endpoint may count prompt tokens against the thinking budget (seen on a
      tiny model only); K2's budget message was written for a close that starts with a newline;
-   - small fixes: an interrupted `candor proxy` scores the unedited model again; the search prints
-     "Rebuilding scores/trial/edit.gguf" every "full" trial; serving the unedited model downloads the
-     original weights to check its GGUF (the Hub commit and float type need only metadata); an
-     `inspect` warning when weights were quantised before; the export's file name when some tensors
-     are Q8_0 or F32; a local model copied to a pod rebuilds every stage.
+   - the directions stage keeps the embedding output it never reads and pads residual batches
+     unsorted (F80, F132): fixed at the next directions change, as it rebuilds every run's directions;
+   - small fixes: an interrupted `candor proxy` scores the unedited model again; an `inspect`
+     warning when weights were quantised before; the export's file name when some tensors are Q8_0
+     or F32; a local model copied to a pod rebuilds every stage;
+   - heretic 2.x journals aren't read (they record no refusals for a trial).
 
 ## Phase 3: in force
 
 - Decisions use as-used numbers only: thinking on; Qwen's sampling (temperature 1.0, top_p 0.95,
   top_k 20, min_p 0, presence penalty 1.5) with a seed per prompt; a thinking budget of 8192, then a
   forced close; an unfinished answer counts against the edit; the judge reads the final answer.
-- KL is read where the answer starts after the unedited model's own thinking; KL after an empty
-  thinking block is kept beside it.
 - A cheap thinking-off score may only choose which edits get the as-used test, and only once
   `candor proxy` shows it ranks edits as thinking on does, for each new model.
 - The reference is heretic's Trial 161, re-saved by heretic, exported and measured as candor ships
   its edits. Maths: the full 1,319 GSM8K questions on finalists only.
-- Strength starts at 0.8-1.5 and widens to 3.0 when a kind's best edit presses it. Directions are
-  read at the think start and after a closed thinking block; the search chooses. Optuna 4.9.
-- The decision rule, signed off 2026-10-14 (text in `results/history.md`): both finalists pass it
-  and beat Trial 161.
+- The decision rule, signed off 2026-10-14 (text in `results/history.md`). Optuna stays 4.9.
 
 ### Steps
 
@@ -103,13 +100,10 @@ thinking on (next, e.g. Qwen3.8-27B). A 9B model must not take days.
 
 ## Phase 4: K2-Horizon-7B
 
-As used: llama-server, reasoning effort high (the user, 2026-10-15); temperature 1.0, top_p 0.95,
-top_k 1,000, min_p 0, budget 8192 (the user, 2026-10-16); 28 slots on an A40. K2 can't turn
-thinking off, so candor refuses a thinking-off search for it. References: the unedited model and
-Avicennasis's heretic edit refused 48/64 as used in the pilot (7/50 on its card), too weak a bar to
-measure in full, and Uno-Uncensored is built on K2 with the Uno adapter merged in: the reference is
-the unedited model (the user, 2026-10-16). Strength 0.8-5.0 from the start (the user, 2026-10-16:
-22 trials at 0.8-1.5 all refused 88-100 of 100; heretic's K2 run needed 4.5-4.6).
+As used: llama-server, reasoning effort high; temperature 1.0, top_p 0.95, top_k 1,000, min_p 0,
+budget 8192; 28 slots on an A40. The reference is the unedited model, and strength runs 0.8-5.0
+from the start. The user's decisions, 2026-10-15 and 2026-10-16; their reasons are in
+`results/history.md`.
 
 | Step | What | State |
 | --- | --- | --- |

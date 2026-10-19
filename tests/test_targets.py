@@ -11,9 +11,7 @@ from candor.targets import (
     recurrent_bytes_per_slot,
 )
 
-from .helpers import LLAMA_3B, QWEN35, llama
-
-HIDDEN = 64
+from .helpers import HIDDEN, LLAMA_3B, QWEN35, llama
 
 
 def test_finds_writers_and_ignores_same_shaped_readers():

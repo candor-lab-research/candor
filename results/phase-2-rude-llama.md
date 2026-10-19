@@ -2,7 +2,7 @@
 
 Numbers only; answers stay in the run's private folder. Every measurement is Q4_K_M in llama-server,
 8 slots, answers up to 256 tokens (maths 512), refusals judged by Qwen3Guard-Gen-0.6B. The rule
-these are judged against is in STATUS.md (phase 2's decision rule).
+these are judged against is in `history.md` (phase 2's decision rule).
 
 ## The search (2026-10-11)
 
@@ -103,7 +103,8 @@ The unedited model refuses 99 of 100, as in the search.
 - Not the scorer: it ranks Trial 170 ahead of 165, as the held-out measurement did (KL 0.1011
   against 0.1089).
 - The check repeated its refusals and keywords exactly, and its KL to within 0.0003 (0.3%). The
-  command calls that "not reliable" because it wants a match to 4 decimals; the gap that decides
+  command then called that "not reliable" because it wanted a match to 4 decimals [Not used since
+  2026-10-19: a repeat within a refusal and 3% KL now counts]; the gap that decides
   this is about 0.02, some 60 times larger, so the conclusion stands.
 
 ## Before the diagnosis
@@ -266,7 +267,8 @@ tool or quantiser checks refusals after quantising.
 The fix (`6e47a01`): the export measures each edited weight's kept share, quantises those under 98%
 as Q8_0 through llama-quantize's tensor type file, and refuses the file if any still falls short.
 For 535: Q4_K_M kept 55.2-97.5% in all 49 edited weights; as Q8_0 each kept 99.8-100.0%; the file
-is 2.4 GB against 1.9.
+is 2.4 GB against 1.9. Extended 2026-10-18: such a weight is merged again unrounded in F32 first,
+and left in F32 where Q8_0 still falls short (`phase-4-k2-horizon-7b.md`, the finalists exported).
 
 | Held-out | Trial 170 | 535 | Trial 170 exported | 535 exported |
 | --- | --- | --- | --- | --- |

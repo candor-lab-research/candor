@@ -67,8 +67,9 @@ TOKENIZING_SLOT = 2048
 # The version of each stage's code, in stage order. Bump a stage's number in any commit that changes
 # the results it builds. Each record holds the numbers of its own stage and every stage before it, so
 # results built by older code are rebuilt along with everything after them, unless DEPENDS names the
-# stages it is built from. scores holds the adapters candor score builds for edits the search has none
-# for, and exports the GGUFs candor export ships; neither is built from a measurement. Stages added later
+# stages it is built from. scores holds adapters built only to score edits: candor score's for directions
+# the search has none for, and a "full" edit's own adapter for each edit or search trial scored; exports
+# holds the GGUFs candor export ships. Neither is built from a measurement. Stages added later
 # go last, so adding one rebuilds nothing already made: a thinking model's directions where its answer
 # starts, and its unedited thinking, after which KL is read.
 STAGES = {
@@ -340,8 +341,9 @@ class Run:
                 ignore_patterns=NOT_MODEL_FILES,
                 local_files_only=True,
             )
+            # A folder holding only the config, as the checks fetch it, raises as no weights.
             return source.float_type(downloaded)
-        except (LocalEntryNotFoundError, OSError):
+        except (LocalEntryNotFoundError, OSError, ValueError):
             return source.float_type(model.source, model.revision)
 
     @cached_property
@@ -622,7 +624,8 @@ class Run:
             return 0
         budget = budget or deployment.thinking_budget
         assert budget is not None
-        # A token holds at least one byte, and the engine allows a few more for the end tag.
+        # A token holds at least one byte, so the message takes at most its bytes. The 16 covers the close
+        # and the engine.UNFINISHED_CHARACTER tokens a model may take to finish a character at the budget.
         return budget + len(deployment.thinking_budget_message.encode()) + 16
 
     def kl_ids(self, ids: dict[str, list[list[int]]], name: str, limit: int | None = None) -> list[list[int]]:
@@ -985,7 +988,7 @@ class Run:
 
     def adapter_inputs(self, answering: bool = False) -> dict[str, Any]:
         """What every adapter set read at one position is built from besides its directions; call after
-        directions()."""
+        planned_directions() or directions()."""
         return {
             "directions": self.inputs["answering directions" if answering else "directions"],
             "row_norm": self.settings.edit.row_norm,

@@ -53,7 +53,9 @@ MARKS = {
     "warn": "[yellow]warn[/]",
     "fail": "[red]fail[/]",
 }
-# 2 is what typer uses for usage errors, so "couldn't inspect" gets its own code.
+# Every command exits with 1 when a check fails or candor stops it for a reason it gives, and 3 when it
+# couldn't get that far: settings it can't read, a model it can't inspect or an unexpected error. 2 is
+# typer's, for usage errors.
 FAILED_CHECK, COULD_NOT_INSPECT = 1, 3
 # A search's progress takes its speed from every trial of the session, since trials take minutes and
 # rich otherwise looks back only 30 seconds.
@@ -534,7 +536,10 @@ def _where(error: Exception) -> str:
     """An unexpected error by its type, the line that raised it and the lines of candor's own that led
     there, innermost first. Its message could quote a prompt or an answer, so it is never shown."""
     frames = traceback.extract_tb(error.__traceback__)
-    ours = [f for f in frames[:-1] if Path(f.filename).parent == Path(__file__).parent]
+    # _stopping's own frame, through which every command's error passes, says nothing.
+    ours = [
+        f for f in frames[:-1] if Path(f.filename).parent == Path(__file__).parent and f.name != "_stopping"
+    ]
     shown = [f"{Path(f.filename).name}:{f.lineno}" for f in reversed([*ours, frames[-1]])]
     return f"{type(error).__name__} at {shown[0]}" + (f", from {', '.join(shown[1:])}" if ours else "")
 
@@ -909,9 +914,9 @@ def serve_command(
     ] = None,
 ) -> None:
     """Run the unedited model or a trial's export in llama-server as candor measures it: the run's KV
-    cache type and chat template settings, with today's date. It first shows the command, the
-    settings and how the chat template renders a first message, so the mode (such as thinking) is
-    plain before you chat; then it serves llama-server's chat page until Ctrl-C."""
+    cache type, chat template settings, sampling and thinking budget, with today's date. It first shows
+    the command, the settings and how the chat template renders a first message, so the mode (such as
+    thinking) is plain before you chat; then it serves llama-server's chat page until Ctrl-C."""
     console = Console()
     folder = folder.expanduser()
     if heretic is not None and trial is None:

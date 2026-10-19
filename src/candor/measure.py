@@ -95,7 +95,9 @@ class Edit:
 def heretic_trial(journal_path: Path, number: int, row_norm: str, think_close: str | None = None) -> Edit:
     """A trial from a heretic study, to be rebuilt with this run's own directions. A trial that read its
     directions after a response prefix that closes the thinking as this run's think_close does is rebuilt
-    with the directions read where the answer starts."""
+    with the directions read where the answer starts. candor reads every layer's output before the
+    model's final norm, and heretic its last one after it, so a per-layer trial's last layer is rebuilt
+    with a direction heretic didn't read."""
     try:
         journal = heretic.read_journal(journal_path)
     except (OSError, ValueError, KeyError) as error:
@@ -681,8 +683,8 @@ def compare(a: dict[str, dict[str, Any]], b: dict[str, dict[str, Any]]) -> list[
     for name in SETS:
         if a[name]["paired"] != b[name]["paired"]:
             raise RunError(
-                f"the two measurements of the {LABELS[name]} differ in more than the edit and slots: the "
-                "model file, the prompts, a setting or candor's measuring changed between them"
+                f"the two measurements of the {LABELS[name]} differ in more than the edit, seed, slots and "
+                "machine: the model file, the prompts, a setting or candor's measuring changed between them"
             )
         if name in HELD_OUT and a[name]["judge"] != b[name]["judge"]:
             raise RunError(f"the {LABELS[name]} were judged by different judges")
@@ -736,7 +738,9 @@ def compare(a: dict[str, dict[str, Any]], b: dict[str, dict[str, Any]]) -> list[
             rows.append((label, str(a["maths"].get(key)), str(b["maths"].get(key)), "", "", "", ""))
     gpus = [
         "; ".join(
-            dict.fromkeys(", ".join(found["machine"]["gpus"]) for found in m.values() if "machine" in found)
+            dict.fromkeys(
+                ", ".join(found["machine"]["gpus"]) or "no GPU" for found in m.values() if "machine" in found
+            )
         )
         or "not recorded"
         for m in (a, b)

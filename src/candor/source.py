@@ -93,4 +93,6 @@ def float_type(model: str, revision: str | None = None) -> str:
     as F16, otherwise BF16, which also holds the range of F32 weights."""
     headers = tensor_headers(model, revision).values()
     stored = {info["dtype"] for info in headers if len(info["shape"]) > 1}
+    if not stored:
+        raise ValueError(f"{model} has no weights to read their type from")
     return "F16" if stored == {"F16"} else "BF16"
