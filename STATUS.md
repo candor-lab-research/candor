@@ -64,7 +64,8 @@ thinking on (next, e.g. Qwen3.8-27B). A 9B model must not take days.
    the 27B pilot, before the 27B reference is measured.
 2. Approved: one A40 pod to judge K2's and Qwen's held-out answers with Qwen3Guard-Gen-8B and to
    score one finalist each with both row normalisations, quoted after timing the first units; the
-   second judge in `measure` and `compare`, and the beside reads out of the search, before 27B.
+   second judge in `measure` and `compare`, the beside reads out of the search, per-prompt KL with
+   ties shown, and 200 KL tokens from `init`, before 27B.
 3. Phase 4, later: low effort's two closes; Uno not now. The budget limit
    (`search.max_budget_hits`, on K2 from trial 138) costs no measurable hits on the simulator and
    stays on (results file, step 5).

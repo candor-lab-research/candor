@@ -951,5 +951,9 @@ every past finalist, it gives the old rules' outcomes: K2 205 and 114 pass, 207 
 Two judges: on both K2 and Qwen a bigger judge of the same family found 2-2.4x more refusals on
 edited models than the 0.6B, so the bar must hold under both; the search keeps the 0.6B. Dropped
 from the search: the KL reads where the thinking starts and with empty thinking, which no pick
-reads. Not taken up: per-prompt KL with ties, 200 KL tokens for the 27B, and KL-first skipping. The
-pod checks on K2 and Qwen (the 8B judge, both row normalisations) are approved.
+reads. Then, on the user's request for guidance: the search keeps each trial's per-prompt KL and
+shows which suggested finalists tie the best within about 2 SE, as guidance only, since the
+average of 100 prompts can't separate them (K2's 207 led 205 on the test prompts, 205 led held
+out); `init` writes 200 KL tokens for new runs, as nearly free and closer to the full vocabulary;
+KL-first skipping is not taken up (it saves under 1.2% on K2 and costs 19% on Qwen). The pod checks
+on K2 and Qwen (the 8B judge, both row normalisations) are approved.
