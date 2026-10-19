@@ -120,17 +120,31 @@ def test_a_search_runs_its_trials_and_keeps_only_numbers(tiny, monkeypatch):
     assert all(len(a.strip()) < 4 or a.strip() not in kept for a in answers)
 
 
-def test_a_judge_the_gpu_cant_hold_stops_the_search_before_it_loads(tiny, monkeypatch):
-    small(tiny)
+def too_big_a_judge(tiny, monkeypatch) -> None:
+    """Give the run a judge this machine's GPU can't hold, checked as candor checks a real one."""
     monkeypatch.setattr(run.Run, "check_judge", CHECK_JUDGE)
     # Only the judge's memory: the residuals' check comes first.
     monkeypatch.setattr(run.Run, "check_memory", lambda self: None)
     tiny.settings.measure.judge = tiny.settings.model.source
     monkeypatch.setattr(run.residuals, "memory_budget", lambda device: 1)
+
+
+def test_a_judge_the_gpu_cant_hold_stops_the_search_before_it_loads(tiny, monkeypatch):
+    small(tiny)
+    too_big_a_judge(tiny, monkeypatch)
     with pytest.raises(RunError, match=r"the judge .* needs about 0\.0 GB of GPU memory"):
         Search(tiny).search(1)
     assert FakeGuard.events == []
     assert not tiny.path("search", "inputs.json").exists()
+
+
+def test_a_judge_the_gpu_cant_hold_stops_scoring_before_it_loads_and_writes_nothing(tiny, monkeypatch):
+    too_big_a_judge(tiny, monkeypatch)
+    before = {path for path in tiny.folder.rglob("*") if path.name != ".lock"}
+    with pytest.raises(RunError, match=r"the judge .* needs about 0\.0 GB of GPU memory"):
+        Search(tiny).score([])
+    assert FakeGuard.events == []
+    assert {path for path in tiny.folder.rglob("*") if path.name != ".lock"} == before
 
 
 def test_each_kind_gets_its_share_of_trials_and_no_more(tiny):
