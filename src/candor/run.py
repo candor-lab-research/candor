@@ -31,7 +31,7 @@ from huggingface_hub.errors import LocalEntryNotFoundError
 
 from . import checks, config, convert, directions, residuals, source, targets, toolchain
 from .adapters import write_adapter
-from .edit import RowNorm, edit_factors, rank_one
+from .edit import RowNorm, edit_factors, full_device, rank_one
 from .engine import LLAMA_CPP_RELEASE, LlamaServer, Thinking, seed_for
 from .files import sync, write_atomic
 from .judge import normalise
@@ -1073,7 +1073,7 @@ class Run:
         files = ModelFiles(self.model_folder)
         model_config = source.read_config(str(self.model_folder))
         row_norm = RowNorm(self.settings.edit.row_norm)
-        return {
+        made = {
             writer.name: edit_factors(
                 convert.as_converted(files.tensor(writer.name), writer.name, arch, model_config),
                 found[writer.layer],
@@ -1083,6 +1083,9 @@ class Run:
             for writer in writers
             if (strength := edit.strength(writer))
         }
+        # A "full" change is built on the GPU, whose memory goes back before a llama-server needs it.
+        residuals.free_memory(full_device())
+        return made
 
     def edit_adapter(self, folder: Path, edit: "Edit") -> tuple[Path, dict[str, Any]]:
         """One adapter holding every change the edit makes, at its strengths, applied at scale 1, as an

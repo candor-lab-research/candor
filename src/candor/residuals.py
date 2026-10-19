@@ -24,10 +24,16 @@ def device_and_dtype() -> tuple[str, torch.dtype]:
 
 def protect_memory() -> None:
     """Defaults that stop PyTorch on an Apple GPU taking more memory than the machine has, which
-    freezes it, and a loader deadlock on Metal. Must run before the first model is loaded."""
+    freezes it, and a loader deadlock on Metal; and expandable segments on CUDA, without which a freed
+    model's memory stays reserved (all 50 GiB of a 27B's, measured) and a llama-server started next
+    can't have it. Torch reads these once, the first time it uses the GPU, so candor sets them as it
+    starts."""
     os.environ.setdefault("PYTORCH_MPS_HIGH_WATERMARK_RATIO", "0.7")
     os.environ.setdefault("PYTORCH_MPS_LOW_WATERMARK_RATIO", "0.6")
     os.environ.setdefault("HF_DEACTIVATE_ASYNC_LOAD", "1")
+    # Torch 2.11 also reads the newer name, and only the first of the two it finds.
+    if not {"PYTORCH_CUDA_ALLOC_CONF", "PYTORCH_ALLOC_CONF"} & set(os.environ):
+        os.environ["PYTORCH_CUDA_ALLOC_CONF"] = "expandable_segments:True"
 
 
 def memory_budget(device: str) -> int | None:
