@@ -957,3 +957,13 @@ average of 100 prompts can't separate them (K2's 207 led 205 on the test prompts
 out); `init` writes 200 KL tokens for new runs, as nearly free and closer to the full vocabulary;
 KL-first skipping is not taken up (it saves under 1.2% on K2 and costs 19% on Qwen). The pod checks
 on K2 and Qwen (the 8B judge, both row normalisations) are approved.
+
+### The 27B: Qwen3.8-27B at xhigh; the gate reset after a pilot (the user, 2026-10-19)
+
+The cost model (`evidence-2026-10-19/cost-27b.md`, reviewed): today's process costs about $167-195
+for the 27B, and a thinking-off search with a per-model proxy check about $73 under the rules in
+force, only if the check passes. No route meets about a day and $20 without searching less, which
+the simulator shows roughly halves the chance of finding the best edit. The user's decisions: the
+next model is Qwen3.8-27B as they use it, at reasoning effort xhigh; the must-not-miss standard
+stays, and the release gate is set again from a pilot's measured speed and thinking length; the
+pilot (about $7-8) runs once the approved code changes land and the K2/Qwen pod checks are done.

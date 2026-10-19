@@ -56,16 +56,18 @@ thinking on (next, e.g. Qwen3.8-27B). A 9B model must not take days.
 ## Next
 
 1. The phase-end discussion, under way: the 27B decision rule (two judges, margins fixed) is signed
-   off and the search's beside KL reads go (history). Next in it: the search's cost for 27B (the
-   gate: about a day and $20), the 27B model and whether it may be scored thinking off, from
-   `results/findings.md`, `results/new-features.md` and the method questions left
-   (`results/evidence-2026-10-19/method-evidence.md`); no other method changes until agreed. The
+   off and the search's beside KL reads go; the 27B is Qwen3.8-27B at xhigh, and the gate (about a
+   day and $20; `results/evidence-2026-10-19/cost-27b.md`: $73-195 now) is set again from the pilot
+   (history). Next in it: the thinking-off search with a per-model proxy check (F55) and the method
+   questions left (`results/evidence-2026-10-19/method-evidence.md`); no other method changes
+   until agreed. The
    answer reusing its thinking's cache (package 11) changes draws too, so its timed pilot belongs in
    the 27B pilot, before the 27B reference is measured.
 2. Approved: one A40 pod to judge K2's and Qwen's held-out answers with Qwen3Guard-Gen-8B and to
    score one finalist each with both row normalisations, quoted after timing the first units; the
    second judge in `measure` and `compare`, the beside reads out of the search, per-prompt KL with
-   ties shown, and 200 KL tokens from `init`, before 27B.
+   ties shown, and 200 KL tokens from `init`, before 27B; then the 27B pilot (about $7-8), quoted
+   from its first units.
 3. Phase 4, later: low effort's two closes; Uno not now. The budget limit
    (`search.max_budget_hits`, on K2 from trial 138) costs no measurable hits on the simulator and
    stays on (results file, step 5).
