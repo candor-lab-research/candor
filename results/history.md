@@ -996,3 +996,32 @@ judged the stored K2 and Qwen held-out answers again: it agrees with the 4B, and
 the 0.6B and the 8B, so no decision changes. K2's 205 and Qwen's 175 scored twice each with "full"
 and "pre": no difference by candor's tie test, and on Qwen "pre" may raise KL a little. Nothing
 argues for leaving "full"; the 27B's weight gap is screened in the pilot. The pod was deleted.
+
+### Phase 5, step 1: the Qwen3.8-27B pilot (2026-10-19)
+
+The approved pilot ran on an A100 80GB (build, directions, the full-vocabulary and cross-card KL
+checks, speed, MTP, a medium-effort copy) and an A40 (the cross-card control, speed, 64 prompts a
+set at xhigh and medium, as-used and thinking-off trials, the cache test), about $6.8 of the $7-8
+approved; both pods deleted. Run settings: the model card's thinking-mode sampling, and the search
+as K2's ("full", strength 0.8-5.0, budget cap 8). Numbers in `phase-5-qwen3.8-27b.md`, step 1. What
+it settles: the A40 stays the card (the A100 is 1.68 times faster at 3.0 times the price); MTP and
+`--kv-unified` don't help; KL over 200 tokens is within 0.05% of the whole vocabulary and
+llama-server's float32 sum doesn't matter on the mean; an A100 and an A40 read KL alike; "full" and
+"pre" differ on the 27B's weights as little as on Qwen's; the answer can reuse its thinking's cache
+(package 11 still to be timed on an as-used trial). The 9B's best edit breaks the 27B (KL 1.86), and
+an as-used trial takes 15-47 min against a thinking-off one's 2: under the rules in force the
+as-used route costs an estimated $132-290 and 9-21 days, thinking off $35-81 and 2.5-6 days if its
+proxy check passes (about the as-used cost if it fails), and medium's directions differ from
+xhigh's, so the gate and the route go to the user. The script review found real gaps before the pods
+ran (an 80 GB-only directions step for the medium copy, MTP's memory at 64 slots, a cross-card
+control that rebuilt its adapter); they were fixed and re-reviewed.
+
+### candor: PyTorch gives a freed model's GPU memory back (2026-10-19)
+
+The 27B's first build stopped at the unedited thinking: after the directions, PyTorch kept 50.1 GiB
+reserved with no tensor alive, so llama-server couldn't allocate its KV cache on the 80 GB card.
+`protect_memory` now sets `PYTORCH_CUDA_ALLOC_CONF=expandable_segments:True` (unless either of
+torch's names is set) when candor starts, and `Run.changes` frees the GPU after building a "full"
+edit, which `candor measure` hadn't. Reviewed twice (the first review found the measure path); each
+test fails without its fix; checked on the pod, where the medium copy's build read its directions
+and started its thinking in one process. 912 tests pass.

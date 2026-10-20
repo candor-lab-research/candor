@@ -33,7 +33,16 @@ entry is corrected, dropped or overturned is in CLAUDE.md ("Finished, dropped an
   that turning thinking off leaves out, so an answer after an empty thinking block isn't the model
   with thinking off, and candor refuses `scoring.thinking = "off"`. At medium it is a clean close.
   A cheap search of it needs medium, or scoring from the template's own thinking-off prompts (the
-  phase-end discussion).
+  phase-end discussion). At medium candor's search ran it on llama-server in the pilot.
+  [Measured: its 64 layers' directions, xhigh against medium] They agree at a median cosine of 0.80
+  where thinking starts (0.97 where the answer starts), so the same settings make a different edit
+  in each. (`phase-5-qwen3.8-27b.md`, step 1)
+- **Unedited, Qwen3.8-27B thinks a few hundred tokens with a long tail at xhigh; medium cuts the
+  tail.** [Measured: 64 prompts a set, A40] At xhigh, mean 799 / 762 / 283 tokens (harmful,
+  harmless, maths; medians 381 / 70 / 140), most 8,214, 3 harmless at the budget; at medium 255 /
+  306 / 209 (medians 242 / 174 / 164), most 2,530, none at the budget, with the same refusals (62
+  and 61 of 64) and maths (64 and 63). Edits that comply as used thought 1,969-1,975 on average.
+  (`phase-5-qwen3.8-27b.md`, step 1)
 - **Two models of the same size think for very different lengths.** [Measured: K2-Horizon-7B at
   high, 64 prompts a set; Qwen3.5-9B, held-out sets] Unedited median thinking 224 / 560 / 140 tokens
   (harmful, harmless, maths) on K2 against 996 / 1,135 / 2,140 on Qwen, with no K2 budget hits (the
@@ -106,10 +115,12 @@ entry is corrected, dropped or overturned is in CLAUDE.md ("Finished, dropped an
   and 0.9998, but 13% and 10% of prompts fall below 0.995. Cutting there misses about 0.5% of KL; the
   floor for a base token the edit doesn't list may put heretic's Trial 161 2-7% low against 0.3-1.6%
   for candor's edits. llama-server b11524 sums the softmax in float32, so tokens below about 6e-8 of
-  the top one are lost and the remainder is understated, by an unmeasured amount.
-  (`evidence-2026-10-19/method-evidence.md`, F119) [Hypothesis] 200 tokens shrink the first two;
-  test against transformers' full logits at the same ids on the 27B pilot, summed in float64 and in
-  float32 in llama-server's order.
+  the top one are lost and the remainder is understated, by little on the mean (below).
+  (`evidence-2026-10-19/method-evidence.md`, F119) [Measured: Qwen3.8-27B, 100 KL prompts, one
+  edit at KL 0.04, against transformers' float32 logits over the whole vocabulary] 20 tokens put
+  the mean KL 0.56% low, 200 tokens 0.05%; summing in float32 as llama-server does changes either
+  mean by 0.01 points at most, though single prompts move (by up to +72% at 200).
+  (`phase-5-qwen3.8-27b.md`, step 1)
 - **Until 2026-10-19 every sampled thinking-on answer replayed its thinking's random draws.**
   [Measured: llama-server b11524 on test models; the effect on counts a Hypothesis] llama-server
   starts its random numbers again at each request, and the answer was sent with the thinking's seed,
@@ -176,7 +187,12 @@ entry is corrected, dropped or overturned is in CLAUDE.md ("Finished, dropped an
   ways on one A40] On a fixed edit candor's tie test finds no difference on either, nor any in
   refusals; on Qwen pre may raise KL a little (p 0.07), the way the "full"-tuned strengths lean.
   Whether "pre" searches better still rests on the one Qwen pair.
-  (`evidence-2026-10-19/pod-checks.md`)
+  (`evidence-2026-10-19/pod-checks.md`) [Measured: Qwen3.8-27B's 128 writers] The 27B's weights
+  sit with Qwen's: a median 0.35-1.05% of the edit at strengths 1-5. (`phase-5-qwen3.8-27b.md`)
+- **The 9B's best edit breaks Qwen3.8-27B, and KL climbs steeply with strength.** [Measured:
+  Qwen3.8-27B, one edit shape at multiples of its strengths, 100 KL prompts] Qwen 9B trial 175's
+  settings gave KL 1.86; at 0.5, 0.6, 0.7 and 0.8 times its strengths 0.009, 0.016, 0.044 and
+  0.121. At 0.7 it still refused 17 of 100 as used. (`phase-5-qwen3.8-27b.md`, step 1)
 - **Per-layer edits press the 3.0 ceiling on attention.** [Measured: Qwen3.5-9B, one search] Every
   per-layer best puts attention at 2.9-3.0, so a better per-layer edit may lie beyond it. (step 6)
 - **Refusals fall gradually as strength rises; there is no cliff.** [Measured: 8 searches on 3
@@ -248,6 +264,36 @@ entry is corrected, dropped or overturned is in CLAUDE.md ("Finished, dropped an
   step on either GPU, capping llama-server near 425-470 tokens/s at 28; top_k 1,000 or less runs
   28 at once at 1,107-1,139 tokens/s. An A100 is about 10% faster for 3 times the price; 56 slots
   give no more than 28. (`phase-4-k2-horizon-7b.md`, speed test)
+- **Of the A40 and the A100, the A40 gives Qwen3.8-27B more per dollar; MTP and a shared KV pool
+  don't help.** [Measured: one request of 2,048 tokens a slot at the search's 8,504-token slots] A40
+  224 tokens/s at 32 slots; A100 376 (1.68 times, at 3.0 times the price), and 436 at 64 (1.95
+  times, at 1.56 times the cost a token: time bought, not savings). On the A100 MTP drafting at 32
+  slots was slower (291 tokens/s with 3 drafts, 359 with 1); on the A40 `--kv-unified` at 40 and 48
+  slots gave 223-228. 32 slots take 37 GiB, and peaked at 39.6 GiB searching.
+  (`phase-5-qwen3.8-27b.md`, step 1)
+- **A 27B as-used trial takes 15-47 minutes on an A40; a thinking-off one about 2.** [Measured:
+  Qwen3.8-27B, 32 slots, 4 as-used and 3 thinking-off trials] Edits that still refuse took about 15
+  min, edits that comply 45-47, a stop on refusals 77 s; thinking off at medium 121-135 s. So the
+  route, as used or thinking off, decides the 27B's cost several times over (estimates in the
+  results file). (`phase-5-qwen3.8-27b.md`, step 1)
+- **KL read on an A100 and an A40 differs about as much as two reads on one card.** [Measured:
+  Qwen3.8-27B, one edit, 100 KL prompts, 2 sessions a card] Base reads 0.0029-0.0045 apart across
+  cards, 0.0030-0.0033 within; edited reads 0.0043-0.0047 across, 0.0012 and 0.0034 within; every
+  pair's KL gap a tie. Each pod's own GGUF and adapter differ in bytes, inside that.
+  (`phase-5-qwen3.8-27b.md`, step 1)
+- **The answer can reuse its own thinking's cache on a hybrid model.** [Measured: Qwen3.8-27B, A40,
+  64 unedited answers] With one slot a prompt and the answer's cache on, 63 of 63 answer requests
+  skipped 25,873 of 25,960 prompt tokens, their summed prompt time falling from 42.5 s to 17.3 s; a
+  reused read matched a fresh one to KL 2.7e-07. The wall-clock saving is unmeasured. [Hypothesis]
+  On complying edits, whose thinking runs about 2,000 tokens, it saves 5-10% of a trial; test: time
+  one as-used trial both ways before adopting it (package 11).
+- **With GPU sampling, a first-token read beside other slots' sampling can come back empty.**
+  [Measured on Metal, Qwen3.5-0.8B: 7 of 8 reads] [Hypothesis on CUDA] llama.cpp's source allows it
+  whenever another slot is still sampling, as after a trial stops on its budget, and candor then
+  fails loudly at `min()`; but all 121 KL reads made straight after a stop on CUDA came back whole
+  (120 in K2's search, 7 of them on the budget; 1 in the 27B pilot). Test: on CUDA, read first
+  tokens while 31 slots still sample.
+  (`phase-5-qwen3.8-27b.md`, step 1)
 
 ## Export
 
@@ -298,16 +344,8 @@ entry is corrected, dropped or overturned is in CLAUDE.md ("Finished, dropped an
   `<ifm|think_faster>` thinking with high's `</ifm|think>` 17 times in 32, which candor counts as
   never closed, and K2's card advises against low for evaluation. Test: accept both closes at low,
   then `candor proxy`'s rank check, low against high, on a first search's best. (step 2)
-- **More slots in one shared KV pool (`--kv-unified`).** [Hypothesis, from the speed test] At top_k
-  1,000 a step grows only about 0.46 ms per answer (24.3 ms at 28; 12.0 at 1, at the card's top_k),
-  so 48-56 answers at once might reach about 1,400 tokens/s, but f16 KV at the full budget caps K2
-  at 28 slots on an A40. A pool the slots share, sized to what they use at once, could fit more,
-  since most answers end far short of the budget; it changes numerics and how a full pool behaves.
-  Test: time 28 against 48 slots with it, and check counts against per-slot caches on one edit.
-- **A faster GPU for 27B.** [Measured on K2-Horizon-7B; Hypothesis for 27B] On K2 an A100 was about
-  10% faster than an A40 at full load for 3 times the price, as sampling the whole vocabulary, not
-  the GPU, was the limit (speed test). A 27B model reads 3 times the weights a step, so test again:
-  a short timed pilot on an A100 and an H100 before quoting 27B.
+- **More slots in one shared KV pool (`--kv-unified`).** [Dropped 2026-10-20: no gain on
+  Qwen3.8-27B, 223-228 tokens/s at 40-48 slots against 224 at 32]
 - **3-5 refusal directions,** if a single direction fails as used. [Hypothesis]
 - **Optuna 5,** once candor has a baseline. [Hypothesis] Its TPE changed multivariate bandwidth and
   multi-objective weights (`history.md`, "Not in this plan"). Test: the miss-rate simulator with
