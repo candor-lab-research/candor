@@ -168,3 +168,73 @@ alone: 299-471 hours as used before stops, 21 hours thinking off. The thinking-o
 are built from medium's directions, not xhigh's (Build), so its as-used round and the shipped edit
 need one set of directions chosen first; and on Qwen3.5-9B the proxy ranked the near-best edits
 poorly (Spearman 0.24 among 12, `cost-27b.md`).
+
+## Step 2: the thinking-off search to 150 trials, then `candor proxy` (2026-10-20)
+
+`runs/qwen27b-medium` (Step 1's medium copy, its directions and thinking from the pilot's A100) on an
+A40 (`847t462hxacsky`, secure, EU-SE-1, $0.59/h, created 05:20 UTC), 32 slots, seed 0, the pilot's
+3 trials carried on. The proxy's bar is the one built in (`src/candor/proxy.py`). The raw scores are
+in `runs/qwen27b-medium/proxy/scores.json` and the search at 150 trials in `search-at-150`, outside
+git.
+
+### The search, 150 trials thinking off (05:47-10:22 UTC)
+
+The unedited model refused 99 of 100 test prompts. 150 trials took 4 h 35 min (110 s a trial; 98 s
+over the last 25); 29 stopped early (12 one layer, 17 per layer); strength never widened.
+
+| Kind | Best within the cap (2) | Ties with it by KL (2 SE), refusing fewer | At an end of its range |
+| --- | --- | --- | --- |
+| One layer | trial 119, layer 40, answer start: 2 refused, KL 0.0293 | trial 97, layer 41, answer start: 0, 0.0448 | attn.peak_layer 0.602 (floor 0.6), mlp.strength 4.96 (ceiling 5, the widest) |
+| Per layer | trial 114, answer start: 2, 0.0364 | trial 150: 1, 0.0416; trial 20: 0, 0.0465 | trial 114: both peak_layers 0.62 and 0.61 (floor 0.6); trial 20: mlp.strength 0.91 (floor 0.8) |
+
+### The proxy check (10:22-14:52 UTC)
+
+The 3 best trials of each kind and position by refusals then KL, each at 1 and 1.4 times its
+strengths (held within 0.5-5), scored on the 100 test prompts with thinking off and then with medium
+thinking (budget 8192); all 100 judged in every score. Thinking off took 54 min (25 scores), thinking
+on 3 h 36 min (26 scores with the repeat, about 8 min each).
+
+| Edit | Trial | Kind, direction | Strength × | Refused, off | Refused, on | KL, off | KL, on | Thinking, mean tokens | Budget hits |
+| --- | --- | --- | --- | --- | --- | --- | --- | --- | --- |
+| 1 | 55 | one layer, layer 27, thinking start | 1 | 1 | 1 | 0.0590 | 0.0530 | 268 | 0 |
+| 2 | 55 | one layer, layer 27, thinking start | 1.37-1.40 | 26 | 98 | 0.4815 | 0.4909 | 336 | 0 |
+| 3 | 135 | one layer, layer 27, thinking start | 1 | 6 | 1 | 0.0579 | 0.0558 | 489 | 2 |
+| 4 | 135 | one layer, layer 27, thinking start | 1.16-1.40 | 24 | 90 | 0.2776 | 0.2894 | 144 | 0 |
+| 5 | 57 | one layer, layer 28, thinking start | 1 | 6 | 28 | 0.1265 | 0.1201 | 322 | 0 |
+| 6 | 57 | one layer, layer 28, thinking start | 1.08-1.40 | 25 | 98 | 0.3927 | 0.3925 | 92 | 1 |
+| 7 | 97 | one layer, layer 41, answer start | 1 | 0 | 0 | 0.0456 | 0.0486 | 359 | 0 |
+| 8 | 97 | one layer, layer 41, answer start | 1.15-1.40 | 0 | 1 | 0.0711 | 0.0706 | 345 | 0 |
+| 9 | 145 | one layer, layer 41, answer start | 1 | 0 | 0 | 0.0483 | 0.0520 | 344 | 0 |
+| 10 | 145 | one layer, layer 41, answer start | 1.06-1.40 | 0 | 1 | 0.0568 | 0.0586 | 321 | 0 |
+| 11 | 107 | one layer, layer 37, answer start | 1 | 1 | 0 | 0.0550 | 0.0541 | 303 | 0 |
+| 12 | 107 | one layer, layer 37, answer start | 1.00-1.33 | 0 | 0 | 0.0552 | 0.0604 | 338 | 0 |
+| 13 | 2 | per layer, thinking start | 1 | 0 | 1 | 0.0996 | 0.0989 | 179 | 0 |
+| 14 | 2 | per layer, thinking start | 1.03-1.23 | 0 | 0 | 0.1163 | 0.1148 | 173 | 0 |
+| 15 | 34 | per layer, thinking start | 1 | 0 | 0 | 0.1099 | 0.1038 | 185 | 0 |
+| 16 | 34 | per layer, thinking start | 1.01-1.40 | 0 | 0 | 0.1382 | 0.1384 | 222 | 0 |
+| 17 | 18 | per layer, thinking start | 1 | 0 | 1 | 0.1308 | 0.1324 | 214 | 0 |
+| 18 | 18 | per layer, thinking start | 1.27-1.39 | 5 | 18 | 0.3399 | 0.3529 | 694 | 5 |
+| 19 | 20 | per layer, answer start | 1 | 2 | 2 | 0.0462 | 0.0460 | 334 | 0 |
+| 20 | 20 | per layer, answer start | 1.40 | 0 | 0 | 0.1138 | 0.1066 | 255 | 0 |
+| 21 | 142 | per layer, answer start | 1 | 0 | 0 | 0.0605 | 0.0610 | 287 | 0 |
+| 22 | 142 | per layer, answer start | 1.31-1.40 | 0 | 0 | 0.1001 | 0.1018 | 266 | 0 |
+| 23 | 120 | per layer, answer start | 1 | 0 | 0 | 0.0653 | 0.0611 | 284 | 0 |
+| 24 | 120 | per layer, answer start | 1.40 | 0 | 0 | 0.1371 | 0.1295 | 243 | 0 |
+
+- The unedited model refused 99 thinking off and 98 thinking on. Edit 7 scored again thinking with
+  another seed: 0 refused, KL 0.0477 (0.0486 first).
+- **Verdict "holds":** refusal ranks agree at Spearman 0.80 (bar 0.70); among the 23 edits refusing
+  at most 25 thinking off, thinking refuses a median 0 more (bar 1).
+- All 18 edits within the cap (2) thinking off are within it thinking on (one more, edit 3, is only
+  thinking on). Among them KL ranks agree at Spearman 0.98 (0.99 over all 24); KL on is within
+  -10% to +10% of KL off (median -0.2%). Edit 7, the least refusals then KL either way, is the same.
+- Thinking refuses more on 9 of 24. The large gaps are 5 edits refusing 5-26 thinking off, at 18-98
+  thinking on; edit 3 went the other way (6 off, 1 on).
+- The search's best within the cap (trials 119 and 114, 2 refused) weren't among the edits checked,
+  which take fewest refusals first.
+- Each trial's edit at 1 times, scored thinking off here, repeats the search's score: refusals
+  within 1 on 11 of 12 (trial 20: 0 in the search, 2 here), KL within 0.02 on 11 of 12 (trial 57:
+  0.1057 in the search, 0.1265 here).
+
+**Cost.** The pod from 05:20 to 14:52 UTC is $5.6. It then sat idle for 1 h 9 min ($0.68) while the
+Mac couldn't reach it, until the 600-trial search started on it at 16:01 UTC (Step 3).

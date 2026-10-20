@@ -1025,3 +1025,24 @@ torch's names is set) when candor starts, and `Run.changes` frees the GPU after 
 edit, which `candor measure` hadn't. Reviewed twice (the first review found the measure path); each
 test fails without its fix; checked on the pod, where the medium copy's build read its directions
 and started its thinking in one process. 912 tests pass.
+
+### The 27B at medium effort; the proxy check started (the user, 2026-10-20)
+
+After the pilot, the user chose to use and score Qwen3.8-27B at reasoning effort medium rather than
+xhigh. Medium is the one effort where its template turns thinking off cleanly, so `runs/qwen27b-medium`
+becomes the run: its own directions and medium thinking (built on the pilot's A100), the search
+scoring with thinking off, and `candor proxy` checking, as the rule in force requires for each new
+model, that thinking off ranks edits as medium thinking does. The proxy's pass bar is the one built
+in (refusal ranks agree at 0.7 or better, and edits that nearly work thinking off need little more
+strength with thinking on); the search continues to 600 trials thinking off only if it passes, and
+comes back to the user if not. The xhigh run (`runs/qwen27b`) is kept as the pilot's record.
+
+### Phase 5, step 2: the proxy check holds on the 27B; the search carries on (2026-10-20)
+
+`runs/qwen27b-medium`'s thinking-off search ran to 150 trials, then `candor proxy` scored 24 of its
+best edits both ways: Spearman 0.80 on refusals and a median of 0 more refused thinking where edits
+nearly work, so "holds" under the bar built in. Every edit within the cap thinking off stayed within
+it thinking. Thinking undid the partial edits (24-26 refused thinking off became 90-98), which is
+where the two disagreed. The user chose to carry the search on to 600 trials on the same pod, before
+going offline for a flight; the pod's deadline moved to 48 h so the run outlasts the time away.
+(`results/phase-5-qwen3.8-27b.md`, step 2)

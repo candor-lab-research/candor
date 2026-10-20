@@ -17,13 +17,19 @@ entry is corrected, dropped or overturned is in CLAUDE.md ("Finished, dropped an
   24 edits refusing 1-100, 100 test prompts] Spearman 0.98, but only 0.24 among step 6's 12
   near-best edits. Thinking off costs about 90 s a trial against 10-20 min for an edit that complies
   scored as used (24 edits: 39 min against 3 h 47 min). So the search may score thinking off and
-  score only its best as used. (`phase-3-qwen3.5-9b.md`, steps 5 and 6)
+  score only its best as used. (`phase-3-qwen3.5-9b.md`, steps 5 and 6) [Measured: Qwen3.8-27B at
+  medium, 24 edits refusing 0-26 thinking off, 100 test prompts] Spearman 0.80 ("holds"); all 18
+  edits within the cap thinking off stayed within it thinking, their KL ranks agreeing at 0.98, and
+  the best was the same edit both ways (0 refused, again with another seed). About 2.2 min an edit
+  thinking off against 8 thinking. (`phase-5-qwen3.8-27b.md`, step 2)
 - **Thinking adds many refusals to edits that half-work, few to ones that work.** [Measured:
   Qwen3.5-9B, 24 edits in step 5 and 12 in step 6] Edits refusing 8-22 with thinking off refused
   3-28 more thinking (4 of the 5 at least 10 more); a median of 5 more where thinking off refuses at
   most 25 (step 6: 2). Of 15 edits within the cap of 2 thinking off, 9 stayed within it thinking;
   those that slipped at their own strength slipped by 3-5, none beyond chance on its own. (steps 5
-  and 6)
+  and 6) [Measured: Qwen3.8-27B at medium, 24 edits] More so: 5 edits refusing 5-26 thinking off
+  refused 18-98 thinking (24-26 became 90-98); a median of 0 more where thinking off refuses at most
+  25. (`phase-5-qwen3.8-27b.md`, step 2)
 - **A public K2-Horizon-7B edit refuses far more as used than its card says.** [Measured:
   K2-Horizon-7B, 64 held-out prompts; its card's count Published] Avicennasis's heretic edit refused
   48/64 as used (unedited 61/64) against 7/50 on its card. Prompts, judge and mode all differ, and
@@ -195,6 +201,10 @@ entry is corrected, dropped or overturned is in CLAUDE.md ("Finished, dropped an
   0.121. At 0.7 it still refused 17 of 100 as used. (`phase-5-qwen3.8-27b.md`, step 1)
 - **Per-layer edits press the 3.0 ceiling on attention.** [Measured: Qwen3.5-9B, one search] Every
   per-layer best puts attention at 2.9-3.0, so a better per-layer edit may lie beyond it. (step 6)
+- **The 27B's best edits press the floor of 0.6 on peak layer.** [Measured: Qwen3.8-27B at medium,
+  150 trials thinking off] Both kinds' best within the cap put a peak layer at 0.60-0.62; the one-layer
+  best also puts MLP strength at 4.96 of the widest 5. [Hypothesis] A better edit lies below 0.6:
+  the 600-trial search shows whether its best stays there. (`phase-5-qwen3.8-27b.md`, step 2)
 - **Refusals fall gradually as strength rises; there is no cliff.** [Measured: 8 searches on 3
   models] [Published] The literature agrees. (`evidence-2026-10-14/data-report.md`,
   `lit-refusal.md`)

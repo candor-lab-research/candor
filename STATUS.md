@@ -18,7 +18,7 @@ anything else. Every model is scored and shipped as a GGUF in llama-server, and 
 | 2 | rude-llama end to end: search, export, measure against heretic's Trial 170 | Done 2026-10-13: trial 535 passes and ships (`results/milestone-rude-llama-vs-heretic.md`) |
 | 3 | Qwen3.5-9B, a thinking model, scored as used against heretic's Trial 161 | Measured 2026-10-15: trial 175 beats Trial 161 (`results/milestone-qwen3.5-9b-vs-heretic.md`); the phase-end discussion remains |
 | 4 | K2-Horizon-7B at your real settings: llama-server, reasoning effort high | Released 2026-10-18: trial 205 passes the decision rule and the user's test (`results/phase-4-k2-horizon-7b.md`); the phase-end discussion remains |
-| 5 | Qwen3.8-27B at reasoning effort xhigh | Pilot done 2026-10-19 (`results/phase-5-qwen3.8-27b.md`, step 1); the gate and route wait for the user |
+| 5 | Qwen3.8-27B at reasoning effort medium (the user, 2026-10-20) | Pilot done 2026-10-19; the proxy check holds 2026-10-20 (`results/phase-5-qwen3.8-27b.md`, steps 1-2); the search to 600 trials running |
 
 Qwen3.5-9B is a testbed: the process must work, affordably, for larger thinking models used with
 thinking on (next, e.g. Qwen3.8-27B). A 9B model must not take days.
@@ -39,10 +39,12 @@ thinking on (next, e.g. Qwen3.8-27B). A 9B model must not take days.
 - At each phase end, run the e2e test (`CANDOR_E2E=1 uv run pytest tests/test_e2e.py`): nothing else
   runs it.
 
-## Now: waiting for the user
+## Now: the 27B search to 600 trials
 
-- The 27B pilot is done (`results/phase-5-qwen3.8-27b.md`, step 1, with the run's cost by route;
-  about $6.8). The gate and the route wait for the user (Next, 1).
+- `candor proxy` holds on the 27B at medium (`results/phase-5-qwen3.8-27b.md`, step 2), so
+  `runs/qwen27b-medium`'s thinking-off search carries on from 150 to 600 trials (the user,
+  2026-10-20), started 16:01 UTC on the A40 pod `847t462hxacsky` (EU-SE-1, $0.59/h); about 14-16 h.
+  The pod's watchdog deletes it, and the run, at 2026-10-22 16:01 UTC: pull before then.
 - Phases 3 and 4 wait only on the phase-end discussion (Next, 1); trial 205 is released as
   `candor-lab/K2-Horizon-7B-Candor-Uncensored-GGUF`.
 - 20 ideas from arXiv are ranked in `results/new-features.md`.
@@ -52,13 +54,12 @@ thinking on (next, e.g. Qwen3.8-27B). A 9B model must not take days.
 
 ## Next
 
-1. The phase-end discussion, under way: the 27B decision rule (two judges, margins fixed) is signed
-   off; the 27B is Qwen3.8-27B at xhigh, its pilot done. Next in it, for the user: the gate (it was
-   about a day and $20) and the route, the thinking-off search at medium with a per-model proxy
-   check (F55) or as used; then the method questions left. No other method changes until agreed.
+1. When the search ends: pull, delete the pod; its best go to an as-used round at medium (the
+   user's go and cost first), with a look at its best pressing peak layer's floor (findings). The
+   gate is set again from these runs.
+   The phase-end discussion's method questions left wait; no other method changes until agreed.
 2. Before the 27B reference: package 11 (the answer reusing its thinking's cache; it works on the
-   27B, findings) timed on one as-used trial and adopted if it pays; `runs/qwen27b`'s pilot search
-   folder removed so the real search starts afresh.
+   27B, findings) timed on one as-used trial and adopted if it pays.
 3. Phase 4, later: low effort's two closes; Uno not now. The budget limit
    (`search.max_budget_hits`, on K2 from trial 138) costs no measurable hits on the simulator and
    stays on (results file, step 5).
