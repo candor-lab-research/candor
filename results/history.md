@@ -1046,3 +1046,12 @@ it thinking. Thinking undid the partial edits (24-26 refused thinking off became
 where the two disagreed. The user chose to carry the search on to 600 trials on the same pod, before
 going offline for a flight; the pod's deadline moved to 48 h so the run outlasts the time away.
 (`results/phase-5-qwen3.8-27b.md`, step 2)
+
+### Phase 5, step 3: the 27B's thinking-off search to 600 trials (2026-10-21)
+
+The search ran from 150 to 600 trials on the same A40 in 10 h 35 min while the user was offline,
+and was pulled and the pod deleted when the Mac came back (38 min idle; the pod $13.28 for steps 2
+and 3). Its best within the cap: one layer trial 435 (1 refused, KL 0.0188), per layer trial 532 (2,
+0.0254), both well below their 150-trial bests; the one-layer best still presses peak layer's floor.
+The as-used round of its best waits for the user's go and cost. (`results/phase-5-qwen3.8-27b.md`,
+step 3)

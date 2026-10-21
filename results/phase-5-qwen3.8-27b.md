@@ -238,3 +238,34 @@ on 3 h 36 min (26 scores with the repeat, about 8 min each).
 
 **Cost.** The pod from 05:20 to 14:52 UTC is $5.6. It then sat idle for 1 h 9 min ($0.68) while the
 Mac couldn't reach it, until the 600-trial search started on it at 16:01 UTC (Step 3).
+
+## Step 3: the thinking-off search, 150 to 600 trials (2026-10-20 to 21)
+
+The same pod, run and settings as Step 2, carried on at 16:01 UTC and done at 02:37 UTC: 450 trials
+in 10 h 35 min (85 s a trial; 92 s over the last 25). The unedited model refused 99 of 100 again.
+278 of the 600 trials stopped early (one layer 144 of 300, per layer 134 of 300).
+
+| Kind | Best within the cap (2) | KL at 150 trials | Strength | Where it improved |
+| --- | --- | --- | --- | --- |
+| One layer | trial 435, layer 37, answer start: 1 refused, KL 0.0188 | 0.0293 (trial 119) | attn 3.90, mlp 3.70, range 0.8-5 | KL 0.0262, 0.0212, 0.0209 and 0.0188 at its 100th, 125th, 138th and 225th trial; none in its last 82 |
+| Per layer | trial 532: 2 refused, KL 0.0254 | 0.0364 (trial 114) | attn 3.75, mlp 3.83, widened to 0.5-5 after its 240th trial (its best's mlp at the floor of 0.8) | 0.0360 (trial 446) by its 225th trial, then 0.0254 about 30 trials after the widening; none in its last 34 |
+
+Trials no other beats on both refusals and KL: 584 (per layer, 0 refused, KL 0.0310), 435 (1,
+0.0188), 4 (51, 0.0110), 35 (97, 0.0059), 19 (98, 0.0057), 33 (99, 0.0042).
+
+The least KL at each count within the cap, with candor's paired-prompt test against the kind's best:
+
+| Kind | Trial | Refused | KL | Against the best |
+| --- | --- | --- | --- | --- |
+| One layer | 477, layer 39, answer start | 0 | 0.0324 | 0.0136 more than 435 (SE 0.0044): not a tie |
+| One layer | 435, layer 37, answer start | 1 | 0.0188 | |
+| Per layer | 584 | 0 | 0.0310 | 0.0056 more than 532 (SE 0.0031): a tie |
+| Per layer | 578 | 1 | 0.0290 | 0.0036 more (SE 0.0028): a tie |
+| Per layer | 532 | 2 | 0.0254 | |
+
+Trials 477 and 435 press peak layer's floor of 0.6 (attention at 0.602 and 0.614); the per-layer
+three press no end. candor's next step for each: `candor measure --trial N` on the held-out prompts.
+
+**Cost.** Runpod billed the pod $13.28 in all ($12.68 GPU, $0.60 disk), 05:20 UTC on the 20th to
+03:15 UTC on the 21st, for Steps 2 and 3: this step's 10 h 35 min about $6.2, then 38 min idle
+($0.37) until the Mac, offline, came back and pulled the run. The pod is deleted.

@@ -162,6 +162,10 @@ entry is corrected, dropped or overturned is in CLAUDE.md ("Finished, dropped an
 - **The full 600 trials mattered.** [Measured: Qwen3.5-9B, one search] The best edits came at trials
   205-428 and none improved in the 117 trials after. 150 trials would have missed them all; by 300
   the one-layer best was within 1% of the final KL, the per-layer best 7-11% above it. (step 6)
+  [Measured: Qwen3.8-27B at medium, one search thinking off] Again: at 150 trials the best KL was
+  0.0293 (one layer) and 0.0364 (per layer), at 600 0.0188 and 0.0254, from trials 435 and 532; the
+  per-layer best came about 30 of its trials after its strength widened to 0.5.
+  (`phase-5-qwen3.8-27b.md`, step 3)
 - **One-layer edits give the lowest KL; 100 test prompts didn't separate the two finalists.**
   [Measured: Qwen3.5-9B] On the 100 test prompts as used, trial 205 (layer 12) refused 1 at KL 0.037
   and 175 (layer 15) 0 at 0.057; on the 288 and 300 held-out, 205 refused 16 and the two KLs were
@@ -203,8 +207,10 @@ entry is corrected, dropped or overturned is in CLAUDE.md ("Finished, dropped an
   per-layer best puts attention at 2.9-3.0, so a better per-layer edit may lie beyond it. (step 6)
 - **The 27B's best edits press the floor of 0.6 on peak layer.** [Measured: Qwen3.8-27B at medium,
   150 trials thinking off] Both kinds' best within the cap put a peak layer at 0.60-0.62; the one-layer
-  best also puts MLP strength at 4.96 of the widest 5. [Hypothesis] A better edit lies below 0.6:
-  the 600-trial search shows whether its best stays there. (`phase-5-qwen3.8-27b.md`, step 2)
+  best also puts MLP strength at 4.96 of the widest 5. At 600 trials the one-layer best still does
+  (trials 435 and 477 at 0.614 and 0.602); the per-layer best no longer does. [Hypothesis] A better
+  one-layer edit lies below 0.6: a short one-layer search with peak layer from 0.4 tests it.
+  (`phase-5-qwen3.8-27b.md`, steps 2 and 3)
 - **Refusals fall gradually as strength rises; there is no cliff.** [Measured: 8 searches on 3
   models] [Published] The literature agrees. (`evidence-2026-10-14/data-report.md`,
   `lit-refusal.md`)
