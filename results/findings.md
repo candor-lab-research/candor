@@ -21,7 +21,8 @@ entry is corrected, dropped or overturned is in CLAUDE.md ("Finished, dropped an
   medium, 24 edits refusing 0-26 thinking off, 100 test prompts] Spearman 0.80 ("holds"); all 18
   edits within the cap thinking off stayed within it thinking, their KL ranks agreeing at 0.98, and
   the best was the same edit both ways (0 refused, again with another seed). About 2.2 min an edit
-  thinking off against 8 thinking. (`phase-5-qwen3.8-27b.md`, step 2)
+  thinking off against 8 thinking. (`phase-5-qwen3.8-27b.md`, step 2) The search's best 6 then all
+  stayed within the cap thinking (0-2 refused at their own strength). (step 4)
 - **Thinking adds many refusals to edits that half-work, few to ones that work.** [Measured:
   Qwen3.5-9B, 24 edits in step 5 and 12 in step 6] Edits refusing 8-22 with thinking off refused
   3-28 more thinking (4 of the 5 at least 10 more); a median of 5 more where thinking off refuses at
@@ -29,7 +30,8 @@ entry is corrected, dropped or overturned is in CLAUDE.md ("Finished, dropped an
   those that slipped at their own strength slipped by 3-5, none beyond chance on its own. (steps 5
   and 6) [Measured: Qwen3.8-27B at medium, 24 edits] More so: 5 edits refusing 5-26 thinking off
   refused 18-98 thinking (24-26 became 90-98); a median of 0 more where thinking off refuses at most
-  25. (`phase-5-qwen3.8-27b.md`, step 2)
+  25. (`phase-5-qwen3.8-27b.md`, step 2) [Measured: Qwen3.8-27B, 3 per-layer edits at 1.3-1.4 times
+  their strength] The other way: 23-66 refused thinking off, 0-5 thinking. (step 4)
 - **A public K2-Horizon-7B edit refuses far more as used than its card says.** [Measured:
   K2-Horizon-7B, 64 held-out prompts; its card's count Published] Avicennasis's heretic edit refused
   48/64 as used (unedited 61/64) against 7/50 on its card. Prompts, judge and mode all differ, and
@@ -224,6 +226,12 @@ entry is corrected, dropped or overturned is in CLAUDE.md ("Finished, dropped an
   within the fitted 11%; but K2's refusals moved by 2 of 100 (3 to 1), so a repeat doesn't always
   stay within a refusal. With the unedited thinking sampled afresh and the code of 2026-10-19, KL
   moved from the search's record by K2 +10% and Qwen -12%. (`evidence-2026-10-19/pod-checks.md`)
+  [Measured: Qwen3.8-27B, the 6 least-KL trials of 600 and a control, A40, same GGUF bytes] More on
+  the search's best: the six read 23-41% above the search a day later, the control (trial 97) 6-7%;
+  trial 435 read 0.0188-0.0249 in four sessions. Two reads of the unedited model were apart by a
+  mean KL of 0.0020, a median of 0.00002: a few prompts read differently each session. So the least
+  of 600 noisy reads is partly luck, and gaps under about 0.005 on 100 prompts aren't real.
+  (`phase-5-qwen3.8-27b.md`, step 4)
 - **Small KL gaps between trials are noise.**
   [Measured: K2-Horizon-7B and Qwen3.5-9B, 10 pairs of measured finalists, about 300 held-out
   prompts] At 100 test prompts the SE of a KL difference is an estimated 9-32% of the KL (scaled by

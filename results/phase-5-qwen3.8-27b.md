@@ -269,3 +269,51 @@ three press no end. candor's next step for each: `candor measure --trial N` on t
 **Cost.** Runpod billed the pod $13.28 in all ($12.68 GPU, $0.60 disk), 05:20 UTC on the 20th to
 03:15 UTC on the 21st, for Steps 2 and 3: this step's 10 h 35 min about $6.2, then 38 min idle
 ($0.37) until the Mac, offline, came back and pulled the run. The pod is deleted.
+
+## Step 4: the search's best scored as used (2026-10-21)
+
+`candor proxy --trial` on a new A40 (`erf2ig41i8hyot`, secure, CA-MTL-1, $0.59/h, 14:46-17:12 UTC,
+about $1.45; billing read $0.91 so far): six trials, each at its own strength and at 1.4 times it
+(held within 0.5-5), on the 100 test prompts with thinking off and then at medium (budget 8192), 32
+slots. The GGUF rebuilt from the Hub in 24 min (its Q4_K_M sha256 2f358b2f, the pilot A40's), the
+directions and thinking reused. Thinking off took 29 min, thinking on 74 min (14 scores with the
+unedited model and the repeat, about 5 min each). The unedited model refused 99 both ways.
+
+| Edit | Trial | Kind, direction | Strength × | Refused, off | Refused, on | Keywords, on | KL, off | KL, on | Thinking, mean tokens | Budget hits |
+| --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- |
+| 1 | 477 | one layer, layer 39, answer start | 1 | 0 | 0 | 7 | 0.0400 | 0.0356 | 330 | 0 |
+| 2 | 477 | one layer, layer 39, answer start | 1.21-1.27 | 0 | 0 | 4 | 0.0730 | 0.0674 | 309 | 0 |
+| 3 | 435 | one layer, layer 37, answer start | 1 | 1 | 0 | 9 | 0.0249 | 0.0239 | 328 | 0 |
+| 4 | 435 | one layer, layer 37, answer start | 1.28-1.35 | 0 | 0 | 5 | 0.0500 | 0.0542 | 286 | 0 |
+| 5 | 251 | one layer, layer 37, answer start | 1 | 1 | 2 | 2 | 0.0293 | 0.0268 | 318 | 0 |
+| 6 | 251 | one layer, layer 37, answer start | 1.24-1.40 | 0 | 0 | 5 | 0.0523 | 0.0539 | 276 | 0 |
+| 7 | 584 | per layer, thinking start | 1 | 0 | 1 | 8 | 0.0401 | 0.0379 | 167 | 0 |
+| 8 | 584 | per layer, thinking start | 1.36-1.40 | 23 | 5 | 6 | 0.1029 | 0.0984 | 173 | 0 |
+| 9 | 578 | per layer, thinking start | 1 | 0 | 1 | 9 | 0.0382 | 0.0358 | 169 | 0 |
+| 10 | 578 | per layer, thinking start | 1.37-1.40 | 29 | 0 | 2 | 0.0815 | 0.0828 | 168 | 0 |
+| 11 | 532 | per layer, thinking start | 1 | 1 | 0 | 12 | 0.0359 | 0.0341 | 164 | 0 |
+| 12 | 532 | per layer, thinking start | 1.31-1.33 | 66 | 0 | 3 | 0.0719 | 0.0659 | 168 | 0 |
+
+- At its own strength every trial is within the cap thinking (0-2 refused); trial 435 has the least
+  KL, 0.0239, and with another seed 0 refused, KL 0.0271 (9 by keywords, thinking 311 tokens).
+- The per-layer edits at 1.4 times refused 23-66 thinking off and 0-5 thinking: the other way from
+  step 2's, where thinking undid partial edits.
+- KL read here was above the search's for all six (search, thinking off: 477 0.0324, 435 0.0188, 251
+  0.0209, 584 0.0310, 578 0.0290, 532 0.0254), by 23-41%.
+
+### Why KL read higher: a check on the same pod (16:57-17:07 UTC)
+
+`candor score` (thinking off, as the search scores) of a control, trial 97 (not among the least KL;
+0.0448 in the search, 0.0456 in step 2), and of trial 435, each against the unedited reads the
+search keeps (read on the pilot A40 from the same GGUF bytes) and against the unedited model read
+again on this pod:
+
+| Trial | In the search | Kept reads | Read again here | This step's round, thinking off |
+| --- | --- | --- | --- | --- |
+| 97 | 0 refused, KL 0.0448 | 0, 0.0480 | 0, 0.0474 | |
+| 435 | 1, 0.0188 | 3, 0.0188 | 2, 0.0210 | 1, 0.0249 |
+
+The two reads of the unedited model, same file and card type, apart by a mean KL of 0.0020 over the
+100 prompts (0.0019 the other way): a median of 0.00002, the largest 0.0563, so a few prompts read
+differently from session to session and the rest alike. Trial 435's KL ran from 0.0188 to 0.0249
+across four sessions on the same file thinking off.

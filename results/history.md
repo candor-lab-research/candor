@@ -1055,3 +1055,13 @@ and 3). Its best within the cap: one layer trial 435 (1 refused, KL 0.0188), per
 0.0254), both well below their 150-trial bests; the one-layer best still presses peak layer's floor.
 The as-used round of its best waits for the user's go and cost. (`results/phase-5-qwen3.8-27b.md`,
 step 3)
+
+### Phase 5, step 4: the 27B's best scored as used; KL re-reads checked (2026-10-21)
+
+On the user's go, `candor proxy --trial` scored trials 477, 435, 251, 584, 578 and 532 with medium
+thinking on a new A40 (about $1.45): all six refused 0-2 of 100 at their own strength, trial 435 the
+least KL (0.0239). Their KL read 23-41% above the search's, so the same pod scored a control and
+trial 435 against the kept and fresh unedited reads: the control moved 6-7%, the two unedited reads
+were apart by a mean KL of 0.0020, and no candor fault was found; the least-KL trials of 600 read high
+by luck of the read. The recipe-keyed cache is listed as a small fix. The full measurements wait for
+the user. (`results/phase-5-qwen3.8-27b.md`, step 4)

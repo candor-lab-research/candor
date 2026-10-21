@@ -18,7 +18,7 @@ anything else. Every model is scored and shipped as a GGUF in llama-server, and 
 | 2 | rude-llama end to end: search, export, measure against heretic's Trial 170 | Done 2026-10-13: trial 535 passes and ships (`results/milestone-rude-llama-vs-heretic.md`) |
 | 3 | Qwen3.5-9B, a thinking model, scored as used against heretic's Trial 161 | Measured 2026-10-15: trial 175 beats Trial 161 (`results/milestone-qwen3.5-9b-vs-heretic.md`); the phase-end discussion remains |
 | 4 | K2-Horizon-7B at your real settings: llama-server, reasoning effort high | Released 2026-10-18: trial 205 passes the decision rule and the user's test (`results/phase-4-k2-horizon-7b.md`); the phase-end discussion remains |
-| 5 | Qwen3.8-27B at reasoning effort medium (the user, 2026-10-20) | Pilot done 2026-10-19; the proxy check holds and the search ran to 600 trials, 2026-10-20 to 21 (`results/phase-5-qwen3.8-27b.md`, steps 1-3); the as-used round waits for the user |
+| 5 | Qwen3.8-27B at reasoning effort medium (the user, 2026-10-20) | Pilot done 2026-10-19; the proxy check holds, the search ran to 600 trials and its best 6 stay within the cap as used, 2026-10-20 to 21 (`results/phase-5-qwen3.8-27b.md`, steps 1-4); the full measurements wait for the user |
 
 Qwen3.5-9B is a testbed: the process must work, affordably, for larger thinking models used with
 thinking on (next, e.g. Qwen3.8-27B). A 9B model must not take days.
@@ -41,8 +41,9 @@ thinking on (next, e.g. Qwen3.8-27B). A 9B model must not take days.
 
 ## Now: waiting for the user
 
-- `runs/qwen27b-medium`'s thinking-off search is done at 600 trials, its run on the Mac and its pod
-  deleted (`results/phase-5-qwen3.8-27b.md`, step 3). The as-used round waits for the user (Next, 1).
+- `runs/qwen27b-medium`'s search's best 6 are scored as used: all within the cap, trial 435 the
+  least KL (`results/phase-5-qwen3.8-27b.md`, step 4). Run on the Mac, pods deleted. The full
+  measurements wait for the user (Next, 1).
 - Phases 3 and 4 wait only on the phase-end discussion (Next, 1); trial 205 is released as
   `candor-lab/K2-Horizon-7B-Candor-Uncensored-GGUF`.
 - 20 ideas from arXiv are ranked in `results/new-features.md`.
@@ -52,10 +53,9 @@ thinking on (next, e.g. Qwen3.8-27B). A 9B model must not take days.
 
 ## Next
 
-1. The search's best (trials 477, 435, 584, 578, 532 and the next by refusals and KL) go to an
-   as-used round at medium, then the finalists are measured in full: the user's go and cost first.
-   Open with it: the one-layer best pressing peak layer's floor (findings). The gate is set again
-   from these runs.
+1. The finalists from step 4, the unedited model and the best public 27B measured in full at
+   medium: the user's go and cost first, and before it package 11 (Next, 2) and which public release.
+   Open with it: the one-layer best pressing peak layer's floor (findings).
    The phase-end discussion's method questions left wait; no other method changes until agreed.
 2. Before the 27B reference: package 11 (the answer reusing its thinking's cache; it works on the
    27B, findings) timed on one as-used trial and adopted if it pays.
@@ -79,7 +79,8 @@ thinking on (next, e.g. Qwen3.8-27B). A 9B model must not take days.
    - small fixes: `candor score`'s 3% KL repeat tolerance (findings); an interrupted `candor
      proxy` scores the unedited model again; an `inspect` warning when weights were quantised
      before; the export's file name when some tensors are Q8_0 or F32; a local model copied to a pod
-     rebuilds every stage;
+     rebuilds every stage; the unedited reads a search keeps are keyed on the GGUF's recipe, not its
+     bytes (an A100 and an A40 build differ; A40 builds matched, step 4);
    - heretic 2.x journals aren't read (they record no refusals for a trial);
    - llama-server b11524 can deadlock when stopped mid-answer (about 1 stop in 500; history): `stop`
      then waits 60 s and kills it, losing nothing;
