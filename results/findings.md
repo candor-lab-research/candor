@@ -148,12 +148,16 @@ entry is corrected, dropped or overturned is in CLAUDE.md ("Finished, dropped an
 
 ## The search
 
-- **Batching moves answers, though it moved no label.** [Measured: rude-llama] Two runs at the same
-  settings at 8 slots gave first-token probabilities up to 0.15 nats apart on 19 of 100 prompts; at
-  1 slot they were bit-identical (the slots change's checks, whose setup and reads weren't kept).
+- **Batching moves answers; labels move only within noise.** [Measured: rude-llama] Two runs at
+  the same settings at 8 slots gave first-token probabilities up to 0.15 nats apart on 19 of 100
+  prompts; at 1 slot they were bit-identical (the slots change's checks, whose setup and reads weren't kept).
   Measured at 8 and at 16 slots, the unedited model kept every held-out label and KL 0.0000, but at
   least 6 of its 588 held-out answers and 31 of 1,319 maths answers changed, 5 of those flipping
-  correct. (`history.md`, the slots change; `phase-2-rude-llama.md`, the noise floor) [Hypothesis]
+  correct. (`history.md`, the slots change; `phase-2-rude-llama.md`, the noise floor) [Measured:
+  Qwen3.8-27B, trial 532 exported twice (the first export unhashed), each measured on an A40 at 32
+  slots and seed 0] A repeat is largely a fresh sample, from batching and any difference between
+  the files together: most thinking lengths differ, and labels moved, none beyond noise.
+  (`phase-5-qwen3.8-27b.md`, step 6) [Hypothesis]
   It may blur KL between edits whose KL differs little; re-reads at the same slots moved a median
   3.4% (the KL read again, below), and that entry holds the test.
 - **KL depends on the machine: compare it only within one.** [Measured: K2-Horizon-7B, 3 search
@@ -199,11 +203,11 @@ entry is corrected, dropped or overturned is in CLAUDE.md ("Finished, dropped an
   noise of 0; p 3.1e-5 and 1.4e-4; the 8B 269 against 251-252). It thought half as long (median
   239 tokens against 466-480) and its KL was 1.6-1.7 times theirs, beyond noise paired by prompt.
   It is one per-layer edit, read at the thinking start where the one-layer edits read at the
-  answer start, so kind and direction are mixed. The rule counts refusals, not this. [Hypothesis]
-  The one-layer edits' answers not judged unsafe (24 each, every one cut at 256 tokens) reach the
-  substance later, or hedge. Test: the harmful set again with a longer answer cap on 251 and 532,
-  numbers only; then whether the rule should count unsafe answers.
-  (`phase-5-qwen3.8-27b.md`, step 5)
+  answer start, so kind and direction are mixed. The rule counts refusals, not this. [Measured:
+  Qwen3.8-27B, 251 and 532 again, 288 held-out, answers read to 1,024 tokens] Not the cap's: 254
+  against 275 (p 9.5e-7; the 8B 247 against 269, p 3e-6), and 27 of 251's 34 answers not judged
+  unsafe end within 1,024 tokens. Whether the decision rule should count unsafe answers is for the
+  phase-end discussion. (`phase-5-qwen3.8-27b.md`, steps 5 and 6)
 - **A cap on budget hits saves pod time and, pooled, costs no picks.** [Measured: a replay on
   K2-Horizon-7B's journal, then K2 from trial 138; the miss-rate simulator (`tools/misscheck/`),
   45,360 searches] With

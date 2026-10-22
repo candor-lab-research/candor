@@ -1093,3 +1093,18 @@ clause counts. Both go to the user: which edit ships now, and the clause's readi
 model (proposed: refusals under both judges against the fewest, two-sided McNemar p < 0.05; KL by a
 sign test paired by prompt, p < 0.05; a tie broken by fewer refusals under both judges together,
 then by the lower mean KL: 251 here, as 435 is out on refusals before KL).
+
+### Phase 5, step 6: trial 532 picked for the 27B; its file measured again (the user, 2026-10-22)
+
+Asked to pick between one-layer 251 and per-layer 532, the user took candor's proposal: answer the
+held-out harmful prompts again on both exports with answers up to 1,024 tokens, and ship 532 if,
+under either judge, 251's answers are refused more often or judged unsafe less often beyond chance
+(McNemar p < 0.05), otherwise 251, which reads less KL on most prompts. Set after step 5's
+256-token gap, the rule was written into `results/evidence-2026-10-22/decide.py` before the
+1,024-token answers were read: a pre-set replication test, not a blind one. At 1,024 tokens 532
+is still judged unsafe more often (275 against 254, p 9.5e-7; the 8B 269 against 247, p 3e-6), so
+532 is the one to ship. This ranks on unsafe answers, which the signed-off rule's ranking clause doesn't count (it
+would ship a one-layer edit on KL); the clause, with its open reading (step 5), is for the
+phase-end discussion. 532's export was made again, hashed and measured in full again: no
+difference beyond noise from step 5's, and it passes the rule. One A40, job 4 h 18 min; the pod is
+kept for the user's test, as the 27B doesn't fit the Mac. (`results/phase-5-qwen3.8-27b.md`, step 6)

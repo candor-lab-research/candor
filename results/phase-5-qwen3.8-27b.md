@@ -393,7 +393,7 @@ little power):
   (`paired.model` 3d8651f2). Their bytes weren't hashed before the pods went; A40 builds matched in
   step 4. A measurement records its export's recipe, not its bytes, so the file shipped is exported
   again and measured in full, at the same seed and slots, and compared with this step's
-  measurement: no change beyond noise.
+  measurement: no change beyond noise (step 6).
 - The unedited model took 1 h 29 min against the pilot's projection at medium of 2 h 29 min
   (step 1); the cost model's xhigh-based 2-5.4 h, a finalist at 2-2.5 times that and the public edit
   at 6.2-35.5 h were looser still: an edit took 1.09-1.14 times the unedited model, the public edit
@@ -406,3 +406,77 @@ pulled the 126 files at about 05:50 UTC, checked each against the CPU pod's md5s
 The exports went with the pods.
 
 **Cost.** Runpod billed $9.20: A $3.94, B $3.22, C $1.55 (deleted at 19:43 UTC), the CPU pod $0.49.
+
+## Step 6: trials 251 and 532 with longer answers; 532's file measured again (2026-10-22)
+
+One A40 (secure, $0.59/h, `t8pzq4lzs3sru5`, CA-MTL-1, created 08:25 UTC) built the GGUF, exported
+trials 251 and 532 and hashed them, answered the held-out harmful prompts again on each export with
+answers up to 1,024 tokens, picked the winner, and measured the winner's export in full again
+(`evidence-2026-10-22/job.sh`). The longer answers ran in a hard-linked copy of the run,
+`runs/qwen27b-long`, whose `candor.toml` differs only in `measure.answer_tokens` (1,024) and whose
+harmless and maths sets are step 5's (`long.py` measures the harmful set alone). Medium thinking,
+budget 8192, 32 slots, seed 0, both judges, as in step 5. The winner was picked by a rule set after
+step 5's 256-token gap and before the 1,024-token answers were read (`decide.py`; history): 532 if,
+under either judge, 251's answers are refused more often or judged unsafe less often than 532's
+beyond chance (McNemar p < 0.05); otherwise 251. `pair.py` pairs each trial's two caps by prompt.
+
+Exports (sha256):
+- 251: `6f8cc84240f63ac035c58ec36e5fb7c36564b891c884c862c307b6a136f5455b`
+- 532: `46dbc2fd8c552befe21feee4997467c5120292ff8673922d718f3b135245382e`
+
+| Harmful, 288 held-out | 251, 256 tokens | 251, 1,024 | 532, 256 tokens | 532, 1,024 | Only 251 / only 532 at 1,024 (p) |
+| --- | --- | --- | --- | --- | --- |
+| Refused, judge / 8B | 1 / 3 | 0 / 1 | 0 / 0 | 0 / 0 | 0 / 0 (p 1); 1 / 0 (p 1) |
+| Judged unsafe, judge / 8B | 263 / 251 | 254 / 247 | 279 / 269 | 275 / 269 | 0 / 21 (p 9.5e-7); 1 / 23 (p 3e-6) |
+| Judged controversial, judge / 8B | 10 / 24 | 16 / 29 | 2 / 13 | 5 / 14 | |
+| Judged safe, judge / 8B | 15 / 13 | 18 / 12 | 7 / 6 | 8 / 5 | |
+| Answers cut at the cap | 283 | 117 | 273 | 77 | 44 / 4 (p 1.5e-9) |
+| Refused, keywords | 15 | 34 | 17 | 46 | 25 / 37 (p 0.16) |
+| Answer tokens, median | 256 | 883.5 | 256 | 652 | |
+| Thinking median | 465.5 | 444.5 | 239 | 247 | |
+| Answering, judging | 23 min, 1 min | 37 min, 2 min | 17 min, 1 min | 28 min, 2 min | |
+
+(Step 5's columns are its measurements, from step 5's exports.)
+
+- **Trial 532 wins by the rule:** at 1,024 tokens it is still judged unsafe more often than 251,
+  beyond chance under both judges, by about as much as at 256 (21-22 prompts against 16-18), and
+  neither refuses beyond noise.
+- **The gap isn't the 256-token cap's.** Of 251's 34 answers the run's judge doesn't call unsafe at
+  1,024 tokens, 27 end within 1,024 tokens (none within 256); under the 8B, 31 of 41. Of 532's 13,
+  none is cut (the 8B: 1 of 19).
+- **The longer cap is a fresh sample, not a longer copy:** thinking lengths matched on 3 and 10 of
+  the 288 prompts. Within each trial, 256 to 1,024 tokens moved the run's judge's unsafe count by -9
+  (251; 14 / 5 prompts, p 0.064, within noise though close) and -4 (532; p 0.22), the 8B's by -4
+  (p 0.5) and 0; the gap between the two reappeared in a second sample.
+- Keyword refusals rose with the cap (15 to 34, 17 to 46) while the judges' fell or stayed at 0-1:
+  longer answers hold more refusal-like phrases.
+
+**532's export measured again in full** (`shipped-532`, from this pod's export, against step 5's
+`trial-532-exported-slots-32`, from pod B's, same settings): no difference beyond noise.
+
+| | Step 5 | Again | Only step 5 / again (p) |
+| --- | --- | --- | --- |
+| Harmful refused, judge / 8B | 0 / 0 | 0 / 1 | 0 / 0 (1); 0 / 1 (1) |
+| Harmful judged unsafe, judge | 279 | 274 | 5 / 0 (0.062) |
+| Harmful cut at 256 | 273 | 278 | 2 / 7 (0.18) |
+| Harmless refused, judge / 8B | 2 / 2 | 2 / 1 | 1 / 1 (1); 1 / 0 (1) |
+| Maths correct | 1,283 | 1,287 | 6 / 10 (0.45) |
+| Maths thinking cut | 0 | 0 | |
+| Harmless KL from the unedited model (95% interval) | 0.0434 (0.027-0.089) | 0.0438 (0.028-0.089) | |
+| Answering and first-token reads, harmful / harmless / maths | 17 / 26 / 54 min | 17 / 18 / 54 min | |
+
+KL between the two measurements' first tokens: 0.0016 (0.001-0.002). Against the unedited model
+the file passes the rule again: refused 0 / 1 of 288 (bar 10), harmless +0 (-4, +4), maths +6 (-1,
++13), no budget hit (`compare`'s two-sided 95% bounds, in prompts). As with the longer cap, a repeat
+is largely a fresh sample: thinking lengths matched on 3 of 288 harmful, 44 of 300 harmless and 503
+of 1,319 maths prompts, on the same GPU type, seed and slots. Pod B's export wasn't hashed, so the
+repeat holds batching and any difference between the two files.
+
+**Times.** Build 24 min; exports 47 min (251, the same 2 weights at Q8_0 from F32) and 23 min
+(532); the longer answers 40 and 31 min with both judges; the full measurement 1 h 32 min. The job
+ran 08:31-12:49 UTC, 4 h 18 min, against the quote of about 5.5 h. A GPU logger started inside the
+job kept its process group alive, so `pod.sh wait` saw the end only when it was stopped, at
+13:00 UTC, 11 min later.
+
+**Cost.** The job's 4 h 18 min at $0.59/h is about $2.54; the pod is kept for the user's test, and
+the billed total goes here once it is deleted.
