@@ -1108,3 +1108,18 @@ would ship a one-layer edit on KL); the clause, with its open reading (step 5), 
 phase-end discussion. 532's export was made again, hashed and measured in full again: no
 difference beyond noise from step 5's, and it passes the rule. One A40, job 4 h 18 min; the pod is
 kept for the user's test, as the 27B doesn't fit the Mac. (`results/phase-5-qwen3.8-27b.md`, step 6)
+
+### Phase 5, step 6: the user's test of trial 532 passed; it is released (the user, 2026-10-22)
+
+The user chatted with trial 532's measured file in llama-server on the pod, with their web and
+sandbox tools: the tools ran on the Mac, and the pod's llama-server reached them through the SSH
+link (`ssh -R`, a bridge per tool; `results/evidence-2026-10-22/bridge.py`, `pipe.py`,
+`pod-mcp.json`). They were happy with it and asked for it to be uploaded, following the earlier
+cards. Published from candor-team as `candor-lab/Qwen3.8-27B-Candor-Uncensored-GGUF`, uploaded
+from the pod to a private repo and made public once checked: the measured export with
+`general.name` set and `general.finetune` dropped, all 866 tensors byte-identical, loaded in
+llama-server b11524. The card follows K2's and Qwen's, with a huihui-ai column (step 5's public
+edit) and the second judge; its KL is over the top 200 tokens, this run's `kl_tokens`. Its
+"Measured as used" says the rule's ranking would have shipped a lower-KL edit and 532 was picked on
+unsafe labels, which the rule doesn't count. It was reviewed against the measurements twice. The
+pod was deleted. (`results/phase-5-qwen3.8-27b.md`, step 6, "The release")

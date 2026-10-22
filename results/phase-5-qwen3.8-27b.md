@@ -478,5 +478,14 @@ ran 08:31-12:49 UTC, 4 h 18 min, against the quote of about 5.5 h. A GPU logger 
 job kept its process group alive, so `pod.sh wait` saw the end only when it was stopped, at
 13:00 UTC, 11 min later.
 
-**Cost.** The job's 4 h 18 min at $0.59/h is about $2.54; the pod is kept for the user's test, and
-the billed total goes here once it is deleted.
+**The release** (on the same pod, `evidence-2026-10-22/release.sh`): the measured export (sha256
+checked again, `46dbc2fd…`) with `general.name` set to Qwen3.8-27B-Candor-Uncensored and
+`general.finetune` (the snapshot hash) dropped; all 866 tensors byte-identical, no other key
+changed. Against the unedited Q4_K_M, 73 of 866 tensors differ: `attn_output` 10 (layers 27-63),
+`ssm_out` 28 (26-62), `ffn_down` 35 (22-56), all Q4_K or Q6_K. It loaded in llama-server b11524.
+`Qwen3.8-27B-Candor-Uncensored-Q4_K_M.gguf`: 16,810,714,464 bytes, sha256
+`6ec5d2739654c9459bd14bb36d324b267a7548a84cb2a47832f59b8eeb1f81e0`, the Hub's LFS hash the same.
+The upload sent 1.47 GB of the 16.8 GB (the Hub's deduplication), 4 min. Rename and checks 2 min.
+
+**Cost.** The job's 4 h 18 min at $0.59/h is about $2.54. The pod, kept for the user's test and
+the release, ran 08:25-14:58 UTC, 6 h 33 min: about $3.9 (billing read $3.51 so far). Deleted.

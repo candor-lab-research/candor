@@ -1,0 +1,14 @@
+{
+  "mcpServers": {
+    "web": {
+      "command": "python3",
+      "args": ["/root/tools/pipe.py", "9101"],
+      "timeout_ms": 60000
+    },
+    "sandbox": {
+      "command": "python3",
+      "args": ["/root/tools/pipe.py", "9102"],
+      "timeout_ms": 180000
+    }
+  }
+}

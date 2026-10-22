@@ -18,7 +18,7 @@ anything else. Every model is scored and shipped as a GGUF in llama-server, and 
 | 2 | rude-llama end to end: search, export, measure against heretic's Trial 170 | Done 2026-10-13: trial 535 passes and ships (`results/milestone-rude-llama-vs-heretic.md`) |
 | 3 | Qwen3.5-9B, a thinking model, scored as used against heretic's Trial 161 | Measured 2026-10-15: trial 175 beats Trial 161 (`results/milestone-qwen3.5-9b-vs-heretic.md`); the phase-end discussion remains |
 | 4 | K2-Horizon-7B at your real settings: llama-server, reasoning effort high | Released 2026-10-18: trial 205 passes the decision rule and the user's test (`results/phase-4-k2-horizon-7b.md`); the phase-end discussion remains |
-| 5 | Qwen3.8-27B at reasoning effort medium (the user, 2026-10-20) | Picked 2026-10-22: trial 532, its export measured again and passing (`results/phase-5-qwen3.8-27b.md`, steps 1-6); the user's test and the release next |
+| 5 | Qwen3.8-27B at reasoning effort medium (the user, 2026-10-20) | Released 2026-10-22: trial 532 as `candor-lab/Qwen3.8-27B-Candor-Uncensored-GGUF` (`results/phase-5-qwen3.8-27b.md`, steps 1-6); the phase-end discussion next |
 
 Qwen3.5-9B is a testbed: the process must work, affordably, for larger thinking models used with
 thinking on (next, e.g. Qwen3.8-27B). A 9B model must not take days.
@@ -41,10 +41,9 @@ thinking on (next, e.g. Qwen3.8-27B). A 9B model must not take days.
 
 ## Now: waiting for the user
 
-- The 27B's pick is trial 532 (history); its measured export is on A40 pod `t8pzq4lzs3sru5`, kept
-  for the user's test (results file, step 6). The watchdog deletes it at 20:25 UTC unless moved.
-- Phases 3 and 4 wait only on the phase-end discussion (Next, 1); trial 205 is released as
-  `candor-lab/K2-Horizon-7B-Candor-Uncensored-GGUF`.
+- Phases 3 to 5 wait only on the phase-end discussion (Next, 1). Released: K2's trial 205 as
+  `candor-lab/K2-Horizon-7B-Candor-Uncensored-GGUF`, the 27B's trial 532 as
+  `candor-lab/Qwen3.8-27B-Candor-Uncensored-GGUF` (history). No pods are running.
 - 20 ideas from arXiv are ranked in `results/new-features.md`.
 - Evidence for the discussion (2026-10-19): `results/evidence-2026-10-19/method-evidence.md` (the
   upstream check, six method questions), `cost-27b.md` and `pod-checks.md` (the 8B judge and row
@@ -52,10 +51,9 @@ thinking on (next, e.g. Qwen3.8-27B). A 9B model must not take days.
 
 ## Next
 
-1. The 27B's release: the user tests trial 532's export on the pod; on their go it ships under
-   candor-lab, as K2's did. Then the phase-end discussion, opening with the ranking clause (unsafe
-   answers, its reading: history, steps 5 and 6) and the one-layer best at peak layer's floor
-   (findings); no other method changes until agreed.
+1. The phase-end discussion, opening with the ranking clause (unsafe answers, its reading:
+   history, steps 5 and 6) and the one-layer best at peak layer's floor (findings); no other method
+   changes until agreed.
 2. Phase 4, later: low effort's two closes; Uno not now. The budget limit
    (`search.max_budget_hits`, on K2 from trial 138) costs no measurable hits on the simulator and
    stays on (results file, step 5).
@@ -81,7 +79,8 @@ thinking on (next, e.g. Qwen3.8-27B). A 9B model must not take days.
      bytes (an A100 and an A40 build differ; A40 builds matched, step 4); `export --outside` to
      report edited tensors outside candor's targets (findings); a measurement to record its export's
      sha256, so a file exported again can be matched to it; `measure` to answer one set alone
-     (step 6 patched `measure.SETS`);
+     (step 6 patched `measure.SETS`); `serve` on a pod with the Mac's tools (step 6 bridged them by
+     hand, `evidence-2026-10-22/bridge.py`);
    - heretic 2.x journals aren't read (they record no refusals for a trial);
    - llama-server b11524 can deadlock when stopped mid-answer (about 1 stop in 500; history): `stop`
      then waits 60 s and kills it, losing nothing;
