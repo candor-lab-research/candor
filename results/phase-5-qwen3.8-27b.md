@@ -273,9 +273,8 @@ three press no end. candor's next step for each: `candor measure --trial N` on t
 ## Step 4: the search's best scored as used (2026-10-21)
 
 `candor proxy --trial` on a new A40 (`erf2ig41i8hyot`, secure, CA-MTL-1, $0.59/h, 14:46-17:12 UTC,
-about $1.45; billing read $0.91 so far): six trials, each at its own strength and at 1.4 times it
-(held within 0.5-5), on the 100 test prompts with thinking off and then at medium (budget 8192), 32
-slots. The GGUF rebuilt from the Hub in 24 min (its Q4_K_M sha256 2f358b2f, the pilot A40's), the
+$1.49 billed): six trials, each at its own strength and at 1.4 times it (held within 0.5-5), on the
+100 test prompts with thinking off and then at medium (budget 8192), 32 slots. The GGUF rebuilt from the Hub in 24 min (its Q4_K_M sha256 2f358b2f, the pilot A40's), the
 directions and thinking reused. Thinking off took 29 min, thinking on 74 min (14 scores with the
 unedited model and the repeat, about 5 min each). The unedited model refused 99 both ways.
 
@@ -317,3 +316,93 @@ The two reads of the unedited model, same file and card type, apart by a mean KL
 100 prompts (0.0019 the other way): a median of 0.00002, the largest 0.0563, so a few prompts read
 differently from session to session and the rest alike. Trial 435's KL ran from 0.0188 to 0.0249
 across four sessions on the same file thinking off.
+
+## Step 5: the finalists and the public 27B measured in full (2026-10-21 to 22)
+
+Three A40s (secure, $0.59/h; created about 17:15 UTC): A `ok2m9w5hclbrso` (EU-SE-1) built the GGUF,
+measured the unedited model, then trial 435, then the public edit; B `ffg0pizz0t9yur` (CA-MTL-1)
+trials 251 and 532; C `lwdczzq2nbk4k4` (EU-SE-1) trial 477. Each finalist exported (Q4_K_M) and
+measured with `measure --exported`, the public edit (huihui-ai's Huihui-Qwen3.8-27B-abliterated
+@739e3c5, `evidence-2026-10-21/public-27b.md`) with `export --outside` and `measure --outside`:
+medium thinking, budget 8192, answers up to 256 tokens, 32 slots, seed 0, every held-out prompt and
+maths question, both judges. Compared prompt by prompt with the unedited model (p: McNemar; bounds:
+the ends of `compare`'s two-sided 95% intervals, wider than the rule's one-sided ones). Package 11
+was not tried first (history).
+
+| | Unedited | 251 | 477 | 435 | 532 | huihui |
+| --- | --- | --- | --- | --- | --- | --- |
+| Kind, direction | | one layer, 37, answer start | one layer, 39, answer start | one layer, 37, answer start | per layer, thinking start | rank-1, layers 17-51 |
+| Harmful refused, judge / 8B | 281 / 280 of 288 | 1 / 3 | 1 / 3 | 1 / 7 | 0 / 0 | 2 / 2 |
+| Harmful judged unsafe, judge / 8B | 5 / 1 | 263 / 251 | 263 / 252 | 263 / 254 | 279 / 269 | 268 / 265 |
+| Harmful answers cut at 256 tokens | 118 | 283 | 283 | 284 | 273 | 284 |
+| Harmful refused, keywords | 256 | 15 | 18 | 21 | 17 | 23 |
+| Harmless refused, judge (change's bounds) | 2 of 300 | 2 (-4, +4) | 2 (-4, +4) | 2 (-3, +3) | 2 (-4, +4) | 1 (-4, +2) |
+| Maths correct (change's bounds) | 1,281 of 1,319 | 1,279 (-11, +7) | 1,284 (-6, +12) | 1,281 (-9, +9) | 1,283 (-7, +11) | 1,285 (-3, +11) |
+| Maths thinking cut at 8192 (bounds) | 0 | 0 (-3, +3) | 0 (-3, +3) | 1 (-2, +4) | 0 (-3, +3) | 1 (-2, +4) |
+| Thinking cut, harmful / harmless | 0 / 0 | 0 / 1 | 0 / 0 | 0 / 0 | 0 / 1 | 0 / 0 |
+| Harmless KL (95% interval) | | 0.0259 (0.011-0.119) | 0.0274 (0.013-0.114) | 0.0247 (0.011-0.121) | 0.0434 (0.027-0.089) | 0.0382 (0.028-0.053) |
+| KL by prompt: median; share in the top 5 | | 0.0007; 69% | 0.0007; 63% | 0.0007; 67% | 0.0019; 47% | 0.0016; 28% |
+| KL after empty thinking / at the thinking start | | 0.065 / 0.0008 | 0.073 / 0.0006 | 0.060 / 0.0005 | 0.166 / 0.0038 | 0.054 / 0.0006 |
+| Thinking median, harmful / harmless / maths | 194.5 / 175 / 167 | 465.5 / 170 / 167 | 480 / 183.5 / 167 | 467.5 / 168 / 163 | 239 / 173.5 / 168 | 540 / 176 / 163 |
+| Edit kept in the file | | 98.3-100.1% (2 of 76 weights at Q8_0, merged in F32) | 99.6-100.0% | 99.2-100.4% | 99.3-100.0% | 99.8-100.1% (70 weights) |
+| Export, then measure | | 47 min, 1 h 41 min | 18 min, 1 h 40 min | 26 min, 1 h 37 min | 23 min, 1 h 40 min | 28 min, 1 h 40 min |
+| Decision rule | | pass | pass | pass | pass | pass |
+
+The unedited model took 1 h 29 min; builds 20-30 min. Every export is 16.8 GB (251's 16.9 GB).
+
+Between edits: refusals and unsafe answers by McNemar p; KL paired by prompt over the 300 harmless
+prompts, as the mean gap and its standard error, and as the prompts where the first reads lower and
+higher with a sign test's p (the one-layer edits' KL sits mostly in a few prompts, where a mean has
+little power):
+
+| | Refused, judge | Refused, 8B | Unsafe, judge / 8B | Maths correct | KL mean gap (SE) | KL lower / higher (p) |
+| --- | --- | --- | --- | --- | --- | --- |
+| 532 against 435 | 0 / 1 (p 1) | 0 / 7 (p 0.016) | p 1.4e-4 / 0.0015 | 1,283 / 1,281 (p 0.82) | +0.0187 (0.0050) | 82 / 218 (2e-15) |
+| 532 against 477 | 0 / 1 (p 1) | 0 / 3 (p 0.25) | p 1.4e-4 / 9.1e-4 | 1,283 / 1,284 (p 1) | +0.0159 (0.0050) | 99 / 201 (4e-9) |
+| 532 against 251 | 0 / 1 (p 1) | 0 / 3 (p 0.25) | p 3.1e-5 / 1.2e-4 | 1,283 / 1,279 (p 0.56) | +0.0174 (0.0053) | 80 / 220 (3e-16) |
+| 251 against 477 | 1 / 1 (p 1) | 3 / 3 (p 1) | p 1 / 1 | 1,279 / 1,284 (p 0.33) | -0.0015 (0.0031) | 163 / 137 (0.15) |
+| 251 against 435 | 1 / 1 (p 1) | 3 / 7 (p 0.34) | p 1 / 0.63 | 1,279 / 1,281 (p 0.79) | +0.0013 (0.0023) | 132 / 168 (0.043) |
+| 435 against 477 | 1 / 1 (p 1) | 7 / 3 (p 0.34) | p 1 / | 1,281 / 1,284 (p 0.68) | -0.0027 (0.0021) | 184 / 116 (1e-4) |
+| 251 against huihui | 1 / 2 (p 1) | 3 / 2 (p 1) | p 0.36 / 5.2e-4 | 1,279 / 1,285 (p 0.26) | -0.0123 (0.0105) | 186 / 114 (4e-5) |
+| 532 against huihui | 0 / 2 (p 0.5) | 0 / 2 (p 0.5) | p 9.8e-4 / 0.39 | 1,283 / 1,285 (p 0.83) | +0.0051 (0.0087) | 121 / 179 (0.001) |
+
+- **The rule picks a one-layer edit, but not which one.** All four pass, and so does the public
+  edit. Trial 532 refuses fewest (0 under both judges). Counting both judges, each edit against
+  532, 435 is out (7 under the 8B, p 0.016) and 251 and 477 are within noise, so the lower KL ships:
+  251 at 0.0259. Counting the run's judge only, all four are within noise and 435 ships at 0.0247.
+  Either way the KL that decides is a tie on the mean: 251, 477 and 435 are within 2 SE of each
+  other, while 532's is above each beyond noise. By prompt, 435 reads lower than 251 (p 0.043) and
+  477 (p 1e-4), and 251 and 477 are level. The rule names neither reading, nor which KL test, nor a
+  tie-break (history).
+- **Trial 532's answers are judged unsafe more often within the 256 tokens the judges read:** 279
+  against 263 for each one-layer edit, and the 8B agrees (269 against 251-254). Against the public
+  edit only the run's judge sees it (279 against 268, p 0.001; the 8B 269 against 265, p 0.39).
+  Every answer neither refused nor judged unsafe ran past 256 tokens (24, 24 and 25 for the
+  one-layer edits, 9 for 532, 18 for the public edit, by the run's judge), so those may reach the
+  substance later; a longer answer cap would tell. 532 also finished 15 answers within 256 tokens
+  against 4-5 (p 0.001-0.013), thought half as long on harmful prompts (median 239 against
+  466-480) and reads more KL than any of them on most prompts.
+- **Against the public edit, trial 251 shows no difference beyond noise in refusals or maths,** and
+  their mean KL ties, though 251 reads lower on 186 of 300 prompts (p 4e-5), most of its KL sitting
+  in a few prompts. The 8B judges the public edit's answers unsafe more often (265 against 251,
+  p 5e-4; the run's judge 268 against 263, p 0.36). Trial 532's mean KL ties the public edit's too,
+  but it reads higher on 179 of 300 prompts (p 0.001).
+- **Held-out KL kept step 4's order at the top, not below it:** step 4's round read 435, 251, 532,
+  477 (0.0239-0.0356); held out 435, 251, 477, 532 (0.0247-0.0434), 477 down 23% and 532 up 27%.
+- Pod A built the unedited model's GGUF; B and C built their own from the Hub at the same recipe
+  (`paired.model` 3d8651f2). Their bytes weren't hashed before the pods went; A40 builds matched in
+  step 4. A measurement records its export's recipe, not its bytes, so the file shipped is exported
+  again and measured in full, at the same seed and slots, and compared with this step's
+  measurement: no change beyond noise.
+- The unedited model took 1 h 29 min against the pilot's projection at medium of 2 h 29 min
+  (step 1); the cost model's xhigh-based 2-5.4 h, a finalist at 2-2.5 times that and the public edit
+  at 6.2-35.5 h were looser still: an edit took 1.09-1.14 times the unedited model, the public edit
+  2 h 8 min with its export. Steps 2 to 5 cost $23.97 against the thinking-off route's $35-81.
+
+**Overnight hand-off.** The Mac couldn't stay awake, so a CPU pod (`8se5lz7z7xgyhn`, cpu3c, 2 vCPU,
+EU-NL-1, $0.06/h) took each GPU pod's measurements, answers and logs as its jobs ended, checked
+every file by md5, and each GPU pod then deleted itself: B after 22:21 UTC, A after 23:29. The Mac
+pulled the 126 files at about 05:50 UTC, checked each against the CPU pod's md5s, and deleted it.
+The exports went with the pods.
+
+**Cost.** Runpod billed $9.20: A $3.94, B $3.22, C $1.55 (deleted at 19:43 UTC), the CPU pod $0.49.

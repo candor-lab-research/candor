@@ -36,6 +36,14 @@ entry is corrected, dropped or overturned is in CLAUDE.md ("Finished, dropped an
   K2-Horizon-7B, 64 held-out prompts; its card's count Published] Avicennasis's heretic edit refused
   48/64 as used (unedited 61/64) against 7/50 on its card. Prompts, judge and mode all differ, and
   K2 can't think off, so the gap can't be put down to thinking. (`phase-4-k2-horizon-7b.md`, step 2)
+- **The best public Qwen3.8-27B edit holds as used; candor's one-layer edits match its refusals and
+  maths.** [Measured: huihui @739e3c5 exported with `--outside`, 288 / 300 held-out, 1,319 maths,
+  both judges] It passes the 27B rule: 2 refused under each judge, harmless 1, maths 1,285 (unedited
+  1,281), KL 0.038. [Published] DreamFast: 98.0% complied on HarmBench at xhigh (prompts, judge and
+  effort differ). Against candor's trial 251, refusals and maths show no difference beyond noise and
+  mean KL ties paired by prompt (0.026 against 0.038), though 251 reads lower on 186 of 300 prompts;
+  the 8B judges the public edit's answers unsafe more often (265 against 251, p 5e-4).
+  (`phase-5-qwen3.8-27b.md`, step 5)
 - **Qwen3.8-27B can't be scored thinking off as candor scores it, except at medium effort.**
   [Measured: its chat template] At xhigh, its default, and at low the template adds a system message
   that turning thinking off leaves out, so an answer after an empty thinking block isn't the model
@@ -173,13 +181,29 @@ entry is corrected, dropped or overturned is in CLAUDE.md ("Finished, dropped an
   and 175 (layer 15) 0 at 0.057; on the 288 and 300 held-out, 205 refused 16 and the two KLs were
   level (0.058 and 0.059), both below Trial 161's 0.073. Per-layer edits within the cap sat at KL
   0.085-0.100 on the test prompts. (steps 6 and 7) [Measured: K2-Horizon-7B, 4 finalists] Again:
-  held-out KL 0.052-0.064 one layer, 0.082 per layer.
+  held-out KL 0.052-0.064 one layer, 0.082 per layer. [Measured: Qwen3.8-27B, 4 finalists] Again:
+  0.025-0.027 one layer, 0.043 for the one per-layer edit (read at the thinking start, the others
+  at the answer start). (`phase-5-qwen3.8-27b.md`, step 5)
 - **The search's best can fail the full measurement on maths, which the search doesn't score.**
   [Measured: K2-Horizon-7B, 4 finalists, every held-out prompt and maths question] Trial 207,
   first by the search's KL with 0 refused, lost 26 maths correct (p 0.019; 24 with adapters, so not
   the export); trial 265 hit the budget on 13 maths questions against 3 (p 0.021). The two that
   passed were second and fourth by the search's KL. So measuring several finalists in full is part
   of not missing, and its cost belongs in a 27B quote. (`phase-4-k2-horizon-7b.md`, step 5)
+  [Measured: Qwen3.8-27B at medium, 4 finalists] Not here: all four kept maths (1,279-1,284
+  against 1,281, the worst bound -0.8 points) and budget hits (0-1). (`phase-5-qwen3.8-27b.md`,
+  step 5)
+- **Edits level on refusals can differ in how often their answers are judged unsafe.** [Measured:
+  Qwen3.8-27B, 4 finalists, 288 held-out, answers read to 256 tokens] Per-layer trial 532 refused
+  0 and was judged unsafe on 279, against 263 for one-layer 251 and 477 (1 refused each, within
+  noise of 0; p 3.1e-5 and 1.4e-4; the 8B 269 against 251-252). It thought half as long (median
+  239 tokens against 466-480) and its KL was 1.6-1.7 times theirs, beyond noise paired by prompt.
+  It is one per-layer edit, read at the thinking start where the one-layer edits read at the
+  answer start, so kind and direction are mixed. The rule counts refusals, not this. [Hypothesis]
+  The one-layer edits' answers not judged unsafe (24 each, every one cut at 256 tokens) reach the
+  substance later, or hedge. Test: the harmful set again with a longer answer cap on 251 and 532,
+  numbers only; then whether the rule should count unsafe answers.
+  (`phase-5-qwen3.8-27b.md`, step 5)
 - **A cap on budget hits saves pod time and, pooled, costs no picks.** [Measured: a replay on
   K2-Horizon-7B's journal, then K2 from trial 138; the miss-rate simulator (`tools/misscheck/`),
   45,360 searches] With
@@ -240,7 +264,14 @@ entry is corrected, dropped or overturned is in CLAUDE.md ("Finished, dropped an
   within-cap trial within 2 SE of the best" would send 11-115 trials to measurement, too many as
   the finalist rule. Since 2026-10-19 each trial keeps its per-prompt KL, and the search shows
   which suggested finalists tie their kind's least within 2 SE, as guidance only.
-  (`evidence-2026-10-19/method-evidence.md`, F117)
+  (`evidence-2026-10-19/method-evidence.md`, F117) [Measured: Qwen3.8-27B, 4 finalists, 100 test
+  prompts against 300 held out] The two least held their places; 477 and 532, 0.0015 apart on the
+  test prompts, swapped, 477 down 23% and 532 up 27%. Held out, the three one-layer finalists tied
+  on mean KL paired by prompt (gaps 0.0013-0.0027, each within 2 SE), but by prompt 435 read lower
+  than 251 and 477 (sign test p 0.043 and 1e-4): their KL sits mostly in a few prompts (63-69% in
+  the top 5), where a mean test has little power. [Hypothesis] A rank test (sign or Wilcoxon) suits
+  KL ties better than the mean's SE; test: replay both on past finalists' held-out reads.
+  (`phase-5-qwen3.8-27b.md`, step 5)
 - **The KL reads beside the answer start decide nothing.** [Measured: K2-Horizon-7B 313 trials,
   Qwen3.5-9B 545] Within the caps `kl_empty` tracks `kl` (Spearman 0.62 and 0.80); `kl_thinking`
   less on K2 and Qwen's one-layer edits (0.36, 0.14), level on Qwen's per-layer ones (0.79 against
@@ -299,7 +330,9 @@ entry is corrected, dropped or overturned is in CLAUDE.md ("Finished, dropped an
   Qwen3.8-27B, 32 slots, 4 as-used and 3 thinking-off trials] Edits that still refuse took about 15
   min, edits that comply 45-47, a stop on refusals 77 s; thinking off at medium 121-135 s. So the
   route, as used or thinking off, decides the 27B's cost several times over (estimates in the
-  results file). (`phase-5-qwen3.8-27b.md`, step 1)
+  results file). (`phase-5-qwen3.8-27b.md`, step 1) [Measured: 6 full measurements at medium]
+  The unedited model's took 1 h 29 min, each edit's 1 h 37-41 min, an export 18-47 min, well under
+  the pilot's estimates made at xhigh (step 5).
 - **KL read on an A100 and an A40 differs about as much as two reads on one card.** [Measured:
   Qwen3.8-27B, one edit, 100 KL prompts, 2 sessions a card] Base reads 0.0029-0.0045 apart across
   cards, 0.0030-0.0033 within; edited reads 0.0043-0.0047 across, 0.0012 and 0.0034 within; every
@@ -336,6 +369,12 @@ entry is corrected, dropped or overturned is in CLAUDE.md ("Finished, dropped an
 - **Start strength wide (to 3.0 or more) rather than widening once the best presses 1.5.**
   [Measured: 2 models] The best-supported change; it is only a default setting, and K2's search
   started wide (above). Before making it the default: one more model family.
+- **`export --outside` drops edits outside candor's targets without saying so.** [Measured:
+  candor's code; Published: two public 27B edits] `export.taken_from` reads only the edit targets,
+  so orcarouter's and RANA's `embed_tokens` edits would be lost; it should at least report differing
+  tensors outside them. (`evidence-2026-10-21/public-27b.md`) From huihui it took 70 edited weights,
+  the count DreamFast's fingerprint gives for the whole model, so none was dropped there.
+  (`phase-5-qwen3.8-27b.md`, step 5)
 - **Measure the best public edit as a second reference.** [Hypothesis] `candor export --outside`
   then `candor measure --outside` on trohrbaugh's Qwen3.5-9B edit, as Trial 161 was, would show
   whether its 0/400 holds as used; a first look on the 100 test prompts costs minutes.

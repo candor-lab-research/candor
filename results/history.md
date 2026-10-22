@@ -1065,3 +1065,31 @@ trial 435 against the kept and fresh unedited reads: the control moved 6-7%, the
 were apart by a mean KL of 0.0020, and no candor fault was found; the least-KL trials of 600 read high
 by luck of the read. The recipe-keyed cache is listed as a small fix. The full measurements wait for
 the user. (`results/phase-5-qwen3.8-27b.md`, step 4)
+
+### Phase 5, step 5: the 27B's finalists and the public edit measured in full (2026-10-22)
+
+On the user's go, after a top-up, three A40s measured the unedited model and finalists 435, 251, 532
+and 477 in parallel. Package 11 wasn't timed first: candor recommended skipping it for this model,
+as its saving is untimed and at most 5-10% of a trial, and the user took that. The user then chose
+to measure the best public edit too (huihui @739e3c5, picked in
+`evidence-2026-10-21/public-27b.md`), as earlier releases were compared with one. All five pass the
+decision rule. The Mac couldn't stay awake overnight, so a CPU pod took each GPU pod's results and
+the GPU pods deleted themselves; $9.20 in all. (`results/phase-5-qwen3.8-27b.md`, step 5)
+
+The ranking clause ("the one with the fewest harmful refusals ships, or the lower KL where that
+difference is within noise") left three things open, which the review found:
+
+- Which judge's refusals rank. Counting both judges, each edit against the one refusing fewest
+  (532), 435 drops out (7 under the 8B, p 0.016, the only one of the six comparisons under 0.05;
+  0.094 after a Holm correction over all six, 0.047 over the 8B's three) and 251 ships on KL;
+  counting the run's judge only, all four are level and 435 ships on KL.
+- Which KL test. On the mean paired by prompt, 251, 477 and 435 tie and 532 is higher beyond noise;
+  by prompt (a sign test), 435 reads lower than 251 and 477, which are level.
+- What decides a tie.
+
+So the rule picks a one-layer edit but not which. Separately, 532's answers are judged unsafe more
+often than the one-layer edits' within the 256 tokens read, beyond noise under both judges, which no
+clause counts. Both go to the user: which edit ships now, and the clause's reading for the next
+model (proposed: refusals under both judges against the fewest, two-sided McNemar p < 0.05; KL by a
+sign test paired by prompt, p < 0.05; a tie broken by fewer refusals under both judges together,
+then by the lower mean KL: 251 here, as 435 is out on refusals before KL).
