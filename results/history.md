@@ -1189,6 +1189,13 @@ with tests on tiny random MoE models on the Mac, optionally OLMoE-1B-7B on an A4
 on pods; Granite-3.1-3B-A800M moves later. Whether to build it, and how Laguna-XS is used (thinking
 on or off), are the user's decisions.
 
+### MoE support to be built; the first MoE model to be confirmed first (the user, 2026-10-23)
+
+The user decided candor builds MoE support, as essential to the models it releases, on the plan in
+`evidence-2026-10-23/moe-support.md` section 6: the code with tests on tiny random MoE models on the
+Mac first. Before any work on Laguna-XS-2.1, the user wants to confirm it is the right first MoE
+model, so the build stops there for that check.
+
 ### The README made a front page; its reference moved to `docs/` (the user, 2026-10-23)
 
 The user found the README one block of text, hard to follow on GitHub. It is now a front page: a
@@ -1207,6 +1214,33 @@ with the middle one pulled out along itself: the direction candor removes. It wa
 directions drawn and compared at banner and favicon sizes (a C ring was dropped as too close to
 Coinbase's mark). The name is set in Source Serif 4, the rest in Inter, all outlined by
 `docs/images/brand.py`, which also draws `mark.svg` for profile pictures.
+
+### MoE support built and tested on the Mac (2026-10-23)
+
+A layer's routed experts are one edit target, stacked [experts, out, in] as llama.cpp's converter
+stacks them, whether stored apart (Laguna, Qwen3-MoE, OLMoE) or held in one tensor; each expert is
+edited along its layer's direction at the MLP strength, as are a shared expert and any dense layer,
+and the router isn't. It is scored as one 3D adapter, exported merged, and the export's check takes
+the least share any expert keeps. `inspect` passes such models and fails experts held [experts, in,
+hidden] or square. A heretic trial isn't rebuilt on a model with experts, as its journal doesn't say
+whether heretic edited them. Qwen3.5-MoE's linear attention is reordered as the converter reorders it.
+Dense models are unchanged bit for bit (no version bump). Three independent reviews: the first found
+the maths, order and export right and asked for these refusals and more tests, now in
+`tests/test_moe.py` and the e2e test (Qwen3-MoE, OLMoE, Laguna and Qwen3.5-MoE through b11524's
+converter; adapters against merged weights); the third confirmed the fixes and, with a dense control,
+showed the adapters-against-merged gap at wide random weights isn't routing's (findings). 949 tests
+and the e2e test pass. Not yet run: a real MoE model, or CUDA. (findings, "Mixture-of-experts models")
+
+### The first MoE model: Laguna-XS-2.1's demand in doubt (2026-10-23)
+
+Asked to confirm Laguna-XS-2.1 before work on it, candor compared nine MoE candidates
+(`evidence-2026-10-23/first-moe.md`), checked independently. Laguna fits the code best, but LocalAI's
+gallery installs both of its top GGUF repos (without both its gap is 3,843) and its uncensored versions
+draw 1,104 downloads in 30 days, the least of the nine: about 0.5-6 a day for a release. The check also
+found `gaps.py`'s name search missed "-BF16" and "-hf" names (Nemotron-3.5-Lightning has 27 uncensored
+repos, not 9); fixed and run again. candor recommends Qwen3-30B-A3B-Instruct-2507 as the first MoE: the
+only one with a published KL-measured edit to check against, real uncensored demand (52-148 a day),
+no thinking. The choice is the user's.
 
 ### The brand made the standard for anything visual (the user, 2026-10-23)
 

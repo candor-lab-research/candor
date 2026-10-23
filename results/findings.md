@@ -377,6 +377,26 @@ entry is corrected, dropped or overturned is in CLAUDE.md ("Finished, dropped an
   ffn_down layers: one at layer 1 changed 8 of 14 later ones. `export` now gives every tensor its
   plain type; rude-llama's shipped exports weren't affected (their overrides ran to the last layer).
 
+## Mixture-of-experts models
+
+- **A layer's experts, edited along its direction, are one target: served as a 3D adapter they
+  answer as the merged export.** [Published: 2609.09793, GLM-5.3-Flash, refusal 0.949 to 0.173 with
+  every writer edited, each group alone removing 0.016-0.148] [Measured: tiny random Qwen3-MoE in
+  llama-server b11524 on Metal, KL under 1e-6 between the adapters and the merged weights, and under
+  1e-5 through a run's export with "pre", "none" and "full"; tiny Qwen3-MoE, OLMoE and Laguna through
+  b11524's converter, every expert reaching the GGUF stacked in expert order] Without row
+  normalisation the edit projects the block's output whatever the routing. llama.cpp doesn't check an
+  adapter's expert count (candor's GGUF check does), and Laguna can't be scored on Metal in b11524.
+  No real MoE model's refusals or KL are measured yet. [Hypothesis] The router needs no edit: test on
+  the shipped file's KL and maths. (`evidence-2026-10-23/moe-support.md`, `tests/test_moe.py`)
+- **Wide random weights grow the gap between adapters and merged weights through the layers, dense
+  or MoE alike.** [Measured: tiny random models in F32 through b11524's converter, one seed; Metal
+  with 1 or 2 slots and CPU alike] At weights drawn at 0.5, adapters against merged differed by
+  1.1-1.4e-4 KL on a 2-layer dense Qwen3, 1.8-2.4e-4 on a 2-layer Qwen3-MoE and about 7e-4 on a
+  4-layer Laguna, against edits of 0.30-0.51; at 0.2, by 1.0-5.3e-6 on all three. [Hypothesis]
+  Top-k routing adds under about 2 times on a real MoE: the first pilot's adapters-against-merged
+  check measures it.
+
 ## Releases
 
 - **A release's downloads follow the gap: GGUF demand over the uncensored versions already there.**
@@ -391,9 +411,15 @@ entry is corrected, dropped or overturned is in CLAUDE.md ("Finished, dropped an
   downloads are IBM's own repo, six times the base model's downloads; 88% of Laguna-XS-2.1's are
   one community repo, three times the base's. Set aside, Granite's gap falls from first to below
   K2-Horizon-7B's, and Laguna-XS still leads the MoE models. Both gaps are shown with and without
-  the top repo. (`evidence-2026-10-23/gaps.md`)
+  the top repo. Apps can drive it: LocalAI's gallery installs both of Laguna-XS's top repos, and
+  without both its gap falls to 3,843. (`evidence-2026-10-23/gaps.md`, `first-moe.md`)
+- **A release's likely draw may be better read from the uncensored downloads its base already gets.**
+  [Measured: our 4 releases took 0.03-24% of their base's; 9 MoE candidates] Between Llama-3.2's
+  1.3% and an equal share, a Laguna-XS-2.1 release would draw about 0.5-6 downloads a day and a
+  Qwen3-30B-A3B-Instruct-2507 one 52-148. [Hypothesis] It predicts better than the gap: test on the
+  next release. (`evidence-2026-10-23/first-moe.md`)
 - **MoE models of 36B or less hold a third to a half of the dense models' gap.** [Measured: 48 MoE
-  and 213 dense bases] Their uncensored supply is thin; candor can't edit them yet.
+  and 213 dense bases] Their uncensored supply is thin.
   (`evidence-2026-10-23/gaps.md`)
 - Rescoring the gap by each family's uptake of uncensored versions [Dropped 2026-10-23: reads 0
   where a family has no uncensored version, ignores GGUF demand on one-model families, and 4 against
@@ -401,13 +427,6 @@ entry is corrected, dropped or overturned is in CLAUDE.md ("Finished, dropped an
 
 ## Ideas
 
-- **MoE support: one direction per layer, every routed expert's down projection edited with the
-  rest.** [Published: 2609.09793, GLM-5.3-Flash, refusal 0.949 to 0.173 with every writer edited,
-  each group alone removing 0.016-0.148] [Measured: llama.cpp b11524's source] Expert LoRA (3D
-  `ffn_down_exps` adapters) runs at runtime with per-request scales, so candor's adapter scoring
-  carries over; the loader doesn't check the expert count. Laguna can't be scored on Metal in
-  b11524. No paper reports KL for an abliterated MoE. [Hypothesis] The router needs no edit: test
-  on KL and maths of the shipped file. (`evidence-2026-10-23/moe-support.md`)
 - **Start strength wide (to 3.0 or more) rather than widening once the best presses 1.5.**
   [Measured: 2 models] The best-supported change; it is only a default setting, and K2's search
   started wide (above). Before making it the default: one more model family.

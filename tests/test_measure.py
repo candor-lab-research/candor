@@ -786,6 +786,14 @@ def test_a_heretic_trial_is_read_as_an_edit(tmp_path):
         measure.heretic_trial(journal, 2, "pre")
 
 
+def test_a_heretic_trial_on_a_model_with_experts_is_refused(tmp_path):
+    journal = heretic_journal(
+        tmp_path / "study.jsonl", {"row_normalization": "pre", "orthogonalize_direction": True}
+    )
+    with pytest.raises(RunError, match=r"whether heretic edited the model's experts.*--outside"):
+        measure.heretic_trial(journal, 1, "pre", experts=True)
+
+
 @pytest.mark.parametrize(
     ("settings", "problem"),
     [

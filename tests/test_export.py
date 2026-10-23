@@ -629,6 +629,7 @@ def test_a_model_edited_elsewhere_names_its_layers_without_language_model(tiny, 
     _, layers, arch, writers = tiny.shape
     wrapped = [replace(w, name=w.name.replace("model.", "model.language_model.", 1)) for w in writers]
     monkeypatch.setitem(tiny.__dict__, "shape", (HIDDEN, layers, arch, wrapped))
+    tiny.__dict__.pop("edit_targets")
     monkeypatch.setattr(export, "ModelFiles", wrapping(tiny.model_folder))
     changes = export.taken_from(tiny, folder)
     assert set(changes) == {w.name for w in wrapped if EDIT.strength(w)}

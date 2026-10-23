@@ -11,7 +11,9 @@ FULL_RANK = 3
 
 
 def rank_one(weight: Tensor, direction: Tensor, row_norm: RowNorm = RowNorm.PRE) -> tuple[Tensor, Tensor]:
-    """Factors b (out, 1) and a (1, in), so that weight + strength * b @ a is the edited weight.
+    """Factors b (out, 1) and a (1, in), so that weight + strength * b @ a is the edited weight. A
+    layer's experts stacked as (experts, out, in) get factors of their own, (experts, out, 1) and
+    (experts, 1, in), along the same direction.
 
     NONE removes the direction from what the layer writes: delta = -r (rᵀW).
     PRE computes the same edit on row-normalised weights, then scales each row back to its
@@ -20,10 +22,10 @@ def rank_one(weight: Tensor, direction: Tensor, row_norm: RowNorm = RowNorm.PRE)
     w = weight.float()
     r = direction.float().to(w.device)
     if row_norm is RowNorm.NONE:
-        return -r[:, None], (r @ w)[None, :]
+        return -r.expand(w.shape[:-1])[..., None], (r @ w)[..., None, :]
     if row_norm is RowNorm.FULL:
         raise ValueError('a "full" edit isn\'t linear in strength: build it at its strength with full()')
-    return -(w.norm(dim=1) * r)[:, None], (r @ F.normalize(w, dim=1))[None, :]
+    return -(w.norm(dim=-1) * r)[..., None], (r @ F.normalize(w, dim=-1))[..., None, :]
 
 
 def full(
@@ -33,16 +35,17 @@ def full(
     the edited weight, as heretic builds it: the direction removed from the row-normalised weights, each
     row normalised again and scaled back to its original length, and the change approximated at rank
     by a randomised SVD seeded with seed, which keeps the row lengths only roughly. The renormalising
-    makes it not linear in strength, so each strength needs factors of its own."""
+    makes it not linear in strength, so each strength needs factors of its own. Stacked experts get
+    factors of their own, each as its own weight would."""
     w = weight.float()
     r = direction.float().to(w.device)
-    lengths = w.norm(dim=1, keepdim=True)
-    unit = F.normalize(w, dim=1)
-    edited = F.normalize(unit - strength * r[:, None] * (r @ unit)[None, :], dim=1) * lengths
+    lengths = w.norm(dim=-1, keepdim=True)
+    unit = F.normalize(w, dim=-1)
+    edited = F.normalize(unit - strength * r[:, None] * (r @ unit)[..., None, :], dim=-1) * lengths
     torch.manual_seed(seed)
     u, s, v = torch.svd_lowrank(edited - w, q=2 * rank + 4, niter=6)
-    root = s[:rank].sqrt()
-    return u[:, :rank] * root, (v[:, :rank] * root).T
+    root = s[..., :rank].sqrt()[..., None, :]
+    return u[..., :rank] * root, (v[..., :rank] * root).mT
 
 
 def full_device() -> str:

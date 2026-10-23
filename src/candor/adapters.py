@@ -7,11 +7,13 @@ from torch import Tensor
 
 
 def write_adapter(path: Path, arch: str, factors: dict[str, tuple[Tensor, Tensor]]) -> None:
-    """factors maps a GGUF weight name to its (b, a).
+    """factors maps a GGUF weight name to its (b, a): (out, rank) and (rank, in), or for a layer's
+    stacked experts (experts, out, rank) and (experts, rank, in), which llama.cpp applies to each
+    expert it routes to.
 
     alpha is set to the rank, so the scale llama.cpp applies is exactly the strength in the request.
     """
-    ranks = {a.shape[0] for _, a in factors.values()}
+    ranks = {a.shape[-2] for _, a in factors.values()}
     if len(ranks) != 1:
         raise ValueError(f"one adapter can't mix ranks {sorted(ranks)}")
     writer = gguf.GGUFWriter(path, arch)

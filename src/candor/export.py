@@ -68,8 +68,9 @@ def edited(weight: Tensor, change: Change) -> Tensor:
 
 
 def deltas(run: Run, edit: "Edit") -> dict[str, tuple[Tensor, Tensor]]:
-    """Each edited weight's change as factors (b, a), by its name in the model, with the strength
-    folded in: the change its adapter holds (run.changes), laid out as the model stores the weight."""
+    """Each edited weight's change as factors (b, a), by its edit target's name, with the strength
+    folded in: the change its adapter holds (run.changes), laid out as the model stores the weight, a
+    layer's experts stacked."""
     _, _, arch, _ = run.shape
     model_config = source.read_config(str(run.model_folder))
     return {
@@ -133,41 +134,39 @@ def _taken(run: Run, given: Path) -> dict[str, Change]:
 
 
 def taken_from(run: Run, folder: Path) -> dict[str, Change]:
-    """Each edit target whose weight in folder differs from the run's model, by its name in the model,
-    replaced by folder's. A save without the multimodal wrapper names its layers without
-    language_model, as llama.cpp's converter does."""
-    _, _, _, writers = run.shape
+    """Each edit target whose weight in folder differs from the run's model, by its name, replaced by
+    folder's. A save without the multimodal wrapper names its layers without language_model, as
+    llama.cpp's converter does."""
     theirs, ours = ModelFiles(folder), ModelFiles(run.model_folder)
     changes: dict[str, Change] = {}
-    for writer in writers:
-        found = [
-            name
-            for name in (writer.name, writer.name.replace(".language_model.", ".", 1))
-            if name in theirs.shard_of
-        ]
-        if not found:
-            raise RunError(f"{folder} has no weight for the edit target {writer.name}")
-        weight, original = theirs.tensor(found[0]), ours.tensor(writer.name)
+    for target in run.edit_targets.values():
+        found = []
+        for name in target.names:
+            named = [n for n in (name, name.replace(".language_model.", ".", 1)) if n in theirs.shard_of]
+            if not named:
+                raise RunError(f"{folder} has no weight for the edit target {name}")
+            found.append(named[0])
+        weight, original = theirs.read(found, target.stacked), ours.read(target.names, target.stacked)
         if weight.shape != original.shape:
             raise RunError(
                 f"{folder}'s {found[0]} is {list(weight.shape)}, not {list(original.shape)} as in the "
                 "run's model"
             )
         if not torch.equal(weight.float(), original.float()):
-            changes[writer.name] = partial(_replaced, theirs, found[0])
+            changes[target.name] = partial(_replaced, theirs, found, target.stacked)
     return changes
 
 
-def _replaced(files: ModelFiles, name: str, _original: Tensor) -> Tensor:
-    return files.tensor(name)
+def _replaced(files: ModelFiles, names: list[str], stacked: bool, _original: Tensor) -> Tensor:
+    return files.read(names, stacked)
 
 
 def taken_from_gguf(run: Run, path: Path) -> dict[str, Change]:
     """Each edit target whose weight in an unquantised GGUF of the run's model differs from the run's
-    own converted to the GGUF's type, by its name in the model, replaced by the GGUF's. Converting to a
+    own converted to the GGUF's type, by its edit target's name, replaced by the GGUF's. Converting to a
     narrower type rounds every weight a little, so only a weight that differs by more than that counts
     as edited."""
-    _, _, arch, writers = run.shape
+    _, _, arch, _ = run.shape
     reader = gguf.GGUFReader(path)
     field = reader.get_field("general.architecture")
     if field is None:
@@ -178,10 +177,10 @@ def taken_from_gguf(run: Run, path: Path) -> dict[str, Change]:
     model_config = source.read_config(str(run.model_folder))
     ours = ModelFiles(run.model_folder)
     changes: dict[str, Change] = {}
-    for writer in writers:
-        name = run.target_names[writer.name]
+    for target in run.edit_targets.values():
+        name = target.gguf
         if name not in tensors:
-            raise RunError(f"{path} has no tensor {name} for the edit target {writer.name}")
+            raise RunError(f"{path} has no tensor {name} for the edit target {target.name}")
         tensor = tensors[name]
         if tensor.tensor_type not in UNQUANTISED:
             raise RunError(
@@ -189,13 +188,13 @@ def taken_from_gguf(run: Run, path: Path) -> dict[str, Change]:
                 "quantised from, so it is quantised once, as the run deploys"
             )
         weight = convert.stored(tensor)
-        original = convert.as_converted(ours.tensor(writer.name), writer.name, arch, model_config)
+        original = run.target_weight(ours, target, model_config)
         if list(weight.shape) != list(original.shape):
             raise RunError(
                 f"{path}'s {name} is {list(weight.shape)}, not {list(original.shape)} as in the run's model"
             )
         if not torch.equal(weight, original.to(UNQUANTISED[tensor.tensor_type]).float()):
-            changes[writer.name] = partial(_converted_back, tensor, writer.name, arch, model_config)
+            changes[target.name] = partial(_converted_back, tensor, target.name, arch, model_config)
     return changes
 
 
@@ -251,7 +250,7 @@ def _ship(run: Run, shipped: Path, inputs: dict[str, Any], changes: Mapping[str,
             base,
             unquantized,
             {
-                run.target_names[name]: partial(_written, run, name, change)
+                run.edit_targets[name].gguf: partial(_written, run, name, change)
                 for name, change in changes.items()
             },
         )
@@ -318,16 +317,20 @@ def _write_unrounded(run: Run, unquantized: Path, lost: Iterable[str], changes: 
     F32, unrounded, refusing them if even that keeps too little of the edit. Written into weights stored
     in 16 bits, an edit under half a step of theirs rounds back to the weight, and no quantising after
     can bring it back."""
-    by_gguf_name = {run.target_names[name]: name for name in changes}
+    by_gguf_name = {run.edit_targets[name].gguf: name for name in changes}
     redone = {by_gguf_name[name]: changes[by_gguf_name[name]] for name in lost}
     rounded = kept(run, unquantized, redone)
     shapes = source.tensor_shapes(str(run.model_folder))
-    run.check_disk(1, False, 2 * sum(math.prod(shapes[name]) for name in redone))
+    size = sum(math.prod(shapes[weight]) for name in redone for weight in run.edit_targets[name].names)
+    run.check_disk(1, False, 2 * size)
     rewritten = unquantized.with_name(f"unrounded-{unquantized.name}")
     _rewritten(
         unquantized,
         rewritten,
-        {run.target_names[name]: partial(_written, run, name, change) for name, change in redone.items()},
+        {
+            run.edit_targets[name].gguf: partial(_written, run, name, change)
+            for name, change in redone.items()
+        },
         F32,
     )
     rewritten.replace(unquantized)
@@ -344,9 +347,10 @@ def _write_unrounded(run: Run, unquantized: Path, lost: Iterable[str], changes: 
 
 
 def _written(run: Run, name: str, change: Change) -> np.ndarray:
-    """The weight with its change in float32, laid out as the converter writes it."""
+    """The edit target's weight with its change in float32, laid out as the converter writes it."""
     _, _, arch, _ = run.shape
-    weight = edited(ModelFiles(run.model_folder).tensor(name), change)
+    target = run.edit_targets[name]
+    weight = edited(ModelFiles(run.model_folder).read(target.names, target.stacked), change)
     model_config = source.read_config(str(run.model_folder))
     return convert.as_converted(weight, name, arch, model_config).contiguous().numpy()
 
@@ -427,13 +431,12 @@ def _listed_apart(run: Run, path: Path, changed: Callable[[], set[str]]) -> dict
 
 def _edited(run: Run, edit: "Edit") -> set[str]:
     """The GGUF names of the weights the edit changes."""
-    _, _, _, writers = run.shape
-    return {run.target_names[writer.name] for writer in writers if edit.strength(writer)}
+    return {target.gguf for target in run.edit_targets.values() if edit.strength(target.writers[0])}
 
 
 def _edited_outside(run: Run, given: Path) -> set[str]:
     """The GGUF names of the weights taken from a model edited elsewhere."""
-    return {run.target_names[name] for name in _taken(run, given)}
+    return {run.edit_targets[name].gguf for name in _taken(run, given)}
 
 
 def _short(held: dict[str, float]) -> dict[str, float]:
@@ -451,20 +454,25 @@ def _worst(shares: dict[str, float]) -> str:
 
 def kept(run: Run, model_gguf: Path, made: Mapping[str, Change]) -> dict[str, float]:
     """For each edited weight, by its GGUF name, the share of its edit model_gguf holds: the part of
-    its change from the original weight that lies along the edit, over the edit. 1 when the file
-    holds the edit exactly; less when quantising rounded part of it away."""
+    its change from the original weight that lies along the edit, over the edit; for a layer's
+    experts, the least any expert holds. 1 when the file holds the edit exactly; less when quantising
+    rounded part of it away."""
     _, _, arch, _ = run.shape
     model_config = source.read_config(str(run.model_folder))
     tensors = {tensor.name: tensor for tensor in gguf.GGUFReader(model_gguf).tensors}
     files = ModelFiles(run.model_folder)
     shares = {}
     for name, change in made.items():
-        tensor = tensors[run.target_names[name]]
+        tensor = tensors[run.edit_targets[name].gguf]
         stored = convert.stored(tensor)
-        weight = files.tensor(name)
+        target = run.edit_targets[name]
+        weight = files.read(target.names, target.stacked)
         original = convert.as_converted(weight, name, arch, model_config).float()
         edit = convert.as_converted(edited(weight, change) - weight.float(), name, arch, model_config)
-        shares[tensor.name] = float(((stored - original) * edit).sum() / (edit * edit).sum())
+        # A share for each expert, or one for a single weight; an expert the edit leaves alone has none.
+        along, size = ((stored - original) * edit).sum((-2, -1)), (edit * edit).sum((-2, -1))
+        moved = size > 0
+        shares[tensor.name] = float((along[moved] / size[moved]).min()) if moved.any() else 1.0
     return shares
 
 

@@ -119,11 +119,16 @@ def editable(model):
 
 
 def names(model_id):
-    name = model_id.split("/")[1]
+    """The names an uncensored version of the model is found by: its own, without its weights' type or
+    chat suffix, and without a first word that repeats its org (NVIDIA-Nemotron-... of nvidia)."""
+    org, name = model_id.split("/")
     short = name
-    for suffix in ("-Instruct", "-instruct", "-it", "-Chat", "-chat"):
+    for suffix in ("-BF16", "-hf", "-Instruct", "-instruct", "-it", "-Chat", "-chat"):
         short = short.removesuffix(suffix)
-    return {name, short}
+    found = {name, short}
+    if short.lower().startswith(org.lower() + "-"):
+        found.add(short[len(org) + 1 :])
+    return found
 
 
 def gap(model):

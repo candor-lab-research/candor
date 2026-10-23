@@ -39,10 +39,12 @@ ATTENTION = {"self_attn", "attn", "attention", "linear_attn", "mixer", "conv"}
 MLP = {"mlp", "feed_forward", "ffn", "moe", "block_sparse_moe", "shared_mlp"}
 OTHER_STACKS = ("vision", "visual", "audio", "encoder", "mtp")
 LAYER = re.compile(r"^(.*?layers)\.(\d+)\.(.+)$")
+# One expert's weight in a layer that stores each of its experts apart, as Laguna and Qwen3-MoE do.
+EXPERT = re.compile(r"\.experts\.(\d+)\.")
 # The llama.cpp architectures whose memory candor knows: a K and a V of each KV head for every token of
 # context in each layer that attends to all of it, and in each of Qwen3.5's linear-attention layers a
 # state per slot that doesn't grow with the context.
-KV_ARCHITECTURES = {"llama", "qwen2", "qwen3", "qwen35", "k2-horizon"}
+KV_ARCHITECTURES = {"llama", "qwen2", "qwen3", "qwen35", "k2-horizon", "qwen3moe", "olmoe"}
 FULL, LINEAR = "full_attention", "linear_attention"
 
 
@@ -58,6 +60,30 @@ class Writer:
         return self.name.split(f".{self.layer}.", 1)[1].removesuffix(".weight")
 
 
+@dataclass(frozen=True)
+class Target:
+    """One weight an edit changes, as llama.cpp stores it: a writer, or a layer's experts stacked along
+    a first axis in expert order, as the converter stacks them. name is what the converter maps to the
+    GGUF name: the writer's own, or for experts stored apart, theirs without the expert number."""
+
+    name: str
+    gguf: str
+    writers: tuple[Writer, ...]
+
+    @property
+    def layer(self) -> int:
+        return self.writers[0].layer
+
+    @property
+    def names(self) -> list[str]:
+        return [w.name for w in self.writers]
+
+    @property
+    def stacked(self) -> bool:
+        """Whether the GGUF stacks the writers, as it does experts stored apart, even one alone."""
+        return self.name != self.writers[0].name
+
+
 @dataclass
 class Targets:
     writers: list[Writer] = field(default_factory=list)
@@ -66,6 +92,9 @@ class Targets:
     extra_layers: list[int] = field(default_factory=list)
     output_norms: bool = False
     quantized: list[str] = field(default_factory=list)
+    # Experts held as one tensor with the hidden size last, [experts, in, hidden], which the converter
+    # transposes and candor doesn't edit yet, or square, so which way they are held can't be told.
+    hidden_last: list[str] = field(default_factory=list)
 
     @property
     def experts(self) -> list[Writer]:
@@ -141,7 +170,11 @@ def find_targets(shapes: dict[str, list[int]], hidden: int, layers: int) -> Targ
         if role == "reader":
             continue
         if role == "writer" and component:
-            targets.writers.append(Writer(name, int(match[2]), component, "experts" in path))
+            targets.writers.append(
+                Writer(name, int(match[2]), component, "experts" in path or len(shape) == 3)
+            )
+            if len(shape) == 3 and shape[2] == hidden:
+                targets.hidden_last.append(name)
         else:
             targets.unclassified.append(name)
     targets.writers.sort(key=lambda w: (w.layer, w.component, w.name))
@@ -177,10 +210,39 @@ def _name_map(arch: str, layers: int) -> gguf.TensorNameMap:
 
 
 def gguf_name(writer: Writer, arch: str, layers: int) -> str | None:
-    """The name llama.cpp's converter will give this weight, mirroring how it strips language_model."""
-    module = writer.name.removesuffix(".weight").replace("language_model.", "")
+    """The name llama.cpp's converter will give this weight, mirroring how it strips language_model and
+    stacks experts stored apart into one tensor named without the expert number."""
+    module = _stacked_name(writer.name).removesuffix(".weight").replace("language_model.", "")
     mapped = _name_map(arch, layers).get_name(module)
     return f"{mapped}.weight" if mapped else None
+
+
+def _stacked_name(name: str) -> str:
+    return EXPERT.sub(".experts.", name)
+
+
+def edit_targets(writers: list[Writer], arch: str, layers: int) -> dict[str, Target]:
+    """The weights an edit changes, by name, each writer in one: on its own, or with the rest of its
+    layer's experts, stacked in expert order. Raises ValueError for a writer with no GGUF name, or
+    experts not numbered 0 to n - 1."""
+    grouped: dict[str, list[Writer]] = defaultdict(list)
+    for writer in writers:
+        grouped[_stacked_name(writer.name)].append(writer)
+    found = {}
+    for name, members in grouped.items():
+        gguf = gguf_name(members[0], arch, layers)
+        if gguf is None:
+            raise ValueError(f"no llama.cpp name for {members[0].name}")
+        numbered = [EXPERT.search(w.name) for w in members]
+        if len(members) > 1 or numbered[0]:
+            if not all(numbered):
+                raise ValueError(f"{name} is held both as one tensor and as experts stored apart")
+            by_number = {int(match[1]): w for match, w in zip(numbered, members, strict=True) if match}
+            if sorted(by_number) != list(range(len(members))):
+                raise ValueError(f"{name}'s experts aren't numbered 0 to {len(members) - 1}")
+            members = [by_number[i] for i in range(len(members))]
+        found[name] = Target(name, gguf, tuple(members))
+    return found
 
 
 def _layer_kinds(text: dict[str, Any], arch: str | None) -> list[str] | None:

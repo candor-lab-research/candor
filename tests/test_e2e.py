@@ -18,18 +18,30 @@ from huggingface_hub import snapshot_download
 from safetensors.torch import load_file, save_file
 from transformers import (
     AutoTokenizer,
+    LagunaConfig,
+    LagunaForCausalLM,
     LlamaConfig,
     LlamaForCausalLM,
+    OlmoeConfig,
+    OlmoeForCausalLM,
     PreTrainedTokenizerFast,
     Qwen3_5ForCausalLM,
+    Qwen3_5MoeForCausalLM,
+    Qwen3_5MoeTextConfig,
     Qwen3_5TextConfig,
+    Qwen3MoeConfig,
+    Qwen3MoeForCausalLM,
 )
 
 from candor import checks, config, convert, export, source, targets, toolchain
+from candor.adapters import write_adapter
 from candor.config import Measure
+from candor.edit import RowNorm, rank_one
 from candor.engine import LlamaServer, Thinking
 from candor.judge import Guard, Verdict, read_verdict
 from candor.weights import ModelFiles
+
+from .helpers import mean_from_top
 
 pytestmark = pytest.mark.skipif(os.environ.get("CANDOR_E2E") != "1", reason="set CANDOR_E2E=1 to run")
 MODEL = "HuggingFaceTB/SmolLM2-135M-Instruct"
@@ -72,7 +84,9 @@ def converted_targets(folder: Path, model_gguf: Path) -> list[str]:
     found = targets.find_targets(source.tensor_shapes(str(folder)), text["hidden_size"], layers)
     arch = targets.gguf_architecture(config)
     assert found.ok and arch is not None
-    return convert.check_targets(model_gguf, folder, found.writers, arch, layers)
+    return convert.check_targets(
+        model_gguf, folder, targets.edit_targets(found.writers, arch, layers).values(), arch
+    )
 
 
 def test_an_edit_written_into_the_gguf_is_what_the_converter_writes_from_the_edited_weights(
@@ -188,6 +202,121 @@ def test_qwen35_linear_attention_reaches_the_gguf_in_the_converters_order(conver
         hf = weights[f"model.language_model.layers.{layer}.linear_attn.out_proj.weight"]
         stored = in_gguf[f"blk.{layer}.ssm_out.weight"].data.reshape(-1)
         assert (hf.view(torch.uint8).numpy().reshape(-1) != stored).any()
+
+
+# Tiny random MoE models whose experts transformers saves apart, as Laguna-XS-2.1 and Qwen3-MoE ship
+# theirs, 12 or more so an order by name would differ; the Laguna has a dense first layer, a shared
+# expert and sliding-window layers, as XS-2.1 does.
+# Weights drawn wider than transformers' default, which leaves a tiny model's answers near uniform, but
+# not so wide that the rounding gap between adapters and merged weights grows through the layers, as
+# it does on a dense model too at 0.5.
+MOE_SIZES = {
+    "vocab_size": 49152, "hidden_size": 64, "num_attention_heads": 4, "num_key_value_heads": 2,
+    "initializer_range": 0.2,
+}  # fmt: skip
+MOE_MODELS = {
+    "qwen3moe": lambda: Qwen3MoeForCausalLM(
+        Qwen3MoeConfig(
+            **MOE_SIZES, intermediate_size=128, moe_intermediate_size=32, num_hidden_layers=2, head_dim=16,
+            num_experts=12, num_experts_per_tok=4,
+        )
+    ),
+    "olmoe": lambda: OlmoeForCausalLM(
+        OlmoeConfig(
+            **MOE_SIZES, intermediate_size=32, num_hidden_layers=2, num_experts=12, num_experts_per_tok=2
+        )
+    ),
+    "laguna": lambda: LagunaForCausalLM(
+        LagunaConfig(
+            **MOE_SIZES, intermediate_size=128, num_hidden_layers=4, head_dim=16, moe_intermediate_size=32,
+            shared_expert_intermediate_size=32, num_experts=12, num_experts_per_tok=2, sliding_window=16,
+            layer_types=["full_attention", "sliding_attention", "sliding_attention", "full_attention"],
+            mlp_layer_types=["dense", "sparse", "sparse", "sparse"],
+        )
+    ),
+}  # fmt: skip
+
+
+def tiny_moe(converted, tmp_path, kind: str, dtype: torch.dtype = torch.bfloat16) -> Path:
+    folder = tmp_path / kind
+    torch.manual_seed(0)
+    MOE_MODELS[kind]().to(dtype).save_pretrained(folder)
+    for name in ("tokenizer.json", "tokenizer_config.json"):
+        shutil.copy(converted[0] / name, folder / name)
+    return folder
+
+
+@pytest.mark.parametrize("kind", sorted(MOE_MODELS))
+def test_each_layers_experts_reach_the_gguf_stacked_in_expert_order(converted, tmp_path, kind):
+    folder = tiny_moe(converted, tmp_path, kind)
+    convert.to_gguf(folder, tmp_path / "model.gguf", tmp_path / "convert.log")
+    assert converted_targets(folder, tmp_path / "model.gguf") == []
+
+
+@pytest.mark.parametrize("kind", ["qwen3moe", "laguna"])
+def test_expert_adapters_answer_as_the_experts_written_edited(converted, tmp_path, kind):
+    # In F32, so the adapters and the merged weights differ only in how the edit is applied.
+    folder = tiny_moe(converted, tmp_path, kind, torch.float32)
+    base = tmp_path / "model.gguf"
+    convert.to_gguf(folder, base, tmp_path / "convert.log")
+    config = source.read_config(str(folder))
+    layers = config["num_hidden_layers"]
+    arch = targets.gguf_architecture(config)
+    found = targets.find_targets(source.tensor_shapes(str(folder)), 64, layers)
+    files = ModelFiles(folder)
+    direction = torch.nn.functional.normalize(
+        torch.randn(64, generator=torch.Generator().manual_seed(3)), dim=0
+    )
+    scales, replaced = {}, {}
+    for target in targets.edit_targets(found.writers, arch, layers).values():
+        weight = convert.as_converted(
+            files.read(target.names, target.stacked), target.name, arch, config
+        ).float()
+        b, a = rank_one(weight, direction, RowNorm.PRE)
+        write_adapter(tmp_path / f"{target.gguf}.gguf", arch, {target.gguf: (b, a)})
+        scales[tmp_path / f"{target.gguf}.gguf"] = 1.2
+        replaced[target.gguf] = partial(lambda w, b, a: (w + 1.2 * b @ a).numpy(), weight, b, a)
+    export._rewritten(base, tmp_path / "merged.gguf", replaced, gguf.GGMLQuantizationType.F32)
+    binary = toolchain.binaries() / "llama-server"
+    with LlamaServer(
+        binary, base, tmp_path / "server.log", list(scales), parallel=2, context_per_slot=256
+    ) as s:
+        ids = s.chat_ids(CHATS, {})
+        unedited, served = s.top_logprobs(ids, 50), s.top_logprobs(ids, 50, scales)
+    with LlamaServer(
+        binary, tmp_path / "merged.gguf", tmp_path / "server.log", parallel=2, context_per_slot=256
+    ) as s:
+        merged = s.top_logprobs(ids, 50)
+    assert mean_from_top(served, merged) < 1e-5
+    assert mean_from_top(unedited, merged) > 1e-3
+
+
+def test_qwen35_moe_linear_attention_and_experts_reach_the_gguf_as_candor_expects(converted, tmp_path):
+    folder, out = tmp_path / "qwen35moe", tmp_path / "out"
+    out.mkdir()
+    torch.manual_seed(0)
+    text = Qwen3_5MoeTextConfig(
+        vocab_size=49152, hidden_size=64, num_hidden_layers=4, num_attention_heads=4, num_key_value_heads=2,
+        head_dim=16, linear_num_key_heads=2, linear_num_value_heads=4, linear_key_head_dim=8,
+        linear_value_head_dim=8, moe_intermediate_size=32, shared_expert_intermediate_size=32, num_experts=12,
+        num_experts_per_tok=4,
+    )  # fmt: skip
+    Qwen3_5MoeForCausalLM(text).bfloat16().save_pretrained(tmp_path / "saved")
+    weights = {
+        name.replace("model.", "model.language_model.", 1): tensor.contiguous()
+        for name, tensor in load_file(tmp_path / "saved" / "model.safetensors").items()
+    }
+    folder.mkdir()
+    save_file(weights, folder / "model.safetensors")
+    text_config = text.to_dict() | {"mtp_num_hidden_layers": 1}
+    config = {"architectures": ["Qwen3_5MoeForConditionalGeneration"], "text_config": text_config}
+    (folder / "config.json").write_text(json.dumps(config))
+    for name in ("tokenizer.json", "tokenizer_config.json"):
+        shutil.copy(converted[0] / name, folder / name)
+
+    convert.to_gguf(folder, out / "model.gguf", out / "convert.log")
+
+    assert converted_targets(folder, out / "model.gguf") == []
 
 
 def test_chat_ids_match_real_chat_requests_and_transformers(converted):

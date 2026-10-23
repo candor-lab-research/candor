@@ -44,19 +44,19 @@ thinking on (next, e.g. Qwen3.8-27B). A 9B model must not take days.
 
 ## Now: waiting for the user
 
+- MoE support is built and tested on the Mac (history, 2026-10-23). The user picks the first MoE
+  model: candor recommends Qwen3-30B-A3B-Instruct-2507 over Laguna-XS-2.1
+  (`evidence-2026-10-23/first-moe.md`).
 - Phases 3 to 5 wait only on the rest of the phase-end discussion (Next, 1); the ranking clause is
   decided. Released: K2's trial 205 as `candor-lab/K2-Horizon-7B-Candor-Uncensored-GGUF`, the
   27B's trial 532 as `candor-lab/Qwen3.8-27B-Candor-Uncensored-GGUF` (history). No pods are running.
-- 20 ideas from arXiv are ranked in `results/new-features.md`.
 
 ## Next
 
 1. Before the next model, the rest of the phase-end discussion (history, 2026-10-23): the search's
    range ends (peak layer's floor, findings; rude-llama's 535 at attention's peak floor and reach's
    ceiling), the cost and time against the release gate, then the phase close (the e2e test,
-   findings' tagged lines, the next model by gap). No other method changes until agreed. For the
-   user: whether to build MoE support for Laguna-XS-2.1, the largest MoE gap
-   (`evidence-2026-10-23/gaps.md`, `moe-support.md`), and if so whether it is used thinking on.
+   findings' tagged lines, the next model by gap). No other method changes until agreed.
 2. Phase 4, later: low effort's two closes; Uno not now. The budget limit
    (`search.max_budget_hits`, on K2 from trial 138) costs no measurable hits on the simulator and
    stays on (results file, step 5).
@@ -82,6 +82,9 @@ thinking on (next, e.g. Qwen3.8-27B). A 9B model must not take days.
      sha256, so a file exported again can be matched to it; `measure` to answer one set alone
      (step 6 patched `measure.SETS`); `serve` on a pod with the Mac's tools (step 6 bridged them by
      hand, `evidence-2026-10-22/bridge.py`);
+   - MoE: memory rows for Laguna and Qwen3.5-MoE, Granite's fused `input_linear`, NemotronH's layers
+     (`evidence-2026-10-23/moe-support.md`, section 4), each with its model; the adapters-against-merged
+     check on CUDA in the first MoE pilot;
    - heretic 2.x journals aren't read (they record no refusals for a trial);
    - llama-server b11524 can deadlock when stopped mid-answer (about 1 stop in 500; history): `stop`
      then waits 60 s and kills it, losing nothing;

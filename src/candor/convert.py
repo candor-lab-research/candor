@@ -11,6 +11,7 @@ import json
 import re
 import subprocess
 import tempfile
+from collections.abc import Iterable
 from pathlib import Path
 from typing import Any
 
@@ -109,10 +110,11 @@ def tensor_types(model_gguf: Path) -> dict[str, str]:
 def as_converted(weight: Tensor, name: str, arch: str, config: dict[str, Any]) -> Tensor:
     """The weight as llama.cpp b11524's converter writes it into the GGUF.
 
-    For Qwen3.5 with more linear-attention value heads than key heads, the converter stores the
-    value heads tiled across key heads instead of grouped by them (_LinearAttentionVReorderBase in
-    conversion/qwen.py), so it reorders the input columns of linear_attn.out_proj to match. The
-    rows, which are what the edit changes, keep their order. Every other target is written as is.
+    For Qwen3.5 and Qwen3.5-MoE with more linear-attention value heads than key heads, the converter
+    stores the value heads tiled across key heads instead of grouped by them
+    (_LinearAttentionVReorderBase in conversion/qwen.py), so it reorders the input columns of
+    linear_attn.out_proj to match. The rows, which are what the edit changes, keep their order. Every
+    other target is written as is, a layer's experts among them.
     """
     order = _column_order(name, arch, config)
     return weight if order is None else weight[:, order]
@@ -128,7 +130,7 @@ def _column_order(name: str, arch: str, config: dict[str, Any]) -> Tensor | None
     """The order the converter writes a weight's input columns in, for a weight it reorders."""
     hparams = config | config.get("text_config", {})
     keys, values = hparams.get("linear_num_key_heads", 0), hparams.get("linear_num_value_heads", 0)
-    if arch != "qwen35" or "linear_attn." not in name or ".out_proj." not in name:
+    if arch not in ("qwen35", "qwen35moe") or "linear_attn." not in name or ".out_proj." not in name:
         return None
     if keys <= 0 or values <= 0 or keys == values:
         return None
@@ -143,9 +145,10 @@ def stored(tensor: gguf.ReaderTensor) -> Tensor:
 
 
 def check_targets(
-    model_gguf: Path, model_folder: Path, writers: list[targets.Writer], arch: str, layers: int
+    model_gguf: Path, model_folder: Path, edit_targets: Iterable[targets.Target], arch: str
 ) -> list[str]:
-    """Problems with how the edit targets arrived in the GGUF; empty when each is as_converted says.
+    """Problems with how the edit targets arrived in the GGUF; empty when each is as_converted says,
+    a layer's experts stacked in expert order.
 
     Weights stored in the GGUF's own type must match byte for byte. Others are compared within bf16
     rounding.
@@ -155,16 +158,16 @@ def check_targets(
     files = ModelFiles(model_folder)
     config = json.loads((model_folder / "config.json").read_text())
     problems = []
-    for writer in writers:
-        name = targets.gguf_name(writer, arch, layers)
-        tensor = in_gguf.get(name or "")
+    for target in edit_targets:
+        name = target.gguf
+        tensor = in_gguf.get(name)
         if tensor is None:
-            problems.append(f"{writer.name} has no tensor {name} in the GGUF")
+            problems.append(f"{target.name} has no tensor {name} in the GGUF")
             continue
-        expected = as_converted(files.tensor(writer.name), writer.name, arch, config)
+        expected = as_converted(files.read(target.names, target.stacked), target.name, arch, config)
         shape = list(reversed(tensor.shape.tolist()))
         if shape != list(expected.shape):
-            problems.append(f"{writer.name} is {list(expected.shape)} but {name} is {shape}")
+            problems.append(f"{target.name} is {list(expected.shape)} but {name} is {shape}")
             continue
         if STORED_AS.get(tensor.tensor_type) == expected.dtype:
             same = np.array_equal(
@@ -174,5 +177,5 @@ def check_targets(
         else:
             same = np.allclose(stored(tensor).numpy(), expected.float().numpy(), rtol=1 / 128, atol=1e-6)
         if not same:
-            problems.append(f"{name} doesn't hold the same values as {writer.name}; the converter changed it")
+            problems.append(f"{name} doesn't hold the same values as {target.name}; the converter changed it")
     return problems

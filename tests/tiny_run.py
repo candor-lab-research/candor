@@ -21,6 +21,7 @@ from .helpers import (
     pinned,
 )
 from .tiny_gguf import HIDDEN, LAYERS, random_weights, write_model
+from .tiny_moe import random_moe_weights, write_moe_folder, write_moe_model
 
 # Qwen3.8's: thinking adds a system message, at every reasoning effort but medium, that turning it
 # off leaves out.
@@ -110,13 +111,19 @@ def fixed_directions(self, answering=False):
     return F.normalize(torch.randn(LAYERS + 1, HIDDEN, generator=seed), dim=-1)
 
 
-def tiny_run(tmp_path, monkeypatch) -> Run:
+def tiny_run(tmp_path, monkeypatch, moe: bool = False, fused: bool = False) -> Run:
     """A run whose model is a tiny random GGUF and a Hugging Face folder of the same weights, with
-    made-up prompts and a fake judge, ready to measure or search."""
+    made-up prompts and a fake judge, ready to measure or search: a Llama, or a Qwen3-MoE whose
+    folder stores each expert apart, or each layer's in one tensor when fused."""
     if not LLAMA_SERVER.exists():
         pytest.skip("no llama-server")
-    write_model(tmp_path / "tiny.gguf", random_weights(), chat_template=TEMPLATE)
-    model = write_matching_llama(tmp_path / "model")
+    if moe:
+        weights = random_moe_weights()
+        write_moe_model(tmp_path / "tiny.gguf", weights, chat_template=TEMPLATE)
+        model = write_moe_folder(tmp_path / "model", weights, fused)
+    else:
+        write_model(tmp_path / "tiny.gguf", random_weights(), chat_template=TEMPLATE)
+        model = write_matching_llama(tmp_path / "model")
     fake_everything_but_the_stages(monkeypatch, tmp_path / "tiny.gguf")
     monkeypatch.setattr(Run, "directions", fixed_directions)
     monkeypatch.setattr(Run, "planned_directions", fixed_plan)

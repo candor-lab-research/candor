@@ -7,6 +7,7 @@ run's `candor.toml`, each explained by a comment; [`upgrade`](commands.md#upgrad
 - [Slots](#slots)
 - [Thinking models](#thinking-models)
 - [Sampling](#sampling)
+- [Mixture of experts](#mixture-of-experts)
 
 ## What fits where
 
@@ -108,3 +109,15 @@ large vocabulary. llama-server can't do that for a request with a thinking budge
 model to its budget itself, token for token as the server's own budget does (checked against it).
 Draws for a seed differ from sampling on the CPU, so a measurement made before 2026-10-14 pairs with
 one made up to 2026-10-18 prompt by prompt, not draw by draw.
+
+## Mixture of experts
+
+A mixture-of-experts model whose experts are stored apart, as Laguna's, Qwen3-MoE's and OLMoE's are,
+or held [experts, out, in] in one tensor, is edited with every routed expert's down projection along
+its layer's direction at the MLP strength, as are a shared expert and any dense layer.
+
+- A layer's experts are one edit target, stacked as llama.cpp's converter stacks them, scored as one
+  3D adapter and checked in the export by the least any expert keeps.
+- The router isn't edited.
+- `inspect` fails experts held [experts, in, hidden] in one tensor, as Llama 4's are, or square,
+  [experts, hidden, hidden], whose layout can't be told.

@@ -10,7 +10,7 @@ from safetensors.torch import save_file
 from candor import convert
 from candor.convert import as_converted, check_targets, float_type
 from candor.edit import RowNorm, edit_factors
-from candor.targets import find_targets, gguf_name
+from candor.targets import edit_targets, find_targets, gguf_name
 
 from .helpers import CONVERTER_ORDER, HIDDEN, OUT_PROJ, TINY_QWEN35, llama, qwen35
 from .tiny_tokenizer import tokenizer
@@ -48,7 +48,7 @@ def gguf_file(tmp_path, tensors, change=lambda name, bits: bits, drop=(), dtype=
 
 def check(folder, path, shapes=None, arch="llama"):
     writers = find_targets(shapes or llama(), HIDDEN, 2).writers
-    return check_targets(path, folder, writers, arch, 2)
+    return check_targets(path, folder, edit_targets(writers, arch, 2).values(), arch)
 
 
 @pytest.mark.parametrize("dtype", [torch.bfloat16, torch.float16])

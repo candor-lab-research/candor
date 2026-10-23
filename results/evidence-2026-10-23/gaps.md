@@ -7,14 +7,14 @@ as a GGUF with few uncensored versions so far, rather than racing on the most cr
 
 Hugging Face's download counts for each repo as of 12:30 UTC, divided by the time since the repo
 was created. Each repo holds one GGUF, so no repo counts several files. The gaps are from
-`gaps.tsv` (13:40 UTC).
+`gaps.tsv` (14:48 UTC).
 
 | Release | Live (days) | Downloads | Per day | Gap | Gap rank (of 213) | Gap without the top repo |
 | --- | --- | --- | --- | --- | --- | --- |
-| K2-Horizon-7B | 4.94 | 907 | 184 | 10,559 | 25 | 5,002 |
+| K2-Horizon-7B | 4.94 | 907 | 184 | 10,559 | 24 | 5,002 |
 | Qwen3.8-27B | 0.90 | 120 | 134 | 39,034 | 6 | 28,244 |
-| Qwen3.5-9B | 7.30 | 544 | 75 | 5,583 | 44 | 2,371 |
-| Llama-3.2-3B | 9.18 | 425 | 46 | 4,902 | 55 | 3,242 |
+| Qwen3.5-9B | 7.30 | 544 | 75 | 5,583 | 43 | 2,371 |
+| Llama-3.2-3B | 9.18 | 425 | 46 | 4,902 | 54 | 3,242 |
 
 The gap orders 5 of the 6 pairs as their downloads per day do: the exception is K2 against the 27B,
 whose rate is from its first day, when downloads are usually highest. Without each base's top GGUF
@@ -39,7 +39,8 @@ of a known size of at most 36B parameters. Over 30 days:
   counting uncensored ones.
 - **Uncensored supply:** repos whose names or tags say uncensored ("uncensor", "abliterat",
   "heretic", "derestrict", "decensor" or "refusal" in the name; tagged uncensored or abliterated),
-  found by the model's name, as GGUFs of it or as fine-tunes of it (ours left out).
+  found by the model's name (also without a "-BF16" or "-hf" ending, or a first word repeating its
+  org), as GGUFs of it or as fine-tunes of it (ours left out).
 - **Gap:** demand divided by (1 + uncensored repos), which is roughly what a new entrant could reach
   if it took an equal share. **Without the top repo:** the same with the largest GGUF repo set aside,
   as one repo can hold most of a model's downloads (over half on 106 of the 165 models with at least
@@ -69,31 +70,33 @@ Spark-X2.5-4B (17 uncensored repos already, with 201,386 downloads) and Agents-A
 ## Mixture-of-experts models
 
 `moe.py` runs the same count on what `gaps.py` leaves out: 132 models that are MoE (by the same
-total-experts test) or dense over 36B (`moe.tsv`). candor doesn't edit MoE models yet
-(`moe-support.md`).
+total-experts test) or dense over 36B (`moe.tsv`). candor's MoE support was built on 2026-10-23
+(`moe-support.md`, `history.md`); no real MoE model is measured yet.
 
 | Group | Models | GGUF downloads | Uncensored downloads | Sum of gaps | Without top repos |
 | --- | --- | --- | --- | --- | --- |
-| Dense, 36B or less | 213 | 44,172,923 | 24,027,896 | 1,138,047 | 414,845 |
-| MoE, 36B or less | 48 | 9,288,491 | 1,298,172 | 621,457 | 144,832 |
-| MoE, 36-130B | 18 | 1,879,612 | 425,272 | 122,042 | 39,314 |
-| MoE, over 130B | 48 | 1,364,412 | 2,541,513 | 247,317 | 54,211 |
-| Dense, over 36B | 18 | 491,672 | 466,309 | 47,745 | 21,246 |
+| Dense, 36B or less | 213 | 44,172,968 | 27,489,488 | 1,128,162 | 411,884 |
+| MoE, 36B or less | 48 | 9,288,491 | 1,302,705 | 601,187 | 137,066 |
+| MoE, 36-130B | 18 | 1,879,612 | 429,155 | 119,955 | 38,021 |
+| MoE, over 130B | 48 | 1,364,412 | 2,541,727 | 246,644 | 54,058 |
+| Dense, over 36B | 18 | 491,672 | 559,547 | 47,600 | 21,133 |
 
-MoE models of 36B or less hold a third to a half of the dense models' gap (55%, or 35% without top
-repos): a fifth of the GGUF downloads, with thin uncensored supply (14% of those against 54%).
+MoE models of 36B or less hold a third to a half of the dense models' gap (53%, or 33% without top
+repos): a fifth of the GGUF downloads, with thin uncensored supply (14% of those against 62%).
 Uncensored counts cover every format while demand is GGUF only, and a search for one model also
 finds later versions' repos (GLM-5's finds GLM-5.3's), which is why the over-130B row shows more
 uncensored downloads than GGUF ones.
 
 poolside/Laguna-XS-2.1 (33.4B, 256 experts, 8 active) leads the MoE models either way. 88% of its
 1,723,672 GGUF downloads are one repo, mudler's APEX GGUF (28 likes), with 1,510,641, three times
-the base model's 499,646; poolside's own GGUF (100 likes) has 189,971. Its 5 uncensored versions
-have 1,104 downloads between them, the only GGUF 564. Without the top repo its gap is 35,505, more
-than any recent model's but Spark-X2.5-4B's. Its sibling Laguna-S-2.1 (117.6B) has 25 uncensored
+the base model's 499,646; poolside's own GGUF (100 likes) has 189,971. LocalAI's model gallery
+installs both, so much of the demand may be automated: without both its gap is 3,843
+(`first-moe.md`). Its 5 uncensored versions have 1,104 downloads between them, the only GGUF 564.
+Without the top repo its gap is 35,505, more than any recent model's but Spark-X2.5-4B's. Its sibling Laguna-S-2.1 (117.6B) has 25 uncensored
 versions with 45,547 downloads. transformers has Laguna natively (`moe-support.md`). The next MoE
-gaps without top repos are Mellum2-12B-A2.5B-Instruct (18,686; a coding model), Ornith-1.5-35B-A3B
-(14,069; 84 uncensored repos) and Nemotron-3.5-Lightning-30B-A3B (11,128; 9, with 6,891).
+gaps without top repos are Mellum2-12B-A2.5B-Instruct (18,686; a coding model) and Ornith-1.5-35B-A3B
+(14,069; 84 uncensored repos); Nemotron-3.5-Lightning-30B-A3B has 27 uncensored repos (11,348
+downloads), so 3,974.
 
 ## Limits
 

@@ -96,12 +96,15 @@ class Edit:
         return {"direction_layer": self.direction_layer, "kernels": kernels, **position}
 
 
-def heretic_trial(journal_path: Path, number: int, row_norm: str, think_close: str | None = None) -> Edit:
+def heretic_trial(
+    journal_path: Path, number: int, row_norm: str, think_close: str | None = None, experts: bool = False
+) -> Edit:
     """A trial from a heretic study, to be rebuilt with this run's own directions. A trial that read its
     directions after a response prefix that closes the thinking as this run's think_close does is rebuilt
     with the directions read where the answer starts. candor reads every layer's output before the
     model's final norm, and heretic its last one after it, so a per-layer trial's last layer is rebuilt
-    with a direction heretic didn't read."""
+    with a direction heretic didn't read. A model with experts isn't rebuilt: its journal doesn't say
+    whether heretic edited them, which its master doesn't when transformers holds them fused."""
     try:
         journal = heretic.read_journal(journal_path)
     except (OSError, ValueError, KeyError) as error:
@@ -124,6 +127,11 @@ def heretic_trial(journal_path: Path, number: int, row_norm: str, think_close: s
     ):
         rank = settings["full_normalization_lora_rank"]
         problems.append(f'it built "full" edits at rank {rank}, and candor at {FULL_RANK}')
+    if experts:
+        problems.append(
+            "its journal doesn't say whether heretic edited the model's experts, as candor does; export "
+            "heretic's own save of the trial with candor export --outside instead"
+        )
     if settings.get("winsorization_quantile", 1.0) < 1:
         problems.append("it winsorised the residuals, which candor doesn't")
     if settings.get("orthogonalize_direction") is not True:

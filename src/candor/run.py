@@ -392,7 +392,7 @@ class Run:
             raise RunError("the model no longer passes candor inspect; run it to see why")
         hidden, layers = sizes
         found = targets.find_targets(source.tensor_shapes(str(self.model_folder)), hidden, layers)
-        if not found.ok or found.experts or found.quantized:
+        if not found.ok or found.hidden_last or found.quantized:
             raise RunError("the model no longer passes candor inspect; run it to see why")
         return hidden, layers, arch, found.writers
 
@@ -499,8 +499,10 @@ class Run:
             self.report("Converting to GGUF")
             partial = base.with_name(base.name + ".building")
             convert.to_gguf(self.model_folder, partial, out / "convert.log")
-            _, layers, arch, writers = self.shape
-            if problems := convert.check_targets(partial, self.model_folder, writers, arch, layers):
+            _, _, arch, _ = self.shape
+            if problems := convert.check_targets(
+                partial, self.model_folder, self.edit_targets.values(), arch
+            ):
                 partial.unlink()
                 raise RunError(
                     "the GGUF doesn't hold the edit targets unchanged:\n  " + "\n  ".join(problems[:5])
@@ -983,12 +985,29 @@ class Run:
 
     @cached_property
     def target_names(self) -> dict[str, str]:
-        """Each edit target's GGUF tensor name, by its name in the model."""
+        """Each writer's GGUF tensor name, by its name in the model; a layer's experts share theirs."""
         _, layers, arch, writers = self.shape
         names = {w.name: targets.gguf_name(w, arch, layers) for w in writers}
         if unmapped := [name for name, mapped in names.items() if mapped is None]:
             raise RunError(f"no llama.cpp name for {', '.join(unmapped[:3])}")
         return {name: str(mapped) for name, mapped in names.items()}
+
+    @cached_property
+    def edit_targets(self) -> dict[str, targets.Target]:
+        """The weights an edit changes, by name: each writer on its own, or a layer's experts stacked as
+        the GGUF holds them."""
+        _, layers, arch, writers = self.shape
+        try:
+            return targets.edit_targets(writers, arch, layers)
+        except ValueError as error:
+            raise RunError(str(error)) from None
+
+    def target_weight(
+        self, files: ModelFiles, target: targets.Target, model_config: dict[str, Any]
+    ) -> torch.Tensor:
+        """The target's weight laid out as the GGUF stores it."""
+        _, _, arch, _ = self.shape
+        return convert.as_converted(files.read(target.names, target.stacked), target.name, arch, model_config)
 
     def adapter_inputs(self, answering: bool = False) -> dict[str, Any]:
         """What every adapter set read at one position is built from besides its directions; call after
@@ -1011,8 +1030,8 @@ class Run:
     ) -> dict[Path, dict[str, Path]]:
         """adapter_set for each folder, its directions and inputs. Each weight is read once for every set
         that needs writing, rather than once a set."""
-        _, _, arch, writers = self.shape
-        names = self.target_names
+        _, _, arch, _ = self.shape
+        edit_targets = self.edit_targets.values()
         stale = {folder: made for folder, made in sets.items() if not self.fresh(folder, made[1])}
         if stale:
             files = ModelFiles(self.model_folder)
@@ -1026,15 +1045,14 @@ class Run:
             for partial in partials.values():
                 _remove(partial)
                 partial.mkdir(parents=True)
-            for writer in writers:
-                name = names[writer.name]
-                weight = convert.as_converted(files.tensor(writer.name), writer.name, arch, model_config)
+            for target in edit_targets:
+                weight = self.target_weight(files, target, model_config)
                 for folder, (set_directions, _) in stale.items():
-                    factors = rank_one(weight, set_directions[writer.layer], row_norm)
-                    write_adapter(partials[folder] / f"{name}.gguf", arch, {name: factors})
+                    factors = rank_one(weight, set_directions[target.layer], row_norm)
+                    write_adapter(partials[folder] / f"{target.gguf}.gguf", arch, {target.gguf: factors})
             for folder, (_, inputs) in stale.items():
                 self.commit(partials[folder], folder, inputs)
-        return {folder: {names[w.name]: folder / f"{names[w.name]}.gguf" for w in writers} for folder in sets}
+        return {folder: {t.gguf: folder / f"{t.gguf}.gguf" for t in edit_targets} for folder in sets}
 
     @property
     def linear(self) -> bool:
@@ -1065,23 +1083,19 @@ class Run:
         return {name: built[root / name] for name in sets}
 
     def changes(self, edit: "Edit") -> dict[str, tuple[torch.Tensor, torch.Tensor]]:
-        """Each weight the edit changes, by its name in the model, and the change as factors (b, a), the
+        """Each weight the edit changes, by its edit target's name, and the change as factors (b, a), the
         strength folded in, laid out as the GGUF stores the weight: what its adapter holds and its
         export writes, built the same way for both (on one machine, the same numbers)."""
-        _, _, arch, writers = self.shape
         found = self.edit_directions(edit.name, edit.direction_layer, edit.answering)
         files = ModelFiles(self.model_folder)
         model_config = source.read_config(str(self.model_folder))
         row_norm = RowNorm(self.settings.edit.row_norm)
         made = {
-            writer.name: edit_factors(
-                convert.as_converted(files.tensor(writer.name), writer.name, arch, model_config),
-                found[writer.layer],
-                strength,
-                row_norm,
+            target.name: edit_factors(
+                self.target_weight(files, target, model_config), found[target.layer], strength, row_norm
             )
-            for writer in writers
-            if (strength := edit.strength(writer))
+            for target in self.edit_targets.values()
+            if (strength := edit.strength(target.writers[0]))
         }
         # A "full" change is built on the GPU, whose memory goes back before a llama-server needs it.
         residuals.free_memory(full_device())
@@ -1096,7 +1110,7 @@ class Run:
         inputs = {**self.adapter_inputs(edit.answering), "edit": edit.record()}
         path = folder / "edit.gguf"
         if not self.fresh(path, inputs):
-            factors = {self.target_names[name]: change for name, change in self.changes(edit).items()}
+            factors = {self.edit_targets[name].gguf: change for name, change in self.changes(edit).items()}
             if not factors:
                 raise RunError(f"{edit.name} changes no weight")
             folder.mkdir(parents=True, exist_ok=True)

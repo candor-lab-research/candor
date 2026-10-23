@@ -9,6 +9,7 @@ import statistics
 import subprocess
 import sys
 import traceback
+from collections import Counter
 from collections.abc import Callable, Iterable, Iterator
 from contextlib import contextmanager
 from datetime import date
@@ -137,8 +138,23 @@ def _target_rows(model: str, hidden: int, layers: int, arch: str | None, revisio
             "and are left alone"
         )
         rows.append(("Extra layers", "ok", detail))
-    if found.experts:
-        rows.append(("Experts", "fail", "candor doesn't edit mixture-of-experts models yet"))
+    if found.hidden_last:
+        detail = (
+            f"{_examples(found.hidden_last)} hold their experts as [experts, in, hidden], or square so "
+            "candor can't tell which way, which it doesn't edit yet"
+        )
+        rows.append(("Experts", "fail", detail))
+    elif found.experts:
+        per_layer = Counter(w.layer for w in found.experts)
+        counts = {
+            shapes[w.name][0] if len(shapes[w.name]) == 3 else per_layer[w.layer] for w in found.experts
+        }
+        each = " or ".join(str(n) for n in sorted(counts))
+        detail = (
+            f"{each} experts in each of {len(per_layer)} layers, all edited along the layer's direction at "
+            "its MLP strength"
+        )
+        rows.append(("Experts", "ok", detail))
     if found.quantized:
         detail = f"{_examples(found.quantized)} carry quantisation scales; use the unquantised original"
         rows.append(("Quantised", "fail", detail))
@@ -148,13 +164,19 @@ def _target_rows(model: str, hidden: int, layers: int, arch: str | None, revisio
             "edit can't remove the direction exactly"
         )
         rows.append(("Output norms", "warn", detail))
-    if arch and not found.experts:
+    if arch and not found.hidden_last:
         unmapped = [w.name for w in found.writers if targets.gguf_name(w, arch, layers) is None]
         if unmapped:
             rows.append(("GGUF names", "fail", f"no llama.cpp name for {_examples(unmapped)}"))
         else:
+            try:
+                edit_targets = targets.edit_targets(found.writers, arch, layers)
+            except ValueError as error:
+                return [*rows, ("GGUF names", "fail", str(error))]
             first = found.writers[0]
             example = f"{first.name} -> {targets.gguf_name(first, arch, layers)}"
+            if experts := [t for t in edit_targets.values() if t.writers[0].expert]:
+                example += f"; {experts[0].name} -> {experts[0].gguf}, a layer's experts"
             rows.append(("GGUF names", "ok", f"all map, e.g. {example}"))
     return rows
 
@@ -593,11 +615,13 @@ def _bars(console: Console, **settings: Any) -> Progress:
     )
 
 
-def _heretic_trial(run: Run, journal: Path, trial: int) -> measure.Edit:
-    """A heretic study's trial, as this run rebuilds it."""
+def _heretic_trial(run: Run, journal: Path, trial: int, rebuilt: bool = True) -> measure.Edit:
+    """A heretic study's trial, as this run rebuilds it. Serving only names it to find its export, so it
+    needn't read the model, whose weights a machine that only serves may not hold."""
     settings = run.settings
+    experts = rebuilt and any(w.expert for w in run.shape[3])
     return measure.heretic_trial(
-        journal.expanduser(), trial, settings.edit.row_norm, settings.deployment.think_close
+        journal.expanduser(), trial, settings.edit.row_norm, settings.deployment.think_close, experts
     )
 
 
@@ -941,7 +965,7 @@ def serve_command(
                 _, model = run.gguf()
         else:
             if heretic is not None:
-                edit = _heretic_trial(run, heretic, trial)
+                edit = _heretic_trial(run, heretic, trial, rebuilt=False)
             else:
                 edit = search.recorded_edit(run, trial)
             name = edit.name

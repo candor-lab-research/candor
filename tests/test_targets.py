@@ -4,6 +4,7 @@ import pytest
 from candor.targets import (
     Writer,
     _converter_table,
+    edit_targets,
     find_targets,
     gguf_architecture,
     gguf_name,
@@ -92,6 +93,53 @@ def test_fused_experts_without_a_weight_suffix_are_found():
         "model.layers.0.feed_forward.experts.down_proj",
         "model.layers.1.feed_forward.experts.down_proj",
     ]
+    # Stored [experts, in, hidden], as Llama 4's are, which the converter transposes.
+    assert found.hidden_last == [w.name for w in found.experts]
+
+
+def moe(experts: int = 12, layers: int = 2, shared: bool = False) -> dict[str, list[int]]:
+    shapes = {}
+    for i in range(layers):
+        shapes[f"model.layers.{i}.self_attn.o_proj.weight"] = [HIDDEN, HIDDEN]
+        shapes[f"model.layers.{i}.mlp.gate.weight"] = [experts, HIDDEN]
+        for e in range(experts):
+            shapes[f"model.layers.{i}.mlp.experts.{e}.down_proj.weight"] = [HIDDEN, 16]
+            shapes[f"model.layers.{i}.mlp.experts.{e}.up_proj.weight"] = [16, HIDDEN]
+        if shared:
+            shapes[f"model.layers.{i}.mlp.shared_expert.down_proj.weight"] = [HIDDEN, 32]
+    return shapes
+
+
+def test_a_layers_experts_stored_apart_are_one_target_in_expert_order():
+    found = find_targets(moe(), HIDDEN, 2)
+    assert found.ok and not found.hidden_last
+    grouped = edit_targets(found.writers, "qwen3moe", 2)
+    experts = grouped["model.layers.0.mlp.experts.down_proj.weight"]
+    assert experts.gguf == "blk.0.ffn_down_exps.weight"
+    assert experts.names == [f"model.layers.0.mlp.experts.{e}.down_proj.weight" for e in range(12)]
+    assert grouped["model.layers.0.self_attn.o_proj.weight"].gguf == "blk.0.attn_output.weight"
+    assert len(grouped) == 4
+
+
+def test_a_shared_expert_is_a_target_of_its_own():
+    found = find_targets(moe(experts=4, shared=True), HIDDEN, 2)
+    grouped = edit_targets(found.writers, "qwen2moe", 2)
+    shared = grouped["model.layers.1.mlp.shared_expert.down_proj.weight"]
+    assert shared.gguf == "blk.1.ffn_down_shexp.weight" and len(shared.writers) == 1
+    assert grouped["model.layers.1.mlp.experts.down_proj.weight"].gguf == "blk.1.ffn_down_exps.weight"
+
+
+def test_experts_with_a_number_missing_are_refused():
+    shapes = moe(experts=4)
+    del shapes["model.layers.1.mlp.experts.2.down_proj.weight"]
+    with pytest.raises(ValueError, match="aren't numbered 0 to 2"):
+        edit_targets(find_targets(shapes, HIDDEN, 2).writers, "qwen3moe", 2)
+
+
+def test_experts_held_both_ways_are_refused():
+    shapes = moe(experts=1) | {"model.layers.0.mlp.experts.down_proj.weight": [1, HIDDEN, 16]}
+    with pytest.raises(ValueError, match="both as one tensor and as experts stored apart"):
+        edit_targets(find_targets(shapes, HIDDEN, 2).writers, "qwen3moe", 2)
 
 
 def test_biases_and_scales_are_not_writers():
@@ -214,3 +262,15 @@ def test_a_hybrids_linear_attention_layers_hold_a_state_for_each_slot():
     assert recurrent_bytes_per_slot(LLAMA_3B, "llama") == 0
     assert recurrent_bytes_per_slot(QWEN35 | {"linear_num_value_heads": None}, "qwen35") is None
     assert recurrent_bytes_per_slot(QWEN35_BY_INTERVAL, "qwen35") == 50.25 * 2**20
+
+
+def test_kv_bytes_for_moe_architectures():
+    model_config = {
+        "num_hidden_layers": 4,
+        "num_attention_heads": 8,
+        "num_key_value_heads": 2,
+        "hidden_size": 256,
+    }
+    for arch in ("qwen3moe", "olmoe"):
+        assert kv_bytes_per_token(model_config | {"head_dim": 64}, arch, 16) == 4 * 2 * 2 * 64 * 2
+        assert kv_bytes_per_token(model_config, arch, 16) == 4 * 2 * 2 * 32 * 2
