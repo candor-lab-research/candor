@@ -368,6 +368,14 @@ entry is corrected, dropped or overturned is in CLAUDE.md ("Finished, dropped an
   ffn_down layers: one at layer 1 changed 8 of 14 later ones. `export` now gives every tensor its
   plain type; rude-llama's shipped exports weren't affected (their overrides ran to the last layer).
 
+## Releases
+
+- **A release's downloads follow the gap: GGUF demand over the uncensored versions already there.**
+  [Measured: candor-lab's 4 releases, Hugging Face's counts] K2-Horizon-7B, with 5 other uncensored
+  repos, has the most downloads per day; Qwen3.5-9B, with 303, has under half its rate. The gap
+  orders 5 of the 6 pairs as downloads per day do. [Hypothesis] That it predicts a release's reach:
+  test on the next release's downloads per day against its gap. (`evidence-2026-10-23/gaps.md`)
+
 ## Ideas
 
 - **Start strength wide (to 3.0 or more) rather than widening once the best presses 1.5.**

@@ -1123,3 +1123,13 @@ edit) and the second judge; its KL is over the top 200 tokens, this run's `kl_to
 "Measured as used" says the rule's ranking would have shipped a lower-KL edit and 532 was picked on
 unsafe labels, which the rule doesn't count. It was reviewed against the measurements twice. The
 pod was deleted. (`results/phase-5-qwen3.8-27b.md`, step 6, "The release")
+
+### Next models picked by gap (the user, 2026-10-23)
+
+K2-Horizon-7B has the most downloads per day of candor-lab's four releases (184, against 134 on the
+27B's first day, 75 for Qwen3.5-9B and 46 for Llama), with 5 other uncensored versions on the Hub
+against Qwen3.5-9B's 303. The user decided to pick the next models by gap: a base many people run
+as a GGUF with few uncensored versions so far, where a new release reaches more people than on a
+crowded base. A first ranking, to be read again just before choosing, is in
+`results/evidence-2026-10-23/gaps.md`: Granite 4.2 30B leads, with 1 uncensored repo against
+238,240 GGUF downloads in 30 days; candor would first need to handle its template's thinking switch.

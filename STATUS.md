@@ -38,6 +38,7 @@ thinking on (next, e.g. Qwen3.8-27B). A 9B model must not take days.
   (2.0.0.dev0, default edit ARA); last release 1.4.0; its thinking-model prefix bug (#487) is open.
 - At each phase end, run the e2e test (`CANDOR_E2E=1 uv run pytest tests/test_e2e.py`): nothing else
   runs it.
+- Next models are picked by gap (the user, 2026-10-23): `results/evidence-2026-10-23/gaps.md`.
 
 ## Now: waiting for the user
 
@@ -119,6 +120,6 @@ from the start. The user's decisions, 2026-10-15 and 2026-10-16; their reasons a
 
 - `tune/heretic-kit` is frozen (our kit; heretic itself is checked at each phase start).
 - Cut for depth first: `candor doctor`, a live dashboard, one-command pod orchestration, rewriting
-  the guide, more model families.
+  the guide.
 - Reporting the llama.cpp prompt-cache bug upstream.
 - Separate tracks: the Qwen3.5 rude fine-tune, the Mac Studio purchase.
