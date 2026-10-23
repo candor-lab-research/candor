@@ -46,16 +46,15 @@ thinking on (next, e.g. Qwen3.8-27B). A 9B model must not take days.
   decided. Released: K2's trial 205 as `candor-lab/K2-Horizon-7B-Candor-Uncensored-GGUF`, the
   27B's trial 532 as `candor-lab/Qwen3.8-27B-Candor-Uncensored-GGUF` (history). No pods are running.
 - 20 ideas from arXiv are ranked in `results/new-features.md`.
-- Evidence for the discussion (2026-10-19): `results/evidence-2026-10-19/method-evidence.md` (the
-  upstream check, six method questions), `cost-27b.md` and `pod-checks.md` (the 8B judge and row
-  normalisation: no decision changes).
 
 ## Next
 
 1. Before the next model, the rest of the phase-end discussion (history, 2026-10-23): the search's
    range ends (peak layer's floor, findings; rude-llama's 535 at attention's peak floor and reach's
    ceiling), the cost and time against the release gate, then the phase close (the e2e test,
-   findings' tagged lines, the next model by gap). No other method changes until agreed.
+   findings' tagged lines, the next model by gap). No other method changes until agreed. For the
+   user: whether to build MoE support for Laguna-XS-2.1, the largest MoE gap
+   (`evidence-2026-10-23/gaps.md`, `moe-support.md`), and if so whether it is used thinking on.
 2. Phase 4, later: low effort's two closes; Uno not now. The budget limit
    (`search.max_budget_hits`, on K2 from trial 138) costs no measurable hits on the simulator and
    stays on (results file, step 5).

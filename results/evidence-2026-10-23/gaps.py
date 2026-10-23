@@ -4,10 +4,13 @@ uncensored versions already exist.
     python3 -I results/evidence-2026-10-23/gaps.py > results/evidence-2026-10-23/gaps.tsv
 
 Candidates are the 1,000 most downloaded and 1,000 most trending text-generation models on the
-Hub, kept when candor can edit them: an original (not a quantisation, merge, adapter or someone
-else's fine-tune), a chat model (a chat template, no "base" in its name), an architecture llama.cpp
-converts other than a draft model, dense by its config.json, and at most 36B parameters (the 27B
-fitted an A40). Downloads are Hugging Face's 30-day counts. Reads only public metadata.
+Hub, kept when candor can edit them: an original (not a quantisation, merge, adapter, test model or
+someone else's fine-tune), a chat model (a chat template, no "base" in its name), an architecture
+llama.cpp converts other than a draft model, dense by its config.json (no total-experts count above
+1), and a known size of at most 36B parameters (the 27B fitted an A40), by the larger of the
+safetensors index's total and its sum by type. An uncensored repo is one whose name or tags say so,
+found by name, as a GGUF of the model or as a fine-tune of it. Downloads are Hugging Face's 30-day
+counts. Reads only public metadata.
 """
 
 import json
@@ -24,7 +27,24 @@ ROOT = Path(__file__).resolve().parents[2]
 ARCHITECTURES = json.loads((ROOT / "src/candor/data/llama_cpp_architectures.json").read_text())
 ARCHITECTURES = ARCHITECTURES["architectures"]
 UNCENSORED = ("uncensor", "abliterat", "heretic", "derestrict", "decensor", "refusal")
+UNCENSORED_TAGS = {"uncensored", "abliterated"}
+TEST_ORGS = ("nm-testing",)
+TOTAL_EXPERTS = (
+    "num_experts",
+    "num_local_experts",
+    "n_routed_experts",
+    "moe_num_experts",
+    "num_experts_total",
+)
+ACTIVE_EXPERTS = (
+    "num_experts_per_tok",
+    "num_experts_per_token",
+    "moe_topk",
+    "top_k_experts",
+    "experts_per_token",
+)
 NOT_ORIGINAL = ("gguf", "awq", "gptq", "mlx", "fp8", "int4", "int8", "nvfp4", "bnb", "exl", "4bit", "8bit")
+NOT_ORIGINAL += ("quantized", "w4a16")
 MAX_PARAMS = 36e9
 RELEASED = ["Qwen/Qwen3.8-27B", "IFM/K2-Horizon-7B", "Qwen/Qwen3.5-9B", "meta-llama/Llama-3.2-3B-Instruct"]
 TOKEN = Path.home().joinpath(".cache/huggingface/token").read_text().strip()
@@ -33,7 +53,7 @@ TOKEN = Path.home().joinpath(".cache/huggingface/token").read_text().strip()
 def get(params, path="", url=None):
     url = url or API + path + "?" + urllib.parse.urlencode(params, doseq=True)
     request = urllib.request.Request(url, headers={"Authorization": f"Bearer {TOKEN}"})
-    for wait in (5, 15, 45, 120):
+    for wait in (5, 15, 45, 120, 300, 600):
         try:
             with urllib.request.urlopen(request, timeout=60) as response:
                 return json.load(response)
@@ -44,20 +64,35 @@ def get(params, path="", url=None):
     raise RuntimeError(f"rate limited: {url}")
 
 
-def uncensored(model_id):
+def uncensored(model_id, tags=()):
     name = model_id.lower()
-    return any(word in name for word in UNCENSORED) and "candor" not in name
+    said = any(word in name for word in UNCENSORED) or bool(UNCENSORED_TAGS & {t.lower() for t in tags})
+    return said and "candor" not in name
 
 
-def dense(model):
+def experts(model):
+    """The model's total experts and experts used per token, by its config.json; (None, None) if dense."""
     try:
         config = get({}, url=f"https://huggingface.co/{model['id']}/resolve/main/config.json")
     except urllib.error.HTTPError:
         config = model.get("config") or {}
-    for part in (config, config.get("text_config") or {}):
-        if any("experts" in key and isinstance(value, int) and value > 1 for key, value in part.items()):
-            return False
-    return True
+    for part in (config.get("text_config") or {}, config):
+        total = next((part[k] for k in TOTAL_EXPERTS if isinstance(part.get(k), int) and part[k] > 1), None)
+        if total:
+            return total, next((part[k] for k in ACTIVE_EXPERTS if isinstance(part.get(k), int)), None)
+    return None, None
+
+
+def dense(model):
+    return experts(model)[0] is None
+
+
+def size(model):
+    """Parameters, from the safetensors index: the larger of its total and its sum by type, as the total
+    is sometimes wrong; None if unknown."""
+    counts = model.get("safetensors") or {}
+    known = [n for n in (counts.get("total"), sum((counts.get("parameters") or {}).values())) if n]
+    return max(known) if known else None
 
 
 def editable(model):
@@ -65,7 +100,10 @@ def editable(model):
     tags = model.get("tags", [])
     config = model.get("config") or {}
     words = name.replace("_", "-").split("-")
-    if uncensored(name) or any(word in name for word in NOT_ORIGINAL) or "base" in words:
+    if uncensored(name, tags) or any(word in name for word in NOT_ORIGINAL) or "base" in words:
+        return False
+    org = name.split("/")[0]
+    if org.endswith("internal-testing") or org in TEST_ORGS or "tiny-random" in name:
         return False
     if not (config.get("chat_template_jinja") or (config.get("tokenizer_config") or {}).get("chat_template")):
         return False
@@ -75,9 +113,9 @@ def editable(model):
     if any(parent.split("/")[0] != model["id"].split("/")[0] for parent in parents):
         return False
     architectures = config.get("architectures") or []
-    params = (model.get("safetensors") or {}).get("total")
+    params = size(model)
     known = bool(architectures) and architectures[0] in ARCHITECTURES and "Draft" not in architectures[0]
-    return known and (params or 0) <= MAX_PARAMS
+    return known and params is not None and params <= MAX_PARAMS
 
 
 def names(model_id):
@@ -90,24 +128,35 @@ def names(model_id):
 
 def gap(model):
     ggufs = get(
-        {"filter": [f"base_model:quantized:{model['id']}", "gguf"], "limit": 1000, "expand[]": ["downloads"]}
+        {
+            "filter": [f"base_model:quantized:{model['id']}", "gguf"],
+            "limit": 1000,
+            "expand[]": ["downloads", "tags"],
+        }
     )
-    found = {m["id"]: m["downloads"] for m in ggufs if uncensored(m["id"])}
+    found = {m["id"]: m["downloads"] for m in ggufs if uncensored(m["id"], m.get("tags", []))}
+    tuned = get(
+        {"filter": f"base_model:finetune:{model['id']}", "limit": 1000, "expand[]": ["downloads", "tags"]}
+    )
+    found |= {m["id"]: m["downloads"] for m in tuned if uncensored(m["id"], m.get("tags", []))}
     for name in names(model["id"]):
-        for m in get({"search": name, "limit": 1000, "expand[]": ["downloads"]}):
-            if name.lower() in m["id"].lower() and uncensored(m["id"]):
+        for m in get({"search": name, "limit": 1000, "expand[]": ["downloads", "tags"]}):
+            if name.lower() in m["id"].lower() and uncensored(m["id"], m.get("tags", [])):
                 found[m["id"]] = m["downloads"]
-    demand = sum(m["downloads"] for m in ggufs if not uncensored(m["id"]))
+    plain = [m["downloads"] for m in ggufs if not uncensored(m["id"], m.get("tags", []))]
+    demand = sum(plain)
     return {
         "id": model["id"],
         "created": model.get("createdAt", "")[:10],
-        "params_b": round(((model.get("safetensors") or {}).get("total") or 0) / 1e9, 1),
+        "params_b": round((size(model) or 0) / 1e9, 1),
         "architecture": (model.get("config") or {}).get("architectures", ["?"])[0],
         "gguf_repos": len(ggufs),
         "gguf_downloads": demand,
+        "top_gguf_downloads": max(plain, default=0),
         "uncensored_repos": len(found),
         "uncensored_downloads": sum(found.values()),
         "gap": round(demand / (1 + len(found))),
+        "gap_without_top": round((demand - max(plain, default=0)) / (1 + len(found))),
         "capped": len(ggufs) == 1000,
     }
 

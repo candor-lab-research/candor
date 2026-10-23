@@ -1162,3 +1162,29 @@ as a GGUF with few uncensored versions so far, where a new release reaches more 
 crowded base. A first ranking, to be read again just before choosing, is in
 `results/evidence-2026-10-23/gaps.md`: Granite 4.2 30B leads, with 1 uncensored repo against
 238,240 GGUF downloads in 30 days; candor would first need to handle its template's thinking switch.
+
+### The gap counted again; Granite 4.2 30B's lead rests on one repo; MoE sized (2026-10-23)
+
+On the user's request, candor rescored the gap by each family's uptake of uncensored versions and
+sized the mixture-of-experts models `gaps.py` left out (`moe.py`). The rescore ordered 4 of the 6
+pairs of our releases, against the gap's 5, and reads 0 where a family has no uncensored version, so
+it was dropped. Two reviews found `gaps.py` missed uncensored repos tagged but not named so, and
+fine-tunes (Laguna-XS has 5, not 1), treated a per-token experts count as MoE, and read a missing or
+wrong size as 0; fixed and run again (213 dense, 132 MoE or over 36B). Each model's top GGUF repo
+is now shown: IBM's own GGUF holds 97% of Granite 4.2 30B's demand, and set aside its gap falls
+below K2-Horizon-7B's. Laguna-XS-2.1 (MoE, 33B) leads the MoE models either way and, without top
+repos, is second among recent models to Spark-X2.5-4B, which has 17 uncensored versions already.
+MoE models of 36B or less hold a third to a half of the dense gap. (`evidence-2026-10-23/gaps.md`)
+
+### What MoE support would take: researched and checked (2026-10-23)
+
+`evidence-2026-10-23/moe-support.md`, from 13 arXiv papers (2025-2026), heretic master 09271b6 and
+its issues, llama.cpp b11524's source and `candor inspect` on five MoE models. An independent check
+confirmed every arXiv ID, llama.cpp line and candor file:line, and the claim the build rests on:
+b11524 applies 3D LoRA to expert tensors at runtime with per-request scales. It corrected three
+statements: the edit is an exact projection of the MoE block only under `row_norm = "none"`; Laguna
+can't be scored on Metal in b11524 even with the issue's patch once an adapter is loaded; and
+heretic's issues are weak evidence (#218 was a broken measurement). The order it supports: the code
+with tests on tiny random MoE models on the Mac, optionally OLMoE-1B-7B on an A40, then Laguna-XS-2.1
+on pods; Granite-3.1-3B-A800M moves later. Whether to build it, and how Laguna-XS is used (thinking
+on or off), are the user's decisions.

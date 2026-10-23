@@ -247,9 +247,9 @@ entry is corrected, dropped or overturned is in CLAUDE.md ("Finished, dropped an
   candor's edge test (within 0.02) only two of the eight press it: the 27B's one-layer best and K2's
   per-layer one. Most trials within the cap sit nearest the floor (384 of 629), so best KL falling
   toward it (K2, the 27B) can't be told from that band's larger count. The floor is fixed in
-  heretic, which notes its ranges may need adjusting for new models. [Hypothesis] Better edits lie below 0.6: a floor of 0.4 for new runs, checked first on the
-  miss-rate simulator for what the wider range costs where the best lies inside 0.6-1.0.
-  (`evidence-2026-10-23/floor.txt`)
+  heretic, which notes its ranges may need adjusting for new models. [Hypothesis] Better edits lie
+  below 0.6: a floor of 0.4 for new runs, checked first on the miss-rate simulator for what the
+  wider range costs where the best lies inside 0.6-1.0. (`evidence-2026-10-23/floor.txt`)
 - **Refusals fall gradually as strength rises; there is no cliff.** [Measured: 8 searches on 3
   models] [Published] The literature agrees. (`evidence-2026-10-14/data-report.md`,
   `lit-refusal.md`)
@@ -381,12 +381,33 @@ entry is corrected, dropped or overturned is in CLAUDE.md ("Finished, dropped an
 
 - **A release's downloads follow the gap: GGUF demand over the uncensored versions already there.**
   [Measured: candor-lab's 4 releases, Hugging Face's counts] K2-Horizon-7B, with 5 other uncensored
-  repos, has the most downloads per day; Qwen3.5-9B, with 303, has under half its rate. The gap
-  orders 5 of the 6 pairs as downloads per day do. [Hypothesis] That it predicts a release's reach:
-  test on the next release's downloads per day against its gap. (`evidence-2026-10-23/gaps.md`)
+  repos, has the most downloads per day; Qwen3.5-9B, with 416, has under half its rate. The gap
+  orders 5 of the 6 pairs as downloads per day do, but its equal share may overstate crowded bases:
+  on the two Qwen ones our share was 3-7 times under it (ours GGUF only, theirs all formats).
+  [Hypothesis] That it predicts a release's reach: test on the next release's downloads per day
+  against its gap. (`evidence-2026-10-23/gaps.md`)
+- **One GGUF repo can hold most of a model's demand.** [Measured: 165 bases with 10,000 GGUF
+  downloads or more: over half in one repo on 106, 90% or more on 14] 97% of Granite 4.2 30B's GGUF
+  downloads are IBM's own repo, six times the base model's downloads; 88% of Laguna-XS-2.1's are
+  one community repo, three times the base's. Set aside, Granite's gap falls from first to below
+  K2-Horizon-7B's, and Laguna-XS still leads the MoE models. Both gaps are shown with and without
+  the top repo. (`evidence-2026-10-23/gaps.md`)
+- **MoE models of 36B or less hold a third to a half of the dense models' gap.** [Measured: 48 MoE
+  and 213 dense bases] Their uncensored supply is thin; candor can't edit them yet.
+  (`evidence-2026-10-23/gaps.md`)
+- Rescoring the gap by each family's uptake of uncensored versions [Dropped 2026-10-23: reads 0
+  where a family has no uncensored version, ignores GGUF demand on one-model families, and 4 against
+  5 of 6 pairs can't separate it from the gap]
 
 ## Ideas
 
+- **MoE support: one direction per layer, every routed expert's down projection edited with the
+  rest.** [Published: 2609.09793, GLM-5.3-Flash, refusal 0.949 to 0.173 with every writer edited,
+  each group alone removing 0.016-0.148] [Measured: llama.cpp b11524's source] Expert LoRA (3D
+  `ffn_down_exps` adapters) runs at runtime with per-request scales, so candor's adapter scoring
+  carries over; the loader doesn't check the expert count. Laguna can't be scored on Metal in
+  b11524. No paper reports KL for an abliterated MoE. [Hypothesis] The router needs no edit: test
+  on KL and maths of the shipped file. (`evidence-2026-10-23/moe-support.md`)
 - **Start strength wide (to 3.0 or more) rather than widening once the best presses 1.5.**
   [Measured: 2 models] The best-supported change; it is only a default setting, and K2's search
   started wide (above). Before making it the default: one more model family.
@@ -430,6 +451,11 @@ entry is corrected, dropped or overturned is in CLAUDE.md ("Finished, dropped an
   then `candor proxy`'s rank check, low against high, on a first search's best. (step 2)
 - **More slots in one shared KV pool (`--kv-unified`).** [Dropped 2026-10-20: no gain on
   Qwen3.8-27B, 223-228 tokens/s at 40-48 slots against 224 at 32]
+- **Batch-invariant reads, so a repeat is exact.** [Published: DeepInfer, vLLM; Measured:
+  rude-llama bit-identical at 1 slot] Batch-invariant kernels and a sampler keyed on (seed,
+  position) give the same answer however a prompt is batched; llama.cpp has no such mode found.
+  Test: one trial's KL read alone (1 slot) twice, in two sessions on one pod: if bit-identical and
+  cheap, KL is read alone and the 3% repeat tolerance goes. (`evidence-2026-10-23/deepinfer.md`)
 - **3-5 refusal directions,** if a single direction fails as used. [Hypothesis]
 - **Optuna 5,** once candor has a baseline. [Hypothesis] Its TPE changed multivariate bandwidth and
   multi-objective weights (`history.md`, "Not in this plan"). Test: the miss-rate simulator with
