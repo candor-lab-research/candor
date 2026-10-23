@@ -1222,3 +1222,11 @@ the banner, each repository carrying its own copy; nothing else in the cards cha
 candor-team after checking the live cards matched the staging folders. The avatar is ready as
 `docs/images/avatar.png`; neither GitHub nor Hugging Face has an API for an org's picture, so the
 user uploads it.
+
+### candor written in lowercase everywhere (the user, 2026-10-23)
+
+The user asked for the name in lowercase everywhere, for consistency with the logo. The five
+Hugging Face cards now write candor and candor lab in lowercase in text and titles; repository IDs,
+GGUF file names and `general.name` keep their spelling, as renaming them would break downloads and
+links. `docs/brand.md` states the rule. The Hugging Face org's display name, "Candor Lab", can only
+be changed on its settings page, by the user.

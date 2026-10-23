@@ -29,7 +29,10 @@ along itself: the one direction candor removes. Its files are in `images/`:
 - The smallest sizes are 16 px tall for the mark and 24 px for the logo.
 - The pulled-out stripe is always the accent and the other stripes the text colour. Never recolour,
   rotate, outline or add effects to the mark, or set the name in another typeface.
-- The name is always lowercase: candor.
+- The name is always lowercase, in text and titles too, even at the start of a sentence: candor,
+  and the lab is candor lab. Identifiers alone keep the release series' spelling: repository IDs,
+  file names and GGUF metadata follow `MODEL-Candor-Uncensored-GGUF`, as every release does, so the
+  series stays one pattern and its links keep working.
 - Use the files `brand.py` draws; never type the name in a live font as a logo.
 - Model cards open with `header.png`, right after their front matter; the org card opens with
   `banner.png`. Each repository carries its own copy.
