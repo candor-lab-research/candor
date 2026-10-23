@@ -1,5 +1,6 @@
 """Draws candor's brand files (docs/brand.md says how to use them), every letter as an outline so
-they look the same everywhere:
+they look the same everywhere, and renders the PNGs GitHub and Hugging Face need with Chrome
+(`CANDOR_CHROME` points at another build):
 
     uv run --with fonttools --with uharfbuzz python docs/images/brand.py
 
@@ -12,6 +13,8 @@ at a pinned commit into candor's cache.
 import hashlib
 import math
 import os
+import subprocess
+import tempfile
 import urllib.request
 from pathlib import Path
 
@@ -24,6 +27,7 @@ from fontTools.varLib.instancer import instantiateVariableFont
 
 HERE = Path(__file__).parent
 CACHE = Path(os.environ.get("CANDOR_CACHE", Path.home() / ".cache" / "candor")) / "fonts"
+CHROME = os.environ.get("CANDOR_CHROME", "/Applications/Google Chrome.app/Contents/MacOS/Google Chrome")
 FONTS_AT = "https://raw.githubusercontent.com/google/fonts/e7db6ca603fd4862010383ff17ffd6cc4ffac1c0/ofl"
 FONTS = {
     "SourceSerif4[opsz,wght].ttf": (
@@ -144,6 +148,16 @@ fill-opacity="0.8"/>"""
     return svg(width, height, "candor: removes a language model's refusal direction", body)
 
 
+def header() -> str:
+    """The logo alone on ink, for the top of a model card, where the viewer's theme can't be known."""
+    width, height = 1000, 180
+    _, lockup_width, _ = lockup(0, 0, r=36)
+    body, _, _ = lockup((width - lockup_width) / 2, height / 2, r=36)
+    return svg(
+        width, height, "candor", f'<rect width="{width}" height="{height}" rx="14" fill="{INK}"/>\n{body}'
+    )
+
+
 def logo(on: str) -> str:
     """The mark and the name with no background, cropped to them."""
     r = 44
@@ -165,12 +179,42 @@ def avatar() -> str:
     return svg(size, size, "candor", body)
 
 
+def png(name: str, width: int, height: int) -> None:
+    """Renders NAME.svg as NAME.png at twice its size, with its rounded corners transparent."""
+    with tempfile.TemporaryDirectory() as folder:
+        page, image = Path(folder) / "page.html", (HERE / name).with_suffix(".svg").as_uri()
+        page.write_text(
+            f'<body style="margin:0;background:transparent"><img src="{image}" width="{width}" '
+            f'height="{height}" style="display:block"></body>'
+        )
+        subprocess.run(
+            [
+                CHROME,
+                "--headless=new",
+                "--allow-file-access-from-files",
+                "--hide-scrollbars",
+                "--default-background-color=00000000",
+                "--force-device-scale-factor=2",
+                f"--user-data-dir={folder}",
+                f"--window-size={width},{height}",
+                f"--screenshot={HERE / name}.png",
+                page.as_uri(),
+            ],
+            check=True,
+            capture_output=True,
+        )
+
+
 def main() -> None:
     (HERE / "banner.svg").write_text(banner())
     (HERE / "avatar.svg").write_text(avatar())
+    (HERE / "header.svg").write_text(header())
     for on in ON:
         (HERE / f"logo-{on}.svg").write_text(logo(on))
         (HERE / f"mark-{on}.svg").write_text(bare_mark(on))
+    png("avatar", 512, 512)
+    png("header", 1000, 180)
+    png("banner", 1000, 290)
 
 
 if __name__ == "__main__":

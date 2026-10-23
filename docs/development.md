@@ -35,9 +35,9 @@ and llama.cpp and its converter environment if candor hasn't fetched them yet. N
 ## Images
 
 - `docs/images/draw.py` draws the README's diagrams, in a light and a dark version each.
-- `docs/images/brand.py` draws the brand files: the logo, the mark, the avatar and the banner. Their
-  type is outlined from Source Serif 4 and Inter, under the SIL Open Font License, fetched at a
-  pinned commit and checked by sha256.
+- `docs/images/brand.py` draws the brand files: the logo, the mark, the avatar, the banner and the
+  model cards' header, and renders their PNGs with Chrome. Their type is outlined from Source Serif 4
+  and Inter, under the SIL Open Font License, fetched at a pinned commit and checked by sha256.
 
 ```
 uv run python docs/images/draw.py

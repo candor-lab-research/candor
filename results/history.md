@@ -1214,3 +1214,11 @@ The user asked for the new logo and the README's styling to be used for everythi
 `docs/brand.md` holds it: the mark and its files, the colours on dark and light, the type, layout,
 charts and voice. `brand.py` now also draws the logo and the mark alone for dark and light
 backgrounds, and the avatar is `avatar.svg`. STATUS's way of working points to it.
+
+### The brand on Hugging Face: every model card and the org card (the user, 2026-10-23)
+
+Each of the four released cards now opens with `header.png`, the logo on ink, and the org card with
+the banner, each repository carrying its own copy; nothing else in the cards changed. Uploaded from
+candor-team after checking the live cards matched the staging folders. The avatar is ready as
+`docs/images/avatar.png`; neither GitHub nor Hugging Face has an API for an org's picture, so the
+user uploads it.

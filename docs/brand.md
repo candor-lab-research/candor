@@ -22,6 +22,8 @@ along itself: the one direction candor removes. Its files are in `images/`:
 | `mark-dark.svg`, `mark-light.svg` | The mark alone |
 | `avatar.svg` | Profile pictures (GitHub, Hugging Face): the mark on ink, safe to crop to a circle |
 | `banner.svg` | The README's header |
+| `header.svg` | The top of every model card, on its own ink since a card's theme can't be known |
+| `avatar.png`, `header.png`, `banner.png` | PNG renders for sites that need them: profile pictures, model cards and the Hugging Face org card |
 
 - Leave clear space around the logo of at least half the disc's width.
 - The smallest sizes are 16 px tall for the mark and 24 px for the logo.
@@ -29,6 +31,8 @@ along itself: the one direction candor removes. Its files are in `images/`:
   rotate, outline or add effects to the mark, or set the name in another typeface.
 - The name is always lowercase: candor.
 - Use the files `brand.py` draws; never type the name in a live font as a logo.
+- Model cards open with `header.png`, right after their front matter; the org card opens with
+  `banner.png`. Each repository carries its own copy.
 
 ## Colour
 
