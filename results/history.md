@@ -1207,3 +1207,10 @@ with the middle one pulled out along itself: the direction candor removes. It wa
 directions drawn and compared at banner and favicon sizes (a C ring was dropped as too close to
 Coinbase's mark). The name is set in Source Serif 4, the rest in Inter, all outlined by
 `docs/images/brand.py`, which also draws `mark.svg` for profile pictures.
+
+### The brand made the standard for anything visual (the user, 2026-10-23)
+
+The user asked for the new logo and the README's styling to be used for everything from now on.
+`docs/brand.md` holds it: the mark and its files, the colours on dark and light, the type, layout,
+charts and voice. `brand.py` now also draws the logo and the mark alone for dark and light
+backgrounds, and the avatar is `avatar.svg`. STATUS's way of working points to it.

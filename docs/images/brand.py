@@ -1,5 +1,5 @@
-"""Draws candor's mark, its avatar and the README's banner, every letter as an outline so they look
-the same everywhere:
+"""Draws candor's brand files (docs/brand.md says how to use them), every letter as an outline so
+they look the same everywhere:
 
     uv run --with fonttools --with uharfbuzz python docs/images/brand.py
 
@@ -16,6 +16,7 @@ import urllib.request
 from pathlib import Path
 
 import uharfbuzz as hb
+from fontTools.pens.boundsPen import BoundsPen
 from fontTools.pens.svgPathPen import SVGPathPen
 from fontTools.pens.transformPen import TransformPen
 from fontTools.ttLib import TTFont
@@ -39,6 +40,8 @@ TEXT = ("Inter[opsz,wght].ttf", {"opsz": 20, "wght": 400})
 CAPS = ("Inter[opsz,wght].ttf", {"opsz": 20, "wght": 500})
 
 INK, WHITE, MINT, GREY = "#0d1117", "#f0f6fc", "#5fd7af", "#c9d1d9"
+# The stripes' and name's colour, and the accent's, on each kind of background.
+ON = {"dark": (WHITE, MINT), "light": (INK, "#0a7d5f")}
 STRIPES, GAP = 7, 0.55  # a gap is this many stripes wide
 PULL = 0.2  # how far the middle stripe is pulled out, in disc widths
 
@@ -57,7 +60,8 @@ def font(name: str) -> Path:
 
 
 def typeset(file: str, axes: dict[str, float], text: str, size: float, tracking: float = 0.0):
-    """The text as one outline at a size in px, its baseline at y=0, with its width and x-height."""
+    """The text as one outline at a size in px, its baseline at y=0, with its width, x-height and
+    top (above the baseline, so negative)."""
     path = font(file)
     static = instantiateVariableFont(TTFont(path), axes)
     shaper = hb.Font(hb.Face(hb.Blob.from_file_path(str(path))))
@@ -70,17 +74,21 @@ def typeset(file: str, axes: dict[str, float], text: str, size: float, tracking:
     em = static["head"].unitsPerEm
     scale = size / em
     pen = SVGPathPen(glyphs, ntos=lambda v: f"{v:.2f}".rstrip("0").rstrip("."))
+    bounds = BoundsPen(glyphs)
     x = 0.0
     for info, position in zip(buffer.glyph_infos, buffer.glyph_positions, strict=True):
         at = (scale, 0, 0, -scale, (x + position.x_offset) * scale, -position.y_offset * scale)
         glyphs[order[info.codepoint]].draw(TransformPen(pen, at))
+        glyphs[order[info.codepoint]].draw(TransformPen(bounds, at))
         x += position.x_advance + tracking * em
-    return pen.getCommands(), (x - tracking * em) * scale, static["OS/2"].sxHeight * scale
+    width, x_height = (x - tracking * em) * scale, static["OS/2"].sxHeight * scale
+    return pen.getCommands(), width, x_height, bounds.bounds[1]
 
 
-def mark(cx: float, cy: float, r: float, fill: str = WHITE) -> str:
+def mark(cx: float, cy: float, r: float, on: str = "dark") -> str:
     """The disc's stripes, centred on cx,cy, with the middle stripe pulled out to the right."""
     stripe = 2 * r / (STRIPES + (STRIPES - 1) * GAP)
+    fill, accent = ON[on]
     parts = []
     for i in range(STRIPES):
         top = -r + i * stripe * (1 + GAP)
@@ -89,7 +97,7 @@ def mark(cx: float, cy: float, r: float, fill: str = WHITE) -> str:
         if i == STRIPES // 2:
             left = cx - a + PULL * 2 * r
             d = f"M{left:.2f},{cy + top:.2f} h{2 * a:.2f} v{stripe:.2f} h{-2 * a:.2f} Z"
-            parts.append(f'<path d="{d}" fill="{MINT}"/>')
+            parts.append(f'<path d="{d}" fill="{accent}"/>')
             continue
         d = (
             f"M{cx - a:.2f},{cy + top:.2f} H{cx + a:.2f} A{r},{r} 0 0 1 {cx + b:.2f},{cy + bottom:.2f} "
@@ -108,24 +116,46 @@ height="{height}" role="img" aria-label="{title}">
 """
 
 
+def lockup(x: float, y: float, on: str = "dark", r: float = 44) -> tuple[str, float, float]:
+    """The mark and the name side by side from x, centred on y, the name's x-height on the pulled-out
+    stripe; with its width and how far the name rises above the mark."""
+    gap = 28 * r / 44
+    name, name_width, x_height, top = typeset(*NAME[:2], "candor", 88 * r / 44, NAME[2])
+    name_x = x + 2 * r * (1 + PULL) + gap
+    base = y + x_height / 2
+    body = f"""{mark(x + r, y, r, on)}
+<path transform="translate({name_x:.2f} {base:.2f})" d="{name}" fill="{ON[on][0]}"/>"""
+    return body, name_x + name_width - x, max(y - r - (base + top), 0.0)
+
+
 def banner() -> str:
-    width, height, r, gap = 1000, 290, 44, 28
-    name, name_width, x_height = typeset(*NAME[:2], "candor", 88, NAME[2])
+    width, height = 1000, 290
     line = "Removes a language model's refusal direction, measured on the file you ship."
-    text, text_width, _ = typeset(*TEXT, line, 20)
-    caps, caps_width, _ = typeset(*CAPS, "LLAMA.CPP     QUANTISED GGUF     THINKING MODELS", 11, 0.16)
-    # The mark and the name side by side, centred, the name's x-height on the pulled-out stripe.
-    lockup = 2 * r * (1 + PULL) + gap + name_width
-    cx, cy = (width - lockup) / 2 + r, 95
-    name_x = cx + r + PULL * 2 * r + gap
+    text, text_width, _, _ = typeset(*TEXT, line, 20)
+    caps, caps_width, _, _ = typeset(*CAPS, "LLAMA.CPP     QUANTISED GGUF     THINKING MODELS", 11, 0.16)
+    _, lockup_width, _ = lockup(0, 0)
+    logo, _, _ = lockup((width - lockup_width) / 2, 95)
     body = f"""<rect width="{width}" height="{height}" rx="14" fill="{INK}"/>
-{mark(cx, cy, r)}
-<path transform="translate({name_x:.2f} {cy + x_height / 2:.2f})" d="{name}" fill="{WHITE}"/>
+{logo}
 <rect x="{width / 2 - 24}" y="170" width="48" height="1.5" fill="{MINT}" fill-opacity="0.7"/>
 <path transform="translate({(width - text_width) / 2:.2f} 208)" d="{text}" fill="{GREY}"/>
 <path transform="translate({(width - caps_width) / 2:.2f} 240)" d="{caps}" fill="{MINT}" \
 fill-opacity="0.8"/>"""
     return svg(width, height, "candor: removes a language model's refusal direction", body)
+
+
+def logo(on: str) -> str:
+    """The mark and the name with no background, cropped to them."""
+    r = 44
+    _, width, rise = lockup(0, 0, on, r)
+    body, _, _ = lockup(0, r + rise, on, r)
+    return svg(round(width), round(2 * r + rise), "candor", body)
+
+
+def bare_mark(on: str) -> str:
+    """The mark alone with no background, cropped to it."""
+    r = 50
+    return svg(round(2 * r * (1 + PULL)), 2 * r, "candor", mark(r, r, r, on))
 
 
 def avatar() -> str:
@@ -137,7 +167,10 @@ def avatar() -> str:
 
 def main() -> None:
     (HERE / "banner.svg").write_text(banner())
-    (HERE / "mark.svg").write_text(avatar())
+    (HERE / "avatar.svg").write_text(avatar())
+    for on in ON:
+        (HERE / f"logo-{on}.svg").write_text(logo(on))
+        (HERE / f"mark-{on}.svg").write_text(bare_mark(on))
 
 
 if __name__ == "__main__":

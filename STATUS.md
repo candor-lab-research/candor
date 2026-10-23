@@ -39,6 +39,8 @@ thinking on (next, e.g. Qwen3.8-27B). A 9B model must not take days.
 - At each phase end, run the e2e test (`CANDOR_E2E=1 uv run pytest tests/test_e2e.py`): nothing else
   runs it.
 - Next models are picked by gap (the user, 2026-10-23): `results/evidence-2026-10-23/gaps.md`.
+- Anything visual (README, docs, diagrams, model cards, pages, charts) follows `docs/brand.md` (the
+  user, 2026-10-23).
 
 ## Now: waiting for the user
 

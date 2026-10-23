@@ -129,6 +129,7 @@ Each is the export candor measured.
 - **[Models](docs/models.md):** thinking models, sampling, slots, and what fits where
 - **[Pods](docs/pods.md):** running big models and long jobs on Runpod
 - **[Development](docs/development.md):** tests, tools and the images
+- **[Brand](docs/brand.md):** the mark, colours and type, for anything visual
 - **[STATUS.md](STATUS.md):** the plan: what is done, now and next
 - **[results/](results/):** every measurement, finding and decision
 
