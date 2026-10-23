@@ -63,7 +63,7 @@ thinking on (next, e.g. Qwen3.8-27B). A 9B model must not take days.
      adapters loaded into one server, package 11 (the answer reusing its thinking's cache, untimed;
      skipped for the 27B);
    - a reference measured before 2026-10-19 is measured again before a new measurement is compared
-     with it (`compare` refuses the pair; README);
+     with it (`compare` refuses the pair; `docs/commands.md`);
    - the search scoring on the base it ships, edited tensors at Q8_0 too (only where quantisation
      loses edits, as on rude-llama), and whether it should score more prompts (per-layer refusals
      and layer-14 KL didn't hold on rude-llama's held-out prompts);

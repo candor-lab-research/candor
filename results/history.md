@@ -218,9 +218,9 @@ From the 2026-10-10 paper review, corrected after the full review read each pape
 
 - heretic and `tune/heretic-kit`: frozen, no new features. The guide stays as reference.
 - `tune/abliterate.py`: deleted 2026-10-10. candor does the same job.
-- Cut 2026-10-10 for depth first: `candor doctor`, a live dashboard, one-command pod
-  orchestration, rewriting the guide (the README is the documentation), and support for more
-  model families (the existing mixture-of-experts, Gemma and GLM checks stay as they are).
+- Cut 2026-10-10 for depth first: `candor doctor`, a live dashboard, one-command pod orchestration,
+  rewriting the guide (the README and `docs/` are the documentation), and support for more model
+  families (the existing mixture-of-experts, Gemma and GLM checks stay as they are).
 - Optuna is pinned below 5 (4.9, the version heretic ran), so rude-llama's search uses the same
   sampler that found Trial 170. Optuna 5 changed multivariate TPE's bandwidth and its
   multi-objective weights; worth trying once candor has its own baseline, for example on Qwen3.5.
@@ -1188,3 +1188,13 @@ heretic's issues are weak evidence (#218 was a broken measurement). The order it
 with tests on tiny random MoE models on the Mac, optionally OLMoE-1B-7B on an A40, then Laguna-XS-2.1
 on pods; Granite-3.1-3B-A800M moves later. Whether to build it, and how Laguna-XS is used (thinking
 on or off), are the user's decisions.
+
+### The README made a front page; its reference moved to `docs/` (the user, 2026-10-23)
+
+The user found the README one block of text, hard to follow on GitHub. It is now a front page: a
+banner, two diagrams (why candor scores the file you run, and its four stages) in a light and a dark
+version drawn by `docs/images/draw.py`, the menus rendered from a real run, a quick start, the
+commands and the released models. The reference it held moved, every fact kept, into
+`docs/commands.md`, `docs/models.md`, `docs/pods.md` and `docs/development.md`, with tables for
+options and settings. Checked with GitHub's renderer in both themes, every link and anchor
+resolving.
