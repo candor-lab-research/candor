@@ -1,5 +1,5 @@
 <p align="center">
-  <img src="docs/images/banner.svg" width="100%" alt="candor: remove a model's refusal direction, scored the way you actually run it">
+  <img src="docs/images/banner.svg" width="100%" alt="candor: removes a language model's refusal direction, measured on the file you ship">
 </p>
 
 <p align="center">

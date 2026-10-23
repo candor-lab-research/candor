@@ -1,10 +1,9 @@
-"""Draws the README's diagrams, each in a light and a dark version for GitHub's two themes, and the
-banner, which carries its own background:
+"""Draws the README's diagrams, each in a light and a dark version for GitHub's two themes (the
+banner and the mark are brand.py's):
 
     uv run python docs/images/draw.py
 """
 
-import math
 from pathlib import Path
 
 HERE = Path(__file__).parent
@@ -227,72 +226,7 @@ def pipeline(colours: dict[str, str]) -> str:
     return svg(4 * width + 3 * gap, height, "How candor works, in four stages", "\n".join(parts), colours)
 
 
-# The banner: an activation losing its part along the refusal direction.
-
-
-def banner() -> str:
-    pills = ["llama.cpp", "quantised GGUF", "thinking models", "answers never printed"]
-    x, chips = 60, []
-    for words in pills:
-        width = len(words) * 7.5 + 28
-        chips += [
-            f'<rect x="{x}" y="204" width="{width}" height="30" rx="15" fill="#5fd7af" fill-opacity="0.08" '
-            'stroke="#5fd7af" stroke-opacity="0.45"/>',
-            f'<text x="{x + width / 2}" y="224" fill="#a7ecd5" font-size="13.5" '
-            f'text-anchor="middle">{words}</text>',
-        ]
-        x += width + 10
-    ox, oy, tx, ty = 742, 200, 900, 70
-    angle = math.degrees(math.atan2(ty - oy, tx - ox))
-    body = f"""<defs>
-  <linearGradient id="sky" x1="0" y1="0" x2="1" y2="1">
-    <stop offset="0" stop-color="#0d1117"/><stop offset="0.55" stop-color="#0f1c22"/>
-    <stop offset="1" stop-color="#0c3128"/>
-  </linearGradient>
-  <radialGradient id="glow" cx="0.82" cy="0.5" r="0.45">
-    <stop offset="0" stop-color="#5fd7af" stop-opacity="0.16"/>
-    <stop offset="1" stop-color="#5fd7af" stop-opacity="0"/>
-  </radialGradient>
-  <pattern id="dots" width="22" height="22" patternUnits="userSpaceOnUse">
-    <circle cx="2" cy="2" r="1" fill="#ffffff" fill-opacity="0.06"/>
-  </pattern>
-  <marker id="tip" viewBox="0 0 10 10" refX="8" refY="5" markerWidth="6" markerHeight="6" orient="auto">
-    <path d="M0,0 L10,5 L0,10 z" fill="#5fd7af"/>
-  </marker>
-  <marker id="tip-grey" viewBox="0 0 10 10" refX="8" refY="5" markerWidth="6" markerHeight="6" orient="auto">
-    <path d="M0,0 L10,5 L0,10 z" fill="#8b949e"/>
-  </marker>
-  <clipPath id="frame"><rect width="1000" height="260" rx="18"/></clipPath>
-</defs>
-<g clip-path="url(#frame)">
-  <rect width="1000" height="260" fill="url(#sky)"/>
-  <rect width="1000" height="260" fill="url(#dots)"/>
-  <rect width="1000" height="260" fill="url(#glow)"/>
-</g>
-<text x="56" y="108" fill="#f0f6fc" font-size="76" font-weight="800" letter-spacing="-2">candor</text>
-<text x="60" y="148" fill="#c9d1d9" font-size="22">Remove a model's refusal direction,</text>
-<text x="60" y="178" fill="#5fd7af" font-size="22" font-weight="600">\
-scored the way you actually run it.</text>
-{chr(10).join(chips)}
-<line x1="{ox}" y1="{oy + 14}" x2="{ox}" y2="38" stroke="#f0883e" stroke-opacity="0.55" stroke-width="1.5" \
-stroke-dasharray="5 5"/>
-<text x="{ox - 10}" y="34" fill="#f0883e" font-size="13" text-anchor="end">refusal direction</text>
-<line x1="{tx}" y1="{ty}" x2="{tx}" y2="{oy}" stroke="#f0883e" stroke-width="2" stroke-dasharray="5 4"/>
-<text x="{tx + 12}" y="{(ty + oy) / 2 + 4}" fill="#f0883e" font-size="13">removed</text>
-<path d="M{tx - 11},{oy} V{oy - 11} H{tx}" fill="none" stroke="#8b949e" stroke-width="1.2"/>
-<line x1="{ox}" y1="{oy}" x2="{tx - 3}" y2="{ty + 3}" stroke="#8b949e" stroke-width="2.5" \
-marker-end="url(#tip-grey)"/>
-<text transform="translate({(ox + tx) / 2 - 7} {(oy + ty) / 2 - 9}) rotate({angle:.1f})" fill="#8b949e" \
-font-size="13" text-anchor="middle">activation</text>
-<line x1="{ox}" y1="{oy}" x2="{tx - 4}" y2="{oy}" stroke="#5fd7af" stroke-width="3.5" marker-end="url(#tip)"/>
-<text x="{(ox + tx) / 2}" y="{oy + 26}" fill="#5fd7af" font-size="13" text-anchor="middle">edited</text>
-<circle cx="{ox}" cy="{oy}" r="4" fill="#f0f6fc"/>"""
-    title = "candor: remove a model's refusal direction, scored the way you actually run it"
-    return svg(1000, 260, title, body)
-
-
 def main() -> None:
-    (HERE / "banner.svg").write_text(banner())
     for theme, colours in THEMES.items():
         (HERE / f"why-{theme}.svg").write_text(why(colours))
         (HERE / f"pipeline-{theme}.svg").write_text(pipeline(colours))

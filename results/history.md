@@ -1198,3 +1198,12 @@ commands and the released models. The reference it held moved, every fact kept, 
 `docs/commands.md`, `docs/models.md`, `docs/pods.md` and `docs/development.md`, with tables for
 options and settings. Checked with GitHub's renderer in both themes, every link and anchor
 resolving.
+
+### candor given a mark and a wordmark (the user, 2026-10-23)
+
+The user found the banner's vector drawing basic and asked for a logo fit for a professional,
+institutional lab. The mark is a disc of seven stripes, a representation split into its directions,
+with the middle one pulled out along itself: the direction candor removes. It was chosen from seven
+directions drawn and compared at banner and favicon sizes (a C ring was dropped as too close to
+Coinbase's mark). The name is set in Source Serif 4, the rest in Inter, all outlined by
+`docs/images/brand.py`, which also draws `mark.svg` for profile pictures.
