@@ -42,9 +42,9 @@ thinking on (next, e.g. Qwen3.8-27B). A 9B model must not take days.
 
 ## Now: waiting for the user
 
-- Phases 3 to 5 wait only on the phase-end discussion (Next, 1). Released: K2's trial 205 as
-  `candor-lab/K2-Horizon-7B-Candor-Uncensored-GGUF`, the 27B's trial 532 as
-  `candor-lab/Qwen3.8-27B-Candor-Uncensored-GGUF` (history). No pods are running.
+- Phases 3 to 5 wait only on the rest of the phase-end discussion (Next, 1); the ranking clause is
+  decided. Released: K2's trial 205 as `candor-lab/K2-Horizon-7B-Candor-Uncensored-GGUF`, the
+  27B's trial 532 as `candor-lab/Qwen3.8-27B-Candor-Uncensored-GGUF` (history). No pods are running.
 - 20 ideas from arXiv are ranked in `results/new-features.md`.
 - Evidence for the discussion (2026-10-19): `results/evidence-2026-10-19/method-evidence.md` (the
   upstream check, six method questions), `cost-27b.md` and `pod-checks.md` (the 8B judge and row
@@ -52,9 +52,10 @@ thinking on (next, e.g. Qwen3.8-27B). A 9B model must not take days.
 
 ## Next
 
-1. The phase-end discussion, opening with the ranking clause (unsafe answers, its reading:
-   history, steps 5 and 6) and the one-layer best at peak layer's floor (findings); no other method
-   changes until agreed.
+1. Before the next model, the rest of the phase-end discussion (history, 2026-10-23): the search's
+   range ends (peak layer's floor, findings; rude-llama's 535 at attention's peak floor and reach's
+   ceiling), the cost and time against the release gate, then the phase close (the e2e test,
+   findings' tagged lines, the next model by gap). No other method changes until agreed.
 2. Phase 4, later: low effort's two closes; Uno not now. The budget limit
    (`search.max_budget_hits`, on K2 from trial 138) costs no measurable hits on the simulator and
    stays on (results file, step 5).
@@ -67,8 +68,6 @@ thinking on (next, e.g. Qwen3.8-27B). A 9B model must not take days.
    - the search scoring on the base it ships, edited tensors at Q8_0 too (only where quantisation
      loses edits, as on rude-llama), and whether it should score more prompts (per-layer refusals
      and layer-14 KL didn't hold on rude-llama's held-out prompts);
-   - rude-llama: one search with the attention peak's floor and reach's ceiling widened (535 presses
-     both);
    - llama-server's chat endpoint may count prompt tokens against the thinking budget (seen on a
      tiny model only); K2's budget message was written for a close that starts with a newline;
    - the directions stage keeps the embedding output it never reads and pads residual batches
@@ -97,7 +96,8 @@ thinking on (next, e.g. Qwen3.8-27B). A 9B model must not take days.
   `candor proxy` shows it ranks edits as thinking on does, for each new model.
 - The reference is heretic's Trial 161, re-saved by heretic, exported and measured as candor ships
   its edits. Maths: the full 1,319 GSM8K questions on finalists only.
-- The decision rule, signed off 2026-10-14 (text in `results/history.md`). Optuna stays 4.9.
+- The decision rule: the 27B's (2026-10-19), finalists ranked on unsafe answers from the next
+  model on (both in `results/history.md`). Optuna stays 4.9.
 
 ### Steps
 

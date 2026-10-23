@@ -206,8 +206,13 @@ entry is corrected, dropped or overturned is in CLAUDE.md ("Finished, dropped an
   answer start, so kind and direction are mixed. The rule counts refusals, not this. [Measured:
   Qwen3.8-27B, 251 and 532 again, 288 held-out, answers read to 1,024 tokens] Not the cap's: 254
   against 275 (p 9.5e-7; the 8B 247 against 269, p 3e-6), and 27 of 251's 34 answers not judged
-  unsafe end within 1,024 tokens. Whether the decision rule should count unsafe answers is for the
-  phase-end discussion. (`phase-5-qwen3.8-27b.md`, steps 5 and 6)
+  unsafe end within 1,024 tokens. Finalists are now ranked on it (history, 2026-10-23). [Published]
+  HarmBench (Mazeika et al. 2024, arXiv:2402.04249) and StrongREJECT (Souly et al. 2024,
+  arXiv:2402.10260) score whether a harmful request was carried out, and StrongREJECT finds that
+  counting answers that don't refuse overstates it. [Measured:
+  K2 205 and 114, Qwen3.5-9B 175 and 205, stored labels, both judges] Where refusals separate
+  finalists, unsafe agrees; where they tie, it is level, so it changes no earlier pick.
+  (`phase-5-qwen3.8-27b.md`, steps 5 and 6)
 - **A cap on budget hits saves pod time and, pooled, costs no picks.** [Measured: a replay on
   K2-Horizon-7B's journal, then K2 from trial 138; the miss-rate simulator (`tools/misscheck/`),
   45,360 searches] With
@@ -235,12 +240,16 @@ entry is corrected, dropped or overturned is in CLAUDE.md ("Finished, dropped an
   0.121. At 0.7 it still refused 17 of 100 as used. (`phase-5-qwen3.8-27b.md`, step 1)
 - **Per-layer edits press the 3.0 ceiling on attention.** [Measured: Qwen3.5-9B, one search] Every
   per-layer best puts attention at 2.9-3.0, so a better per-layer edit may lie beyond it. (step 6)
-- **The 27B's best edits press the floor of 0.6 on peak layer.** [Measured: Qwen3.8-27B at medium,
-  150 trials thinking off] Both kinds' best within the cap put a peak layer at 0.60-0.62; the one-layer
-  best also puts MLP strength at 4.96 of the widest 5. At 600 trials the one-layer best still does
-  (trials 435 and 477 at 0.614 and 0.602); the per-layer best no longer does. [Hypothesis] A better
-  one-layer edit lies below 0.6: a short one-layer search with peak layer from 0.4 tests it.
-  (`phase-5-qwen3.8-27b.md`, steps 2 and 3)
+- **The best edits lie near peak layer's floor of 0.6, but seldom press it.** [Measured: the
+  searches of Llama-3.2-3B, Qwen3.5-9B, K2-Horizon-7B and Qwen3.8-27B, 313-600 trials each, as each
+  search scored, within the cap] Every one-layer best puts its lowest peak at 0.61-0.63, and the
+  per-layer bests of K2 and the 27B at 0.617 and 0.621 (Llama and Qwen 9B: 0.708, 0.680). By
+  candor's edge test (within 0.02) only two of the eight press it: the 27B's one-layer best and K2's
+  per-layer one. Most trials within the cap sit nearest the floor (384 of 629), so best KL falling
+  toward it (K2, the 27B) can't be told from that band's larger count. The floor is fixed in
+  heretic, which notes its ranges may need adjusting for new models. [Hypothesis] Better edits lie below 0.6: a floor of 0.4 for new runs, checked first on the
+  miss-rate simulator for what the wider range costs where the best lies inside 0.6-1.0.
+  (`evidence-2026-10-23/floor.txt`)
 - **Refusals fall gradually as strength rises; there is no cliff.** [Measured: 8 searches on 3
   models] [Published] The literature agrees. (`evidence-2026-10-14/data-report.md`,
   `lit-refusal.md`)

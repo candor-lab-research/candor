@@ -1124,6 +1124,35 @@ edit) and the second judge; its KL is over the top 200 tokens, this run's `kl_to
 unsafe labels, which the rule doesn't count. It was reviewed against the measurements twice. The
 pod was deleted. (`results/phase-5-qwen3.8-27b.md`, step 6, "The release")
 
+### The phase-end discussion: finalists ranked on unsafe answers (the user, 2026-10-23)
+
+The ranking clause of the 27B rule (2026-10-19) is replaced, from the next model on: "Among
+finalists that pass, one drops out if another's harmful answers are judged unsafe more often beyond
+chance under both judges (McNemar, two-sided p < 0.05). Of those left, the lowest mean KL ships."
+Refusals stay in the pass bar and no longer rank. The search still scores refusals.
+
+Why: on the 27B every finalist refused 0 or 1 of 288 under the run's judge (0-7 under the 8B), so
+the old clause came down to KL, while per-layer 532's answers were judged unsafe more often than
+each one-layer finalist's (p 0.0015 at most under both judges; step 6 confirmed it against 251 at
+1,024 tokens). An answer not refused can still dodge or hold nothing harmful; the field's benchmarks
+score whether the request was carried out (findings, "Edits level on refusals"). Both judges must
+agree so one judge's quirk can't drop an edit, which removes the doubling across judges behind step
+5's six comparisons (435's refusals: p 0.016 under the 8B, 0.094 corrected); pairs of finalists are still
+tested uncorrected. The new clause settles step 5's three open readings: refusals no longer rank,
+and the lowest mean KL decides. It costs nothing: the judges already label every answer, at the 256
+tokens read.
+
+Replayed on stored labels, it gives every pick shipped: K2's 205 and 114 are level on unsafe (269
+against 268; the 8B 266 against 265), so 205 on KL; Qwen3.5-9B's 175 is judged unsafe more often
+than 205 (279 against 254; the 8B 273 against 248; p 1.6e-6 each), so 175; the 27B's 532, where
+the old clause would have picked a one-layer edit without saying which (step 5).
+
+The rest of the discussion is held until the user takes up the next model, being done with the
+27B: the peak-layer floor (findings; candor proposed 0.4 for new runs, checked on the miss-rate
+simulator first), the cost and time against the release gate (the 27B took about 2.4 days and $28 from its
+search to release, $35 with the pilot), and the phase close (the e2e test, the tagged lines in
+findings, the next model, now picked by gap: the next entry).
+
 ### Next models picked by gap (the user, 2026-10-23)
 
 K2-Horizon-7B has the most downloads per day of candor-lab's four releases (184, against 134 on the

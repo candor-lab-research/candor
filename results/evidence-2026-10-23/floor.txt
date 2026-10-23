@@ -1,0 +1,54 @@
+## runs/rude: peak_layer 0.6-1.0, 600 trials
+  one layer: 54 within the cap; best KL 0.0760 at lowest peak 0.621,
+    which doesn't press the floor by candor's edge test (at or below 0.62)
+    top 10 by KL at or below 0.62: 4
+    lowest peak 0.60-0.65: 33 trials, best KL 0.0760
+    lowest peak 0.65-0.70: 21 trials, best KL 0.0764
+  per layer: 100 within the cap; best KL 0.0831 at lowest peak 0.708,
+    which doesn't press the floor by candor's edge test (at or below 0.62)
+    top 10 by KL at or below 0.62: 0
+    lowest peak 0.60-0.65: 46 trials, best KL 0.0876
+    lowest peak 0.65-0.70: 16 trials, best KL 0.0861
+    lowest peak 0.70-0.80: 35 trials, best KL 0.0831
+    lowest peak 0.80-0.90: 3 trials, best KL 0.0878
+## runs/qwen: peak_layer 0.6-1.0, 545 trials
+  one layer: 64 within the cap; best KL 0.0294 at lowest peak 0.632,
+    which doesn't press the floor by candor's edge test (at or below 0.62)
+    top 10 by KL at or below 0.62: 4
+    lowest peak 0.60-0.65: 50 trials, best KL 0.0294
+    lowest peak 0.65-0.70: 8 trials, best KL 0.0349
+    lowest peak 0.70-0.80: 6 trials, best KL 0.0331
+  per layer: 85 within the cap; best KL 0.0789 at lowest peak 0.680,
+    which doesn't press the floor by candor's edge test (at or below 0.62)
+    top 10 by KL at or below 0.62: 0
+    lowest peak 0.60-0.65: 57 trials, best KL 0.0826
+    lowest peak 0.65-0.70: 21 trials, best KL 0.0789
+    lowest peak 0.70-0.80: 7 trials, best KL 0.0805
+## runs/k2: peak_layer 0.6-1.0, 313 trials
+  one layer: 15 within the cap; best KL 0.0240 at lowest peak 0.624,
+    which doesn't press the floor by candor's edge test (at or below 0.62)
+    top 10 by KL at or below 0.62: 4
+    lowest peak 0.60-0.65: 10 trials, best KL 0.0240
+    lowest peak 0.65-0.70: 4 trials, best KL 0.0517
+    lowest peak 0.70-0.80: 1 trials, best KL 0.1339
+  per layer: 54 within the cap; best KL 0.0470 at lowest peak 0.617,
+    which presses the floor by candor's edge test (at or below 0.62)
+    top 10 by KL at or below 0.62: 5
+    lowest peak 0.60-0.65: 34 trials, best KL 0.0470
+    lowest peak 0.65-0.70: 10 trials, best KL 0.0529
+    lowest peak 0.70-0.80: 10 trials, best KL 0.0837
+## runs/qwen27b-medium: peak_layer 0.6-1.0, 600 trials
+  one layer: 116 within the cap; best KL 0.0188 at lowest peak 0.614,
+    which presses the floor by candor's edge test (at or below 0.62)
+    top 10 by KL at or below 0.62: 3
+    lowest peak 0.60-0.65: 59 trials, best KL 0.0188
+    lowest peak 0.65-0.70: 23 trials, best KL 0.0210
+    lowest peak 0.70-0.80: 32 trials, best KL 0.0262
+    lowest peak 0.80-0.90: 2 trials, best KL 0.0578
+  per layer: 141 within the cap; best KL 0.0254 at lowest peak 0.621,
+    which doesn't press the floor by candor's edge test (at or below 0.62)
+    top 10 by KL at or below 0.62: 3
+    lowest peak 0.60-0.65: 95 trials, best KL 0.0254
+    lowest peak 0.65-0.70: 27 trials, best KL 0.0393
+    lowest peak 0.70-0.80: 18 trials, best KL 0.0430
+    lowest peak 0.80-0.90: 1 trials, best KL 0.0976
