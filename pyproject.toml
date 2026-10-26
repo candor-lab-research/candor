@@ -3,6 +3,8 @@ name = "candor"
 version = "0.1.0"
 description = "Remove a model's refusal direction, scored the way you actually run the model."
 readme = "README.md"
+license = "Apache-2.0"
+license-files = ["LICENSE"]
 requires-python = ">=3.12"
 dependencies = [
     # Never imported, but transformers needs it to load a model with device_map.

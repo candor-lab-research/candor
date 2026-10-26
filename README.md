@@ -133,4 +133,4 @@ Each is the export candor measured.
 - **[STATUS.md](STATUS.md):** the plan: what is done, now and next
 - **[results/](results/):** every measurement, finding and decision
 
-candor is in early development.
+candor is in early development. It is licensed under [Apache 2.0](LICENSE).
