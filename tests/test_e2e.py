@@ -217,7 +217,7 @@ MOE_SIZES = {
 MOE_MODELS = {
     "qwen3moe": lambda: Qwen3MoeForCausalLM(
         Qwen3MoeConfig(
-            **MOE_SIZES, intermediate_size=128, moe_intermediate_size=32, num_hidden_layers=2, head_dim=16,
+            **MOE_SIZES, intermediate_size=128, moe_intermediate_size=32, num_hidden_layers=2,
             num_experts=12, num_experts_per_tok=4,
         )
     ),
@@ -262,6 +262,7 @@ def test_expert_adapters_answer_as_the_experts_written_edited(converted, tmp_pat
     config = source.read_config(str(folder))
     layers = config["num_hidden_layers"]
     arch = targets.gguf_architecture(config)
+    assert arch is not None
     found = targets.find_targets(source.tensor_shapes(str(folder)), 64, layers)
     files = ModelFiles(folder)
     direction = torch.nn.functional.normalize(
