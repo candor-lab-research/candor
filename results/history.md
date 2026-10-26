@@ -1264,3 +1264,11 @@ Hugging Face cards now write candor and candor lab in lowercase in text and titl
 GGUF file names and `general.name` keep their spelling, as renaming them would break downloads and
 links. `docs/brand.md` states the rule. The Hugging Face org's display name, "Candor Lab", can only
 be changed on its settings page, by the user.
+
+### The code made public under Apache 2.0 (the user, 2026-10-26)
+
+The user chose to publish the repository ahead of the release gate.
+Before it went public: no keys, tokens, private keys, IP addresses or prompt and answer text in any
+file or commit; tests, lint and types clean. Licensed Apache 2.0 for its patent grant and because
+its LICENSE names no copyright holder; no heretic code is copied, so heretic's AGPL-3.0 doesn't
+apply. Public at https://github.com/candor-lab-research/candor.
