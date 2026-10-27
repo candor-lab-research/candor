@@ -247,7 +247,9 @@ entry is corrected, dropped or overturned is in CLAUDE.md ("Finished, dropped an
   press attention's peak floor and two reach's ceiling. Qwen 9B's one-layer top 10 all read the first
   direction layer the search reads (12). But most trials sit near those ends anyway (the 27B per
   layer: 95 of 141 within the cap peak at 0.60-0.65), and the simulator's landscapes crowd the same
-  way with nothing better beyond. (`evidence-2026-10-27/ranges.md`)
+  way with nothing better beyond. [Measured: rude-llama, 5 of its best trials, 12 moves, the search's
+  100 test prompts] Moved past the end it presses, one setting at a time, each raised KL by 1-61%,
+  beyond 2 SE in 11 of 12, at no fewer refusals beyond noise. (`evidence-2026-10-27/ranges.md`)
 - **Wider ranges from the start lose hits where nothing better lies beyond today's.** [Measured:
   the miss-rate simulator, candor's search at 07f482b, 100 runs per landscape] With the peak from
   0.4, runs within 10% of the true best at 600 trials fall from 47% to 26% (thinking, pooled: 61% to
@@ -434,11 +436,11 @@ entry is corrected, dropped or overturned is in CLAUDE.md ("Finished, dropped an
 
 ## Ideas
 
-- **Widen the peak's floor, reach's ceiling and the direction layers' first on the edge alarm, as
-  strength is.** [Hypothesis] It would keep today's hits where nothing better lies beyond and reach a
-  better edit if one is there. Tests, before the next search: whether one is there at all, by
-  rescoring real best edits with the peak or reach moved past 0.6 (`candor score`, rude-llama on the
-  Mac); then the simulator, on landscapes built with their best interior and beyond the ends.
+- **A finalist that presses a range end, scored moved past it before it ships.** [Hypothesis] A few
+  trials' cost, as `evidence-2026-10-27/beyond.py` does, would catch a better edit beyond an end on a
+  model where one is there, which the search's ranges can't reach.
+- Widening the peak's floor and reach's ceiling on the edge alarm [Dropped 2026-10-27: no better
+  edit past them on rude-llama, and wider ranges lose hits on the simulator]
 - **Start strength wide (to 3.0 or more) rather than widening once the best presses 1.5.**
   [Measured: 2 models] The best-supported change; it is only a default setting, and K2's search
   started wide (above). Before making it the default: one more model family.

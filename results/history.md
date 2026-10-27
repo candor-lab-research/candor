@@ -1322,3 +1322,12 @@ The user asked candor to settle the rest of the discussion on its recommendation
   was a broken measurement. Nothing changes candor.
 - The rude-llama milestone's title now says candor is level with heretic, which is what the shipped
   files show, as the repository is public.
+
+### No better edit past the range ends on rude-llama (2026-10-27)
+
+Five of rude-llama's 10 best one-layer trials that press the peak's floor or reach's ceiling were
+scored on the Mac, as the search scores its trials. Each was scored as it is and with that end moved
+past its range, one setting at a time (`evidence-2026-10-27/ranges.md`, part 3). All 12 moves raised
+KL, by 1-61%, beyond 2 SE in 11, at no fewer refusals beyond noise, so the ranges stay and widening
+them on the edge alarm is dropped. Phase 6 scores any finalist that presses an end moved past it,
+which costs a few trials.

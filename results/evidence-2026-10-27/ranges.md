@@ -3,7 +3,8 @@
 This is the phase-end question on the search's ranges (`history.md`, 2026-10-23). Should new runs
 draw the peak layer from 0.4 rather than 0.6, and should reach go past 0.6? Numbers only. The first
 part reads the four searches' journals; the second runs candor's own search code at 07f482b on the
-miss-rate simulator. No model, no pods.
+miss-rate simulator; the third scores rude-llama's best edits moved past the ends, on the Mac. No
+pods.
 
 ## Bottom line
 
@@ -20,9 +21,12 @@ miss-rate simulator. No model, no pods.
   and to 8% with reach to 1.0 as well. The loss is as large where the best is truly interior (38%
   to 16% and 5%). It is the pattern phase 3 found for strength, where a fixed 0.5-3.0 halved the
   hits (`phase-3-qwen3.5-9b.md`, step 3).
-- So the ranges stay as they are. Two questions remain open. Does a real model have a better edit
-  beyond 0.6? Rescoring real best edits with the peak or reach moved past it would tell. And would
-  widening an end only once the best presses it, as strength does, keep today's hits?
+- On rude-llama there is no better edit past the ends. Five of its best trials, each moved past the
+  end it presses one setting at a time, raised KL in all 12 moves (by 1-61%), beyond 2 SE in 11, at
+  no fewer refusals beyond noise.
+- So the ranges stay as they are. Widening them on the edge alarm, as strength is, isn't needed on
+  this evidence. Instead, a finalist that presses an end can be scored moved past it before it ships,
+  as part 3 does, for a few trials' cost.
 
 ## 1. Where the best edits sit
 
@@ -70,9 +74,31 @@ of runs whose pick is within 10% of the true best at 600 trials (95% interval):
 - **What this can't show:** what a wider range gains where a better edit lies beyond today's
   ranges. The landscapes are fitted to searches that drew only inside them.
 
+## 3. rude-llama's best edits moved past the ends
+
+`beyond.py` (output in `beyond.txt`) scores five of rude-llama's 10 best one-layer trials that press
+an end, as the search scores its trials, on its 100 test prompts. Each is scored as it is, then with
+the end it presses moved past the range, one setting at a time, and the two are paired by prompt in
+the same session. The search was made with older code (search version 2, now 3), so these scores
+aren't set beside its trials. Rescored as they are, all five repeat their search scores.
+
+| Trial (as it is: refused, KL) | Moved past the end | Refused | KL | Paired KL gap (SE) |
+| --- | --- | --- | --- | --- |
+| 535 (0, 0.0778), shipped | attention peak 0.5 / 0.4 | 0 / 0 | 0.0786 / 0.0792 | +0.0007 (0.0003) / +0.0014 (0.0005) |
+| | attention reach 0.8 / 1.0 | 0 / 0 | 0.0786 / 0.0786 | +0.0008 (0.0003) / +0.0007 (0.0004), a tie |
+| 295 (2, 0.0777) | attention peak 0.5 / 0.4 | 1 / 1 | 0.1034 / 0.1138 | +0.0257 (0.0071) / +0.0361 (0.0096) |
+| 345 (2, 0.0825) | attention peak 0.5 / 0.4 | 2 / 2 | 0.0855 / 0.0878 | +0.0030 (0.0009) / +0.0053 (0.0015) |
+| 381 (2, 0.0770) | attention reach 0.8 / 1.0 | 2 / 2 | 0.0790 / 0.0795 | +0.0021 (0.0007) / +0.0025 (0.0008) |
+| 463 (0, 0.0817) | MLP reach 0.8 / 1.0 | 0 / 0 | 0.1141 / 0.1313 | +0.0323 (0.0085) / +0.0496 (0.0112) |
+
+- 535's attention edit is nearly flat (edge strength 0.996) and already spans layers 1-27, so its
+  moves change little: 1-2% more KL. The narrower edits lose more: 295 33-46%, 463 40-61%.
+- Limits: one model; single-setting moves with the other settings left as they are; the trials were
+  chosen as best on these same test prompts, which favours them as they are.
+
 ## Files
 
-- `ends.py`, `ends.txt`: part 1.
+- `ends.py`, `ends.txt`: part 1. `beyond.py`, `beyond.txt`: part 3, about 20 min on the Mac.
 - `tools/misscheck/misscheck/ends_run.sh` (designs `floor-` and `ends-` in `runs.py`) and
   `ends_summary.py`: part 2, about 1.5 h on 10 cores with the references. The interior and on-an-end
   rows are `summary.table` over those landscapes; which landscapes' bests press an end is by the same

@@ -49,14 +49,12 @@ anything else. Every model is scored and shipped as a GGUF in llama-server, and 
    unsafe answers; history, 2026-10-23); the references, each measured with `--outside` as candor
    ships its own: heretic v1.2.0's edit (`dEcQEGdeTshDWbOJQcYp/Qwen3-30B-A3B-Instruct-2507-Heretic`,
    11/100 at KL 0.0679 on its card) and the best public edit, found as for the 27B
-   (`evidence-2026-10-21/public-27b.md`).
-2. Before phase 6's search, on the Mac: real best edits rescored with the peak or reach moved past
-   0.6, to see if a better edit lies beyond. Only if one does: widening those ends on the edge alarm,
-   as strength is, checked on the simulator first (`evidence-2026-10-27/ranges.md`; findings, Ideas).
-3. Phase 4, later: low effort's two closes; Uno not now. The budget limit
+   (`evidence-2026-10-21/public-27b.md`); any finalist that presses a range end scored moved past it
+   (`evidence-2026-10-27/beyond.py`).
+2. Phase 4, later: low effort's two closes; Uno not now. The budget limit
    (`search.max_budget_hits`, on K2 from trial 138) costs no measurable hits on the simulator and
    stays on (`phase-4-k2-horizon-7b.md`, step 5).
-4. Not blocking, each when there is a reason:
+3. Not blocking, each when there is a reason:
    - speed: 64 slots (15% faster than 32), weights cached on the GPU for "full" trials, the proxy's
      adapters loaded into one server, package 11 (the answer reusing its thinking's cache, untimed;
      skipped for the 27B);
