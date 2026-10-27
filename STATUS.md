@@ -14,7 +14,7 @@ anything else. Every model is scored and shipped as a GGUF in llama-server, and 
 | Phase | What | State |
 | --- | --- | --- |
 | 0-5 | LoRA scoring in llama.cpp, the core maths and `inspect`; rude-llama, Qwen3.5-9B, K2-Horizon-7B and Qwen3.8-27B searched, measured as used and released | Done 2026-10-27 (history; `results/phase-2` to `phase-5`, the milestones) |
-| 6 | Qwen3-30B-A3B-Instruct-2507, the first MoE, against heretic's per-expert edit | The pilot waits for the user's go |
+| 6 | Qwen3.8-Flash-Next, the first MoE: Qwen's newest, with hyper-connections and n-gram embeddings (the user, 2026-10-27) | Support being built on the Mac; then a pilot quote |
 
 ## How we work
 
@@ -36,20 +36,17 @@ anything else. Every model is scored and shipped as a GGUF in llama-server, and 
 - Anything visual (README, docs, diagrams, model cards, pages, charts) follows `docs/brand.md` (the
   user, 2026-10-23).
 
-## Now: waiting for the user
+## Now
 
-- Phase 6's pilot, about $4-6.5 (the 27B's pilot and Laguna's sizing; `evidence-2026-10-23/first-moe.md`):
-  an A100 80GB for the download, the GGUFs and the directions (the 61 GB model in 16 bits), then an
-  A40 for the unedited model and 2-3 timed trials, and the adapters-against-merged check for experts
-  on CUDA. It times the search before any quote for it. No pods are running.
+- Qwen3.8-Flash-Next support, on the Mac with tests: its four residual streams (read as their mean),
+  its edit targets (`evidence-2026-10-27/flash-next.md`). Then the pilot's plan and quote, for the
+  user's go. No pods are running.
 
 ## Next
 
 1. Phase 6 after the pilot: the decision rule signed off before the search (the 27B's, ranked on
-   unsafe answers; history, 2026-10-23); the references, each measured with `--outside` as candor
-   ships its own: heretic v1.2.0's edit (`dEcQEGdeTshDWbOJQcYp/Qwen3-30B-A3B-Instruct-2507-Heretic`,
-   11/100 at KL 0.0679 on its card) and the best public edit, found as for the 27B
-   (`evidence-2026-10-21/public-27b.md`); any finalist that presses a range end scored moved past it
+   unsafe answers; history, 2026-10-23); the reference, the best public edit measured with
+   `--outside` as candor ships its own; any finalist that presses a range end scored moved past it
    (`evidence-2026-10-27/beyond.py`).
 2. Phase 4, later: low effort's two closes; Uno not now. The budget limit
    (`search.max_budget_hits`, on K2 from trial 138) costs no measurable hits on the simulator and

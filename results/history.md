@@ -1331,3 +1331,15 @@ past its range, one setting at a time (`evidence-2026-10-27/ranges.md`, part 3).
 KL, by 1-61%, beyond 2 SE in 11, at no fewer refusals beyond noise, so the ranges stay and widening
 them on the edge alarm is dropped. Phase 6 scores any finalist that presses an end moved past it,
 which costs a few trials.
+
+### The first MoE: Qwen3.8-Flash-Next (the user, 2026-10-27)
+
+The user wanted a new model rather than Qwen3-30B-A3B-Instruct-2507 (July 2025), and then rather
+than Ornith-1.5-35B-A3B, found too niche. They chose the most popular newest one: Qwen3.8-Flash-Next
+(2026-08-24; 3.35M downloads in 30 days, 6,583 likes; 11.5M GGUF downloads and 234 uncensored
+versions). It is 180B parameters with about 3.5B active per token (10 of 512 experts), in a new
+layout, qwen4exp, with four residual streams (hyper-connections) and n-gram per-layer embeddings.
+candor's choice of models of 36B or less, the A40's reach, had left it out. `inspect` fails on its
+per-layer embeddings today, and its size means a multi-GPU pod for the directions and a larger card
+than an A40 for scoring, so it costs more than the A40 runs. Support is built on the Mac first; the
+pilot's quote then goes to the user.
