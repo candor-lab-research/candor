@@ -35,11 +35,11 @@ script's docstring says what it does and how to call it.
 | Result | Code | candor commit |
 | --- | --- | --- |
 | Phase 2, the search fix (`results/phase-2-rude-llama.md`): why it missed, GP and early-stop studies | `space/`, `sim/`, `cheaper/` | none imported |
-| Phase 2, the design comparison and the rand1-rand6 check | `harness/` | 33d14b3 (its search code is the same from 0d1f628 to 355aec5); `replay_check.py` draws all 200 real trials with it |
-| Phase 3 step 3, the miss rate with the thinking-model changes (`results/phase-3-qwen3.5-9b.md`) | `misscheck/rerun.sh` | 4198937 |
-| Phase 4 step 5, the stall stop (`results/phase-4-k2-horizon-7b.md`) | `misscheck/stall_sim.py`, on phase 3's runs | 4198937 |
-| Phase 4 step 5, the budget limit | `misscheck/budget_run.sh`, `misscheck/k2/` | 8dfc0f5 |
-| The range ends, 2026-10-27 (`results/evidence-2026-10-27/ranges.md`) | `misscheck/ends_run.sh` | 07f482b |
+| Phase 2, the design comparison and the rand1-rand6 check | `harness/` | 742a69d (its search code is the same from 72777c6 to d46efb3); `replay_check.py` draws all 200 real trials with it |
+| Phase 3 step 3, the miss rate with the thinking-model changes (`results/phase-3-qwen3.5-9b.md`) | `misscheck/rerun.sh` | 49fc36e |
+| Phase 4 step 5, the stall stop (`results/phase-4-k2-horizon-7b.md`) | `misscheck/stall_sim.py`, on phase 3's runs | 49fc36e |
+| Phase 4 step 5, the budget limit | `misscheck/budget_run.sh`, `misscheck/k2/` | cb0fa99 |
+| The range ends, 2026-10-27 (`results/evidence-2026-10-27/ranges.md`) | `misscheck/ends_run.sh` | d2043bc |
 
 ## Running
 
@@ -52,8 +52,8 @@ scripts fetch it themselves with `git archive`.
 
 ```sh
 # Phase 2 harness, from tools/misscheck/harness
-mkdir -p candor-33d14b3 && git archive 33d14b3 src | tar -x -C candor-33d14b3
-export PYTHONPATH=candor-33d14b3/src:.
+mkdir -p candor-742a69d && git archive 742a69d src | tar -x -C candor-742a69d
+export PYTHONPATH=candor-742a69d/src:.
 uv run python replay_check.py        # draws candor's 200 real trials exactly, in seconds
 uv run python fit.py                 # refits, rewriting fitted.json and fitted_mapping.json
 uv run python variants.py            # each landscape's true best into cache/ (about 9 min for base)

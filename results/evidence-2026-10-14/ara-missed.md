@@ -9,8 +9,8 @@ We did not miss ARA completely, but we found it late and filed it under the wron
 - ARA has been public since 2026-03-04 (PR #211). That is seven months before we started.
 - heretic's maintainer pointed users with our exact model to it on 2026-07-09: issue #404, "Qwen3.5-9B --- 70/100 Refusals after 200 trials", reply "ARA and SOMA give better results".
 - ARA became master's default on 2026-10-01 (PR #446).
-- Our first record of ARA is 2026-10-13 (bf45412). It called ARA "unreleased" and made it a fallback "only if the phase 3 pilot fails".
-- We first recorded that ARA is now the default on 2026-10-14 (b4f8e93). That is 13 days after the merge, and 2 hours after we built heretic 1.4.0's "full" edit into candor (f440194).
+- Our first record of ARA is 2026-10-13 (b8c2f35). It called ARA "unreleased" and made it a fallback "only if the phase 3 pilot fails".
+- We first recorded that ARA is now the default on 2026-10-14 (5911f51). That is 13 days after the merge, and 2 hours after we built heretic 1.4.0's "full" edit into candor (f1b21d5).
 
 The cause: everything we knew about heretic came from the released package (heretic-llm 1.4.0) and from arXiv. heretic has not released since June, and ARA has no paper, so neither source could show it. Missing it was understandable before 2026-10-13. After that it was a near miss: the PR we cited said on its closing line that it was "Superseded by #446".
 
@@ -38,12 +38,12 @@ The cause: everything we knew about heretic came from the released package (here
 | 2026-10-02 | Issue #473: "the default mode of Heretic version 2.0 is now going to be ARA/LoRA"; asks for ARA to be explained in the README. Still open; master's README doesn't mention ARA | |
 | 2026-10-08 | | tune project files first dated (file times) |
 | 2026-10-09 | | `pip install heretic-llm==1.4.0` (`tune/CLOUD_GPU.md:42`, `heretic-kit/setup_main.sh:6`, tune memory `heretic-runpod-procedure.md:22`). heretic runs on rude-llama, K2-Horizon and Qwen3.5-9B (Trial 161). We hit the Qwen `<think>` prefix gotcha by hand (`heretic-runpod-procedure.md:33-38`). We patched the hard-coded 1.5 strength ceiling ourselves (`heretic-kit/patch_ceiling.sh`). Guide and kit "tested ... with heretic 1.4.0" (`heretic-guide.md:11`). We checked other projects' trackers for tooling: mlx-lm#1876 and llama.cpp PR #29535 (`local-model-candidates.md:19,35`) |
-| 2026-10-10 | | The user decides to replace heretic with candor (`candor-library.md:11`). Paper review: 3 agents, about 30 arXiv papers. It cites the SOM paper 2511.08379 but nothing from heretic's tracker (`candor-research-review.md:11,29`). STATUS 6cf9cf9 says "heretic and `tune/heretic-kit`: frozen, no new features", and its research table is "From the 2026-10-10 paper review", with multi-direction edits "Optional, only if phase 4 falls short". The full review checked that "The maths matches heretic's source" (STATUS:521) |
+| 2026-10-10 | | The user decides to replace heretic with candor (`candor-library.md:11`). Paper review: 3 agents, about 30 arXiv papers. It cites the SOM paper 2511.08379 but nothing from heretic's tracker (`candor-research-review.md:11,29`). STATUS 51a19ac says "heretic and `tune/heretic-kit`: frozen, no new features", and its research table is "From the 2026-10-10 paper review", with multi-direction edits "Optional, only if phase 4 falls short". The full review checked that "The maths matches heretic's source" (STATUS:521) |
 | 2026-10-12 | | Goal set: edits that "measurably score and perform better than existing tools (heretic first)" (`candor-library.md:18`) |
-| 2026-10-13 16:52 | | **First ARA record** (bf45412), STATUS:254: "heretic's unreleased ARA, a rank-50 edit ... took Qwen3.5-4B from over 50/100 refused to 4/100 at KL 0.14", with the change "3-5 directions or ARA only if the phase 3 pilot fails". This pass also cites heretic #404, #253 and PR #52 |
+| 2026-10-13 16:52 | | **First ARA record** (b8c2f35), STATUS:254: "heretic's unreleased ARA, a rank-50 edit ... took Qwen3.5-4B from over 50/100 refused to 4/100 at KL 0.14", with the change "3-5 directions or ARA only if the phase 3 pilot fails". This pass also cites heretic #404, #253 and PR #52 |
 | 2026-10-14 | | Phase 3 step 4: Trial 161 re-saved with heretic 1.4.0 (`results/phase-3-qwen3.5-9b.md:100`) |
-| 2026-10-14 13:26 | | f440194 builds heretic's "full" edit, the 1.4.0 default, into candor ("checked against its code", README:67-68) |
-| 2026-10-14 15:47 | | **First record that ARA is the default** (b4f8e93): `results/evidence-2026-10-14/lit-search.md:13`, "Master after PR #446 (Oct 2026) ... the default modifier is now ARA". STATUS:50-51 makes ARA a candidate: "find out what it is first" (still citing PR #211) |
+| 2026-10-14 13:26 | | f1b21d5 builds heretic's "full" edit, the 1.4.0 default, into candor ("checked against its code", README:67-68) |
+| 2026-10-14 15:47 | | **First record that ARA is the default** (5911f51): `results/evidence-2026-10-14/lit-search.md:13`, "Master after PR #446 (Oct 2026) ... the default modifier is now ARA". STATUS:50-51 makes ARA a candidate: "find out what it is first" (still citing PR #211) |
 
 ## What our records show
 
@@ -54,7 +54,7 @@ The cause: everything we knew about heretic came from the released package (here
   - 2026-10-10: no. arXiv only.
   - 2026-10-13: yes, issues and PRs (#404, #253, PR #52, PR #211), but not master.
   - 2026-10-14: yes, master, PRs and issues.
-- **The closest pass before the find: 2026-10-13 (bf45412).**
+- **The closest pass before the find: 2026-10-13 (b8c2f35).**
   - It had PR #211 in hand, and #211's last comment, dated 2026-09-04, is "Superseded by #446".
   - It cited #404 for the 70/100 figure but not the maintainer's answer in that thread, which recommends ARA and SOMA. **(inference)** It read the issue for data, not advice.
   - It called ARA "unreleased". That is literally true (no release since v1.4.0), but ARA had been the default on master for 12 days.
@@ -112,7 +112,7 @@ That is the whole change: four commands, one line, two edits to wording. A sched
 
 - GitHub API (2026-10-14): PRs #211, #446, #196, #423, #138; issues #404, #473; PR #211's comments (filtered); master's commits; `config.default.toml` at master and v1.4.0; README at v1.3.0, v1.4.0 and master; release notes for v1.2.0-v1.4.0; issue and discussion search for "ARA", "Arbitrary-Rank" and "SOMA".
 - PyPI JSON for heretic-llm.
-- candor: `STATUS.md` (current and at 6cf9cf9), `README.md`, `results/*.md`, `results/evidence-2026-10-14/*.md`, and the git log including `-S` and `-G` searches.
+- candor: `STATUS.md` (current and at 51a19ac), `README.md`, `results/*.md`, `results/evidence-2026-10-14/*.md`, and the git log including `-S` and `-G` searches.
 - Memory: the tune folder (`candor-library.md`, `candor-research-review.md`, `heretic-guide.md`, `heretic-runpod-procedure.md`, `heretic-memory-and-dtype.md`, `local-model-candidates.md`, `project-status.md`, `review-before-done.md`) and the candor folder.
 - tune: `README.md`, `CLOUD_GPU.md`, `heretic-kit/` (script names, install lines, `patch_ceiling.sh`).
 - Nothing under `candor/runs` or `tune/checkpoints`, and no datasets or logs.

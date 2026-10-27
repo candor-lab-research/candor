@@ -34,7 +34,7 @@ approved. Both deleted.
 - The first build stopped at the thinking: llama-server couldn't allocate its 16.5 GiB KV cache.
   After the directions, PyTorch kept 50.1 GiB reserved with no tensor alive (0.0 GiB allocated);
   with expandable segments reserved memory fell to 0.0 GiB (78.7 of 79.2 GiB free). Fixed in candor
-  (d471d7b); the medium build then read its directions and started its thinking in one process.
+  (76b316d); the medium build then read its directions and started its thinking in one process.
 - The A40's Q4_K_M isn't byte-identical to the A100's (sha256 2f358b2f against 556e0999) though
   candor records the same inputs; both cards' reads below include that difference.
 - The medium copy's directions aren't xhigh's: its prompts render differently, and the two agree at

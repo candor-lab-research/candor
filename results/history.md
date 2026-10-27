@@ -1,7 +1,7 @@
 # History
 
 Every decision with its reasons, the research tables and the dated log; the plan in force is in
-STATUS.md. Until 2026-10-14 (commit 053f50b) this was part of STATUS.md. New log entries go at the
+STATUS.md. Until 2026-10-14 (commit 8d89012) this was part of STATUS.md. New log entries go at the
 end of this file.
 
 ## Decisions
@@ -161,7 +161,7 @@ The check, set before it ran: one search with no heretic recipe as a start passe
 suggests refuses at most 6 of 288 held-out prompts at KL 0.1041 or less. Trial 535 refuses 5 at KL
 0.0920 and passes phase 2's strict rule too, so it ships instead of Trial 170's recipe. But the four
 trials the search first suggested all failed; 535 is suggested only since the suggestions were fixed
-(`77106e4`, before any held-out number). The milestone: `results/milestone-rude-llama-vs-heretic.md`.
+(`f557f24`, before any held-out number). The milestone: `results/milestone-rude-llama-vs-heretic.md`.
 
 To compare a trial against the rule: `candor compare runs/rude base trial-N` (KL and maths are
 judged against the unedited model) and `candor compare runs/rude heretic-170 trial-N` (head to head).
@@ -276,17 +276,17 @@ rank-1 adapters with per-request scales gives the same results as merging it.
   refusals became 28).
 
 Numbers: `runs/phase0/results.json` (not in git). Script: `spikes/phase0.py`, last in commit
-`2bb6bba`. Pod: A40, about 23 minutes, about $0.23.
+`ae2f060`. Pod: A40, about 23 minutes, about $0.23.
 
 ### Phase 1: core maths and `candor inspect` (done 2026-10-10)
 
-- `candor.heretic` reads heretic's Optuna journals; `spikes/reproduce_trial.py` (last in `2bb6bba`) rebuilds a trial
+- `candor.heretic` reads heretic's Optuna journals; `spikes/reproduce_trial.py` (last in `ae2f060`) rebuilds a trial
   with candor's own direction finding and edit. On rude-llama Trial 170 it gets heretic's 2/100.
 - Heretic tokenizes the rendered chat with the tokenizer's own special tokens added, so Llama 3
   and K2-Horizon get two begin-of-text tokens. Proved by running heretic's own `Model.generate`
   with a recording stub. transformers, mlx-lm and llama.cpp (`chat.cpp`) all send one. Qwen3.5 has
   none, so it is unaffected.
-- `spikes/compare_models.py` (last in `2bb6bba`) scored the saved heretic model (`models/local/rude-llama-heretic`)
+- `spikes/compare_models.py` (last in `ae2f060`) scored the saved heretic model (`models/local/rude-llama-heretic`)
   against the original on heretic's test prompts:
 
 | Input | Date in prompt | Batch | Refusals, original | Refusals, edited | KL |
@@ -701,12 +701,12 @@ code backed up on the pod (`/root/backup-20261017T0744`), and resumed with the 1
 again from their recorded counts: 20 over 8, of which only trials 66 and 102 had been within the
 cap; neither kind's best changes. From trial 138 trials stop on the budget, and one layer's
 refusal stop moved from 27 to 29 refusals (per layer 2 to 3) to keep its guarantee once the sampler
-ranks by both caps, and was back to 27 and 2 by trial 143. Code older than 8dfc0f5 must not run on `runs/k2` again: it would carry on in
+ranks by both caps, and was back to 27 and 2 by trial 143. Code older than cb0fa99 must not run on `runs/k2` again: it would carry on in
 the old studies.
 
 ### Phase 4, step 5: the budget limit checked on the miss-rate simulator (2026-10-17)
 
-The check owed when the limit went on: a developer agent ran candor's own search at 8dfc0f5 on the
+The check owed when the limit went on: a developer agent ran candor's own search at cb0fa99 on the
 phase 3 simulator, budget hits fitted on K2's trials, 45,360 searches in 5.9 h on the Mac. Pooled,
 the limit costs no measurable share of picks near the best, on from trial 1 or switched on at 137
 as K2's was, and saves 6-26% of pod time in K2-like landscapes; it helps some landscapes and costs
@@ -1343,3 +1343,9 @@ candor's choice of models of 36B or less, the A40's reach, had left it out. `ins
 per-layer embeddings today, and its size means a multi-GPU pod for the directions and a larger card
 than an A40 for scoring, so it costs more than the A40 runs. Support is built on the Mac first; the
 pilot's quote then goes to the user.
+
+### The code moved to the candor-lab-research account (the user, 2026-10-27)
+
+The repository moved to https://github.com/candor-lab-research/candor, the same anonymous identity
+as the Hugging Face org. Commit hashes before this entry changed in the move; the files that cite
+them, the misscheck scripts included, were updated to the new ones.

@@ -4,8 +4,8 @@ set -e
 W=$(cd "$(dirname "$0")" && pwd)
 cd "$W"
 REPO=$(cd "$W/../../.." && pwd)
-# candor's search code as at HEAD 4198937 (the working tree was being edited by another session).
-[ -d candor-head/src ] || { mkdir -p candor-head && git -C "$REPO" archive 4198937 src | tar -x -C candor-head; }
+# candor's search code as at HEAD 49fc36e (the working tree was being edited by another session).
+[ -d candor-head/src ] || { mkdir -p candor-head && git -C "$REPO" archive 49fc36e src | tar -x -C candor-head; }
 export PYTHONPATH="$W/candor-head/src:$W"
 PY="uv run --project $REPO python"
 J=${JOBS:-10}

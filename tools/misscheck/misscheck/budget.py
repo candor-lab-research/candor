@@ -25,7 +25,7 @@ difficulty); an edit reaches the budget on prompt i when Phi(sqrt(RHO) w_i + sqr
 fixed for that edit and prompt and drawn apart from its refusal and KL noise, so budget hits leave its
 refusals and KL as they were.
 
-    PYTHONPATH=candor-8dfc0f5/src:. uv run python budget.py truth --scenarios a-same --stress a-same \
+    PYTHONPATH=candor-cb0fa99/src:. uv run python budget.py truth --scenarios a-same --stress a-same \
         --cliffs a-same --jobs 10   # truths and bumps, cached in cache/ (budget_run.sh does every scenario)
 """
 

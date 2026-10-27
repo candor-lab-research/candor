@@ -1,5 +1,5 @@
 """Does search.max_budget_hits make candor's search miss the best edit more often? Runs candor's search
-(snapshot candor-8dfc0f5/src, the commit that added the setting) on the scenario landscapes with budget
+(snapshot candor-cb0fa99/src, the commit that added the setting) on the scenario landscapes with budget
 hits (budget.py), and saves every trial.
 
 The search is candor's own: Sim is search.Search with only its scorer swapped for a landscape. Its real
@@ -20,7 +20,7 @@ Designs (the strength range the search starts with; widest_strength is candor's 
   D3      0.5-3.0 from the start.
   grow    0.8-1.5, widening, for a scenario that doesn't think (no position).
 
-    PYTHONPATH=candor-8dfc0f5/src:. uv run python budget_sim.py run --scenarios a-same --designs D3grow \\
+    PYTHONPATH=candor-cb0fa99/src:. uv run python budget_sim.py run --scenarios a-same --designs D3grow \\
         --arms off,on,switch --seeds 60 --jobs 10
     ... budget_sim.py check            # the sanity checks
     ... budget_sim.py calib --scenarios a-same:D3grow,base:grow --intercept -5.118 --seeds 6

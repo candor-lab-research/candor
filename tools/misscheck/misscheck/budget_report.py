@@ -13,7 +13,7 @@ expected budget hits are over 8 (measured within the limit by luck); judged = ha
 trial; forced = answers per trial that ran to the budget; K2 h = the hours these trials would take on
 K2-Horizon-7B's pod, from K2's seconds per trial fitted on prompts judged, budget hits and refusals.
 
-    PYTHONPATH=candor-8dfc0f5/src:. uv run python budget_report.py > budget-tables.txt
+    PYTHONPATH=candor-cb0fa99/src:. uv run python budget_report.py > budget-tables.txt
 """
 
 import json

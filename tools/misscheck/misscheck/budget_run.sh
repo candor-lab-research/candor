@@ -4,9 +4,9 @@ set -e
 W=$(cd "$(dirname "$0")" && pwd)
 cd "$W"
 REPO=$(cd "$W/../../.." && pwd)
-# candor's search code at 8dfc0f5, the commit that added search.max_budget_hits.
-[ -d candor-8dfc0f5/src ] || { mkdir -p candor-8dfc0f5 && git -C "$REPO" archive 8dfc0f5 src | tar -x -C candor-8dfc0f5; }
-export PYTHONPATH="$W/candor-8dfc0f5/src:$W"
+# candor's search code at cb0fa99, the commit that added search.max_budget_hits.
+[ -d candor-cb0fa99/src ] || { mkdir -p candor-cb0fa99 && git -C "$REPO" archive cb0fa99 src | tar -x -C candor-cb0fa99; }
+export PYTHONPATH="$W/candor-cb0fa99/src:$W"
 PY="uv run --project $REPO python"
 J=${JOBS:-10}
 B="a-same,b-answer,c-think,d-high,fa-same,fb-answer,fc-think,fd-high"

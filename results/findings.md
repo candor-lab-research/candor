@@ -251,7 +251,7 @@ entry is corrected, dropped or overturned is in CLAUDE.md ("Finished, dropped an
   100 test prompts] Moved past the end it presses, one setting at a time, each raised KL by 1-61%,
   beyond 2 SE in 11 of 12, at no fewer refusals beyond noise. (`evidence-2026-10-27/ranges.md`)
 - **Wider ranges from the start lose hits where nothing better lies beyond today's.** [Measured:
-  the miss-rate simulator, candor's search at 07f482b, 100 runs per landscape] With the peak from
+  the miss-rate simulator, candor's search at d2043bc, 100 runs per landscape] With the peak from
   0.4, runs within 10% of the true best at 600 trials fall from 47% to 26% (thinking, pooled: 61% to
   19%); with reach to 1.0 as well, to 8% (6%). The loss is as large where the best is truly interior
   (38% to 16% and 5%). It is strength's pattern (phase 3, step 3), so the ranges stay.

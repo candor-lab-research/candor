@@ -2,7 +2,7 @@
 
 This is the phase-end question on the search's ranges (`history.md`, 2026-10-23). Should new runs
 draw the peak layer from 0.4 rather than 0.6, and should reach go past 0.6? Numbers only. The first
-part reads the four searches' journals; the second runs candor's own search code at 07f482b on the
+part reads the four searches' journals; the second runs candor's own search code at d2043bc on the
 miss-rate simulator; the third scores rude-llama's best edits moved past the ends, on the Mac. No
 pods.
 

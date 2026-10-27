@@ -205,7 +205,7 @@ on refusals at 5-7% less KL. 535 reads layer 12, with attention as Trial 170's (
 
 The search suggested the two least-KL trials of each kind within the cap: 305, 327, 448 and 492,
 all refusing 2. It skipped 535, and its edge alarm checked only 305, which presses no range end. 535
-presses two: the attention peak's floor (0.6) and its reach's ceiling (0.6). The fix (`77106e4`,
+presses two: the attention peak's floor (0.6) and its reach's ceiling (0.6). The fix (`f557f24`,
 committed before any held-out number) suggests each kind's least KL at each count within the cap
 unless one refusing fewer has less, checks each for range ends, and announces such trials as they
 finish. On this run it suggests 535, 305, 324, 462 and 448.
@@ -264,7 +264,7 @@ phase 0's model kept about 90%. The papers agree on the mechanism (2609.09793 in
 follow-ups for 4-bit undoing unlearning) and none measured abliteration through GGUF; no abliteration
 tool or quantiser checks refusals after quantising.
 
-The fix (`6e47a01`): the export measures each edited weight's kept share, quantises those under 98%
+The fix (`0f5a91e`): the export measures each edited weight's kept share, quantises those under 98%
 as Q8_0 through llama-quantize's tensor type file, and refuses the file if any still falls short.
 For 535: Q4_K_M kept 55.2-97.5% in all 49 edited weights; as Q8_0 each kept 99.8-100.0%; the file
 is 2.4 GB against 1.9. Extended 2026-10-18: such a weight is merged again unrounded in F32 first,

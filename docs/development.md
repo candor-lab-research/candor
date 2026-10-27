@@ -30,7 +30,7 @@ and llama.cpp and its converter environment if candor hasn't fetched them yet. N
 - `tools/misscheck/` is the miss-rate simulator the search's design is judged on. Its README says how
   to run each part and which candor commit each result used.
 - The one-off experiments behind the log in `results/history.md` (phase 0 on a pod, rebuilding a
-  heretic trial, scoring heretic's saved model) were in `spikes/`, last in commit `2bb6bba`.
+  heretic trial, scoring heretic's saved model) were in `spikes/`, last in commit `ae2f060`.
 
 ## Images
 

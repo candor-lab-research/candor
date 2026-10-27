@@ -276,7 +276,7 @@ First a replay on K2's journal at 126 trials: edits that comply hit the 8,192 bu
 have cut the time 17%, nearly all from trials far over the cap; near-misses (9-14 hits) stop late.
 
 `search.max_budget_hits = 8` measured on the phase 3 simulator, driving candor's own search at
-8dfc0f5 (the scorer swapped for a landscape; the switch-over code unchanged). Budget hits drawn per
+cb0fa99 (the scorer swapped for a landscape; the switch-over code unchanged). Budget hits drawn per
 prompt from a model fitted on K2's trials (logit = -4.4 + 1.58 log(KL / best KL) - 3.03 x refusal
 rate + a smooth random field of sd 1.3 over the settings): 11-14% of trials over 8 in the K2-like
 groups (D3grow), 17% in the median scenario, against K2's 15%. Three arms paired by scenario and seed: off (the pick filtered at 8 after the search), on
