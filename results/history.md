@@ -1272,3 +1272,53 @@ Before it went public: no keys, tokens, private keys, IP addresses or prompt and
 file or commit; tests, lint and types clean. Licensed Apache 2.0 for its patent grant and because
 its LICENSE names no copyright holder; no heretic code is copied, so heretic's AGPL-3.0 doesn't
 apply. Public at https://github.com/candor-lab-research/candor.
+
+### The gap counted again with image-text-to-text models (2026-10-27)
+
+`gaps.py` read only the Hub's text-generation models, but chat models that also take images (Qwen3.6,
+Gemma 4, Qwen3.8-27B) are tagged image-text-to-text. Counted again with both pipelines
+(`evidence-2026-10-27/gaps.md`), the dense pool is 293 against 213 (92 of the 110 that came in from
+the new pipeline, 30 gone) and the MoE-or-over-36B one 178 against 132. Neither pick changes. The new
+pipeline's entries at the top are task models (translation, OCR), and Gemma 4 and Qwen3.6 have
+295-420 uncensored versions each. Kwaipilot's KAT-Coder-V2.5-Dev, a coding fine-tune of
+Qwen3.6-35B-A3B that the filter takes for an original, now leads the MoE gap without its top repo,
+but its uncensored versions hold 1.0% of its downloads.
+
+### The phase-end discussion closed; phases 3 to 5 done (the user, 2026-10-27)
+
+The user asked candor to settle the rest of the discussion on its recommendations.
+- **The search's ranges stay.** In all four models the top edits crowd the peak's floor and reach's
+  ceiling (both 0.6), but that doesn't show a better edit beyond them. Most trials sit near those ends
+  anyway, and the miss-rate simulator's landscapes crowd the same way with nothing better beyond.
+  Where nothing better lies beyond, drawing the peak from 0.4 cuts runs within 10% of the best at
+  600 trials from 47% to 26%, and with reach to 1.0 as well, to 8% (`evidence-2026-10-27/ranges.md`).
+  Before the next search: rescore real best edits with the peak or reach moved past 0.6 to see
+  whether a better edit is there. Widening those ends and the direction layers' first on the edge
+  alarm, as strength already is, would follow only if one is and the simulator shows it keeps
+  today's hits (findings, Ideas).
+- **Cost and time against the release gate.** The gate is the user's, for posting more widely: a 27B
+  model done in about a day and $20, against the best public release. It was to be set again from
+  the 27B's pilot (2026-10-19), which hasn't happened. The 27B took about 2.4 days and $28 from its
+  search to release ($35 with the pilot). That is below the pilot's estimate for its route ($35-81,
+  2.5-6 days, the pilot not included), and it tied huihui-ai's edit. Closing the gap without
+  searching less, which the simulator shows loses hits, comes down to the speed items in STATUS, and
+  finalists measured on pods in parallel, which cuts the days but not the cost. Setting the gate
+  again is left to the user.
+- **Phase close.** The e2e test passes (15 of 15); findings' three tagged lines are deleted (their
+  records: the stall stop, 2026-10-17; `--kv-unified`, 2026-10-20; the gap's rescore, 2026-10-23).
+  The next model is the first MoE, Qwen3-30B-A3B-Instruct-2507, picked on `first-moe.md`'s reasons
+  rather than its gap rank, which still hold after the count above:
+  - real uncensored demand, about 66-194 downloads a day for a release;
+  - `inspect` passing on today's code;
+  - no thinking, so a cheaper run;
+  - a public heretic edit, saved in full, that can be measured the way candor measures its own, as
+    Trial 161 was.
+
+  Its pilot waits for the user's go.
+- **heretic upstream, at the new phase's start:** master d34dd919 (2026-10-26), default edit ARA, last
+  release 1.4.0. Merged since 2026-10-19: response-prefix fixes (#489, #523), models with
+  Hyper-Connections (#519), templates that reject the system role (#498) and blank refusal markers
+  (#512). The thinking-model prefix bug (#487) is still open. On Qwen3-30B-A3B, #218 is closed: it
+  was a broken measurement. Nothing changes candor.
+- The rude-llama milestone's title now says candor is level with heretic, which is what the shipped
+  files show, as the repository is public.

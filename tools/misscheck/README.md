@@ -25,7 +25,7 @@ tables) are not; the results files hold the numbers.
 | `sim/` | The first version of the test: GP surrogates fitted to the two searches, search designs run on them, stop-rule and repeat analyses | `optimum.py`, `designs.py`, `traces.py`, `report.py` |
 | `cheaper/` | Stopping trials early: which stop rules leave TPE's draws unchanged, and the time they save | `invariance.py`, `replay.py`, `replay2.py`, `budget2.py` |
 | `harness/` | The landscape model fitted to both searches, its variants (base, per-layer, outside, needle, rand1-rand6), the strategies tested and their evaluation | `fit.py`, `variants.py`, `evaluate.py`, `analyze.py`, `replay_check.py` |
-| `misscheck/` | Scenario landscapes built on the harness (strength stretched, two places to read directions), driven by candor's own search code; the stall-stop replay and the budget-limit check | `rerun.sh`, `summary.py`, `stall_sim.py`, `budget_run.sh`, `budget_report.py`, `k2/fit.py` |
+| `misscheck/` | Scenario landscapes built on the harness (strength stretched, two places to read directions), driven by candor's own search code; the stall-stop replay, the budget-limit check and the range ends | `rerun.sh`, `summary.py`, `stall_sim.py`, `budget_run.sh`, `budget_report.py`, `k2/fit.py`, `ends_run.sh` |
 
 `misscheck/landscape.py`, `optimum.py` and `variants.py` are unchanged copies of the harness's. Each
 script's docstring says what it does and how to call it.
@@ -39,6 +39,7 @@ script's docstring says what it does and how to call it.
 | Phase 3 step 3, the miss rate with the thinking-model changes (`results/phase-3-qwen3.5-9b.md`) | `misscheck/rerun.sh` | 4198937 |
 | Phase 4 step 5, the stall stop (`results/phase-4-k2-horizon-7b.md`) | `misscheck/stall_sim.py`, on phase 3's runs | 4198937 |
 | Phase 4 step 5, the budget limit | `misscheck/budget_run.sh`, `misscheck/k2/` | 8dfc0f5 |
+| The range ends, 2026-10-27 (`results/evidence-2026-10-27/ranges.md`) | `misscheck/ends_run.sh` | 07f482b |
 
 ## Running
 
@@ -64,6 +65,7 @@ uv run python evaluate.py --report
 PYTHONPATH=candor-head/src:. uv run python stall_sim.py   # after rerun.sh
 ./budget_run.sh                      # the budget limit, about 6 h on 10 cores; tables in budget-tables.txt
 uv run python k2/fit.py              # K2's budget-hit model, in seconds
+./ends_run.sh                        # the range ends, about 1.5 h on 10 cores; tables in ends-tables.txt
 
 # sim/, from tools/misscheck/sim
 uv run python optimum.py             # each surrogate's best, into optima.json

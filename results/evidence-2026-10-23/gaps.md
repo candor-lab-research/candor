@@ -1,5 +1,7 @@
 # Which models to release next: the gap (2026-10-23)
 
+Counted again on 2026-10-27 with image-text-to-text models, the picks holding: `evidence-2026-10-27/gaps.md`.
+
 The user's decision (`history.md`, 2026-10-23): pick the next models by gap, a base many people run
 as a GGUF with few uncensored versions so far, rather than racing on the most crowded bases.
 

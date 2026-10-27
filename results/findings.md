@@ -240,16 +240,20 @@ entry is corrected, dropped or overturned is in CLAUDE.md ("Finished, dropped an
   0.121. At 0.7 it still refused 17 of 100 as used. (`phase-5-qwen3.8-27b.md`, step 1)
 - **Per-layer edits press the 3.0 ceiling on attention.** [Measured: Qwen3.5-9B, one search] Every
   per-layer best puts attention at 2.9-3.0, so a better per-layer edit may lie beyond it. (step 6)
-- **The best edits lie near peak layer's floor of 0.6, but seldom press it.** [Measured: the
-  searches of Llama-3.2-3B, Qwen3.5-9B, K2-Horizon-7B and Qwen3.8-27B, 313-600 trials each, as each
-  search scored, within the cap] Every one-layer best puts its lowest peak at 0.61-0.63, and the
-  per-layer bests of K2 and the 27B at 0.617 and 0.621 (Llama and Qwen 9B: 0.708, 0.680). By
-  candor's edge test (within 0.02) only two of the eight press it: the 27B's one-layer best and K2's
-  per-layer one. Most trials within the cap sit nearest the floor (384 of 629), so best KL falling
-  toward it (K2, the 27B) can't be told from that band's larger count. The floor is fixed in
-  heretic, which notes its ranges may need adjusting for new models. [Hypothesis] Better edits lie
-  below 0.6: a floor of 0.4 for new runs, checked first on the miss-rate simulator for what the
-  wider range costs where the best lies inside 0.6-1.0. (`evidence-2026-10-23/floor.txt`)
+- **The best edits crowd the peak's floor and reach's ceiling, both 0.6, which alone doesn't show a
+  better edit beyond.** [Measured: the searches of Llama-3.2-3B, Qwen3.5-9B, K2-Horizon-7B and Qwen3.8-27B,
+  313-600 trials each, each kind's 10 least-KL trials within the cap] In every model 7-8 of the 10
+  best one-layer edits press one or the other by candor's edge test. Of the eight kinds' bests, two
+  press attention's peak floor and two reach's ceiling. Qwen 9B's one-layer top 10 all read the first
+  direction layer the search reads (12). But most trials sit near those ends anyway (the 27B per
+  layer: 95 of 141 within the cap peak at 0.60-0.65), and the simulator's landscapes crowd the same
+  way with nothing better beyond. (`evidence-2026-10-27/ranges.md`)
+- **Wider ranges from the start lose hits where nothing better lies beyond today's.** [Measured:
+  the miss-rate simulator, candor's search at 07f482b, 100 runs per landscape] With the peak from
+  0.4, runs within 10% of the true best at 600 trials fall from 47% to 26% (thinking, pooled: 61% to
+  19%); with reach to 1.0 as well, to 8% (6%). The loss is as large where the best is truly interior
+  (38% to 16% and 5%). It is strength's pattern (phase 3, step 3), so the ranges stay.
+  (`evidence-2026-10-27/ranges.md`)
 - **Refusals fall gradually as strength rises; there is no cliff.** [Measured: 8 searches on 3
   models] [Published] The literature agrees. (`evidence-2026-10-14/data-report.md`,
   `lit-refusal.md`)
@@ -416,17 +420,25 @@ entry is corrected, dropped or overturned is in CLAUDE.md ("Finished, dropped an
 - **A release's likely draw may be better read from the uncensored downloads its base already gets.**
   [Measured: our 4 releases took 0.03-24% of their base's; 9 MoE candidates] Between Llama-3.2's
   1.3% and an equal share, a Laguna-XS-2.1 release would draw about 0.5-6 downloads a day and a
-  Qwen3-30B-A3B-Instruct-2507 one 52-148. [Hypothesis] It predicts better than the gap: test on the
-  next release. (`evidence-2026-10-23/first-moe.md`)
+  Qwen3-30B-A3B-Instruct-2507 one 52-148 (66-194 counted again on 2026-10-27). [Hypothesis] It
+  predicts better than the gap: test on the next release. (`evidence-2026-10-23/first-moe.md`)
+- **Chat models that take images are tagged image-text-to-text, which the gap first left out.**
+  [Measured: the Hub's top 1,000 by downloads and by trend in each pipeline] Counted with them, the
+  dense pool is 293 bases against 213, 92 of the 110 that came in image-text-to-text. Neither pick
+  changes: what the new pipeline puts at the top is task models (translation, OCR), and the general
+  chat bases it brings in (Gemma 4, Qwen3.6) have 295-420 uncensored versions each.
+  (`evidence-2026-10-27/gaps.md`)
 - **MoE models of 36B or less hold a third to a half of the dense models' gap.** [Measured: 48 MoE
   and 213 dense bases] Their uncensored supply is thin.
   (`evidence-2026-10-23/gaps.md`)
-- Rescoring the gap by each family's uptake of uncensored versions [Dropped 2026-10-23: reads 0
-  where a family has no uncensored version, ignores GGUF demand on one-model families, and 4 against
-  5 of 6 pairs can't separate it from the gap]
 
 ## Ideas
 
+- **Widen the peak's floor, reach's ceiling and the direction layers' first on the edge alarm, as
+  strength is.** [Hypothesis] It would keep today's hits where nothing better lies beyond and reach a
+  better edit if one is there. Tests, before the next search: whether one is there at all, by
+  rescoring real best edits with the peak or reach moved past 0.6 (`candor score`, rude-llama on the
+  Mac); then the simulator, on landscapes built with their best interior and beyond the ends.
 - **Start strength wide (to 3.0 or more) rather than widening once the best presses 1.5.**
   [Measured: 2 models] The best-supported change; it is only a default setting, and K2's search
   started wide (above). Before making it the default: one more model family.
@@ -444,7 +456,6 @@ entry is corrected, dropped or overturned is in CLAUDE.md ("Finished, dropped an
   [Hypothesis; counts only, no new runs]
 - **A separate edit just for thinking length** (Halt Vector, ThinkEdit, SEAL: 12-50% shorter) if
   length decides. [Published, on unedited models only]
-- A stall stop [Dropped 2026-10-17: picked no better than a fixed count; phase 4, step 5]
 - **Thinking length as a criterion between candidates.** [Hypothesis; 3 edits] Trial 161 lengthened
   maths thinking and lost maths through budget hits; candor's 205 lengthened it 13% with no more
   budget hits and kept maths, so length alone didn't decide. Test: on the next model,
@@ -468,8 +479,6 @@ entry is corrected, dropped or overturned is in CLAUDE.md ("Finished, dropped an
   `<ifm|think_faster>` thinking with high's `</ifm|think>` 17 times in 32, which candor counts as
   never closed, and K2's card advises against low for evaluation. Test: accept both closes at low,
   then `candor proxy`'s rank check, low against high, on a first search's best. (step 2)
-- **More slots in one shared KV pool (`--kv-unified`).** [Dropped 2026-10-20: no gain on
-  Qwen3.8-27B, 223-228 tokens/s at 40-48 slots against 224 at 32]
 - **Batch-invariant reads, so a repeat is exact.** [Published: DeepInfer, vLLM; Measured:
   rude-llama bit-identical at 1 slot] Batch-invariant kernels and a sampler keyed on (seed,
   position) give the same answer however a prompt is batched; llama.cpp has no such mode found.

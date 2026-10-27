@@ -1,8 +1,9 @@
-# Milestone: candor beats heretic on rude-llama (2026-10-12, shipped 2026-10-13)
+# Milestone: candor level with heretic on rude-llama (2026-10-12, shipped 2026-10-13)
 
-candor's own search, given no heretic recipe, found an edit that beats heretic's best (Trial 170) on
-every count of phase 2's decision rule, which was signed off before any search ran. Both edits were
-measured the same way: built by candor, in llama-server, on prompts neither search saw.
+candor's own search, given no heretic recipe, found an edit that passes phase 2's decision rule
+against heretic's best (Trial 170), signed off before any search ran: ahead on KL and keyword
+refusals as scored, level with it as shipped. Both edits were measured the same way: built by candor, in llama-server, on
+prompts neither search saw.
 
 As scored, the edit applied as adapters to the Q4_K_M model:
 

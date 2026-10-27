@@ -1,0 +1,57 @@
+## runs/rude: 600 trials, 28 layers
+  one layer, strength 0.8-1.5:
+    best, trial 305 at KL 0.0760: presses no end
+    top 10: 4 press attn.peak_layer, at its floor 0.6
+    top 10: 3 press mlp.reach, at its ceiling 0.6
+    top 10: 2 press attn.strength, at its ceiling 1.5
+    top 10: 2 press attn.reach, at its ceiling 0.6
+    trials of the top 10 pressing a peak's floor 4, a reach's ceiling 5, either 7
+  per layer, strength 0.8-1.5:
+    best, trial 448 at KL 0.0831: presses no end
+    top 10: 2 press mlp.strength, at its floor 0.8
+    trials of the top 10 pressing a peak's floor 0, a reach's ceiling 0, either 0
+## runs/qwen: 545 trials, 32 layers
+  one layer, strength 0.8-3:
+    best, trial 417 at KL 0.0294: direction layer, the first the search reads
+    top 10: 10 press direction layer, the first the search reads
+    top 10: 3 press mlp.reach, at its ceiling 0.6
+    top 10: 3 press attn.peak_layer, at its floor 0.6
+    top 10: 2 press attn.reach, at its ceiling 0.6
+    top 10: 1 presses mlp.peak_layer, at its floor 0.6
+    top 10: 1 presses attn.strength, at its ceiling 3
+    top 10: 1 presses mlp.strength, at its ceiling 3
+    trials of the top 10 pressing a peak's floor 4, a reach's ceiling 5, either 8
+  per layer, strength 0.8-3:
+    best, trial 402 at KL 0.0789: attn.strength, at its ceiling 3; mlp.reach, at its ceiling 0.6
+    top 10: 5 press attn.strength, at its ceiling 3
+    top 10: 3 press mlp.reach, at its ceiling 0.6
+    top 10: 3 press attn.reach, at its ceiling 0.6
+    trials of the top 10 pressing a peak's floor 0, a reach's ceiling 5, either 5
+## runs/k2: 313 trials, 36 layers
+  one layer, strength 0.8-5:
+    best, trial 207 at KL 0.0240: mlp.reach, at its ceiling 0.6
+    top 10: 4 press mlp.reach, at its ceiling 0.6
+    top 10: 3 press attn.peak_layer, at its floor 0.6
+    top 10: 2 press attn.strength, at its ceiling 5
+    top 10: 1 presses attn.reach, at its ceiling 0.6
+    top 10: 1 presses mlp.peak_layer, at its floor 0.6
+    trials of the top 10 pressing a peak's floor 4, a reach's ceiling 5, either 8
+  per layer, strength 0.8-5:
+    best, trial 114 at KL 0.0470: attn.peak_layer, at its floor 0.6
+    top 10: 6 press attn.strength, at its ceiling 5
+    top 10: 5 press attn.peak_layer, at its floor 0.6
+    top 10: 3 press mlp.reach, at its ceiling 0.6
+    top 10: 2 press attn.reach, at its ceiling 0.6
+    trials of the top 10 pressing a peak's floor 5, a reach's ceiling 4, either 7
+## runs/qwen27b-medium: 600 trials, 64 layers
+  one layer, strength 0.8-5:
+    best, trial 435 at KL 0.0188: attn.peak_layer, at its floor 0.6
+    top 10: 5 press attn.reach, at its ceiling 0.6
+    top 10: 3 press attn.peak_layer, at its floor 0.6
+    trials of the top 10 pressing a peak's floor 3, a reach's ceiling 5, either 8
+  per layer, strength 0.5-5:
+    best, trial 532 at KL 0.0254: presses no end
+    top 10: 3 press mlp.peak_layer, at its floor 0.6
+    top 10: 2 press attn.reach, at its ceiling 0.6
+    top 10: 1 presses attn.peak_layer, at its floor 0.6
+    trials of the top 10 pressing a peak's floor 3, a reach's ceiling 2, either 4

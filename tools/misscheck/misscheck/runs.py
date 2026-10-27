@@ -25,6 +25,8 @@ Designs:
           queues 10 spread points over the wider range. Once only per end.
   D3grow  D3 starting at 0.8-1.5 and growing as grow does (5 of the 10 new spread points at each
           position).
+  floor-grow, floor-D3grow  grow and D3grow with peak layer drawn from 0.4-1.0 instead of 0.6-1.0.
+  ends-grow, ends-D3grow    the same with reach also drawn up to 1.0 instead of 0.6.
   ...log  the design with strength drawn on a log scale (widelog, D1log, D3log). The only change to
           candor's code: suggest draws each strength with log=True, and spread's strengths are mapped
           from even shares of the range to even shares of its logarithm.
@@ -76,6 +78,11 @@ DESIGNS["grow"] = DESIGNS["narrow"]
 DESIGNS["D3grow"] = (NARROW, [(ONE_LAYER, None), (PER_LAYER, None)], True, 10)
 for _name in ("wide", "D1", "D3"):
     DESIGNS[f"{_name}log"] = DESIGNS[_name]
+# Ranges other than strength that a design widens, by its name's first word.
+WIDER = {"floor": {"peak_layer": (0.4, 1.0)}, "ends": {"peak_layer": (0.4, 1.0), "reach": (0.01, 1.0)}}
+for _name in ("grow", "D3grow"):
+    for _wider in WIDER:
+        DESIGNS[f"{_wider}-{_name}"] = DESIGNS[_name]
 
 
 def suggest_log(trial, space, layers, components, scope) -> None:
@@ -171,7 +178,8 @@ def run(task: tuple[str, str, int]) -> str:
     started = time.time()
     scenario = scenarios()[scenario_name]
     strength, keys, position_param, per_position = DESIGNS[design]
-    space = config.Search(strength=strength, startup_per_scope=40 if design == "wide40" else 20)
+    wider = WIDER.get(design.split("-", 1)[0], {})
+    space = config.Search(strength=strength, **wider, startup_per_scope=40 if design == "wide40" else 20)
     cap = space.max_refusals
     components = list(COMPONENTS)
     scorers = {p: land.scorer(seed) for p, land in scenario.positions.items()}
@@ -218,9 +226,9 @@ def run(task: tuple[str, str, int]) -> str:
         if design.endswith("grow") and done[key] >= 60 and done[key] % 30 == 0:
             floor, ceiling = pressed(rows, kind, spaces[key])
             low, high = spaces[key].strength
-            wider = (WIDE[0] if floor else low, WIDE[1] if ceiling else high)
-            if wider != (low, high):
-                spaces[key] = config.Search(strength=wider)
+            grown = (WIDE[0] if floor else low, WIDE[1] if ceiling else high)
+            if grown != (low, high):
+                spaces[key] = config.Search(strength=grown, **wider)
                 studies[key] = regrown(
                     studies[key], kind, spaces[key], components, 1000 * seed + 200 + done[key], position_param
                 )

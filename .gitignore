@@ -7,3 +7,7 @@ __pycache__/
 runs/
 *.gguf
 .DS_Store
+tools/misscheck/**/cache/
+tools/misscheck/**/candor-*/
+tools/misscheck/**/*.log
+tools/misscheck/**/*-tables.txt
