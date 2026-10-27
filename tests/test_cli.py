@@ -22,7 +22,17 @@ from candor.run import Run, RunError
 from candor.toolchain import ToolchainError
 
 from .custom_code import write_custom_code_model
-from .helpers import HIDDEN, LLAMA_3B, MESSAGE_WHEN_THINKING, OPENS_ITS_OWN, QWEN35, THINKING, llama
+from .helpers import (
+    FLASH_NEXT,
+    HIDDEN,
+    LLAMA_3B,
+    MESSAGE_WHEN_THINKING,
+    OPENS_ITS_OWN,
+    QWEN35,
+    THINKING,
+    flat,
+    llama,
+)
 from .tiny_run import ALWAYS_THINKING_TEMPLATE
 from .tiny_tokenizer import DATED, PINNABLE, WITH_BOS, tokenizer
 
@@ -86,6 +96,12 @@ def test_inspect_passes_a_llama_style_model_and_warns_about_heretic(tmp_path):
             "32 KiB a token at f16, so 32,768 tokens of context per GiB, plus 50.25 MiB a slot for its "
             "linear-attention layers' state",
         ),
+        (
+            FLASH_NEXT,
+            "qwen4exp",
+            "30 KiB a token at f16, so 34,952 tokens of context per GiB, plus 112.57 MiB a slot for its "
+            "linear-attention layers' state and its n-gram embedding's convolution history",
+        ),
         (LLAMA_3B, "gemma2", None),
         (QWEN35 | {"layer_types": ["linear_attention"] * 32}, "qwen35", None),
         (QWEN35 | {"linear_conv_kernel_dim": None}, "qwen35", None),
@@ -112,6 +128,14 @@ def test_inspect_fails_on_a_writer_it_cannot_place(tmp_path):
     result = run(model_folder(tmp_path, {"model.layers.1.mlp.mystery.weight": [HIDDEN, 128]}))
     assert result.exit_code == 1
     assert "model.layers.1.mlp.mystery.weight" in result.output
+
+
+def test_inspect_passes_a_model_whose_n_gram_embedding_it_leaves_unedited(tmp_path):
+    ple = "model.layers.1.ple.value_proj.weight"
+    result = run(model_folder(tmp_path, {ple: [HIDDEN, HIDDEN]}))
+    assert result.exit_code == 0, result.output
+    assert f"Left unedited │ warn │ {ple}: the per-layer n-gram embedding it writes" in flat(result.output)
+    assert "4 writers, every layer covered" in result.output
 
 
 def test_a_base_model_fails_cleanly(tmp_path):

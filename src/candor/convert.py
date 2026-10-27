@@ -110,8 +110,8 @@ def tensor_types(model_gguf: Path) -> dict[str, str]:
 def as_converted(weight: Tensor, name: str, arch: str, config: dict[str, Any]) -> Tensor:
     """The weight as llama.cpp b11524's converter writes it into the GGUF.
 
-    For Qwen3.5 and Qwen3.5-MoE with more linear-attention value heads than key heads, the converter
-    stores the value heads tiled across key heads instead of grouped by them
+    For Qwen3.5, Qwen3.5-MoE and Qwen4-Exp with more linear-attention value heads than key heads, the
+    converter stores the value heads tiled across key heads instead of grouped by them
     (_LinearAttentionVReorderBase in conversion/qwen.py), so it reorders the input columns of
     linear_attn.out_proj to match. The rows, which are what the edit changes, keep their order. Every
     other target is written as is, a layer's experts among them.
@@ -130,7 +130,11 @@ def _column_order(name: str, arch: str, config: dict[str, Any]) -> Tensor | None
     """The order the converter writes a weight's input columns in, for a weight it reorders."""
     hparams = config | config.get("text_config", {})
     keys, values = hparams.get("linear_num_key_heads", 0), hparams.get("linear_num_value_heads", 0)
-    if arch not in ("qwen35", "qwen35moe") or "linear_attn." not in name or ".out_proj." not in name:
+    if (
+        arch not in ("qwen35", "qwen35moe", "qwen4exp")
+        or "linear_attn." not in name
+        or ".out_proj." not in name
+    ):
         return None
     if keys <= 0 or values <= 0 or keys == values:
         return None

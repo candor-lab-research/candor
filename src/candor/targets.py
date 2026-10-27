@@ -38,13 +38,20 @@ OUTPUT_NORMS = {"post_feedforward_layernorm", "post_self_attn_layernorm", "post_
 ATTENTION = {"self_attn", "attn", "attention", "linear_attn", "mixer", "conv"}
 MLP = {"mlp", "feed_forward", "ffn", "moe", "block_sparse_moe", "shared_mlp"}
 OTHER_STACKS = ("vision", "visual", "audio", "encoder", "mtp")
+# Modules that write into the residual stream but are left unedited: Qwen4-Exp's per-layer n-gram
+# embedding (PLE), whose gated output reaches the stream through a convolution too, so removing a
+# direction from its projection wouldn't remove it from what the module adds.
+UNEDITED = {"ple"}
 LAYER = re.compile(r"^(.*?layers)\.(\d+)\.(.+)$")
 # One expert's weight in a layer that stores each of its experts apart, as Laguna and Qwen3-MoE do.
 EXPERT = re.compile(r"\.experts\.(\d+)\.")
 # The llama.cpp architectures whose memory candor knows: a K and a V of each KV head for every token of
-# context in each layer that attends to all of it, and in each of Qwen3.5's linear-attention layers a
-# state per slot that doesn't grow with the context.
-KV_ARCHITECTURES = {"llama", "qwen2", "qwen3", "qwen35", "k2-horizon", "qwen3moe", "olmoe"}
+# context in each layer that attends to all of it, with Qwen4-Exp's indexer keys, and in each of Qwen3.5's
+# and Qwen4-Exp's linear-attention layers a state per slot that doesn't grow with the context.
+KV_ARCHITECTURES = {"llama", "qwen2", "qwen3", "qwen35", "k2-horizon", "qwen3moe", "olmoe", "qwen4exp"}
+# The architectures llama.cpp gives linear-attention layers, every full_attention_interval-th layer full
+# when the config doesn't list them.
+HYBRIDS = ("qwen35", "qwen4exp")
 FULL, LINEAR = "full_attention", "linear_attention"
 
 
@@ -95,6 +102,8 @@ class Targets:
     # Experts held as one tensor with the hidden size last, [experts, in, hidden], which the converter
     # transposes and candor doesn't edit yet, or square, so which way they are held can't be told.
     hidden_last: list[str] = field(default_factory=list)
+    # Weights of UNEDITED modules that write the hidden size.
+    unedited: list[str] = field(default_factory=list)
 
     @property
     def experts(self) -> list[Writer]:
@@ -165,6 +174,9 @@ def find_targets(shapes: dict[str, list[int]], hidden: int, layers: int) -> Targ
             path = path[:-1]
         writes_hidden = (len(shape) == 2 and shape[0] == hidden) or (len(shape) == 3 and hidden in shape[1:])
         if not writes_hidden:
+            continue
+        if UNEDITED & set(path):
+            targets.unedited.append(name)
             continue
         role, component = _role(path[-1]), _component(path[:-1])
         if role == "reader":
@@ -247,7 +259,7 @@ def edit_targets(writers: list[Writer], arch: str, layers: int) -> dict[str, Tar
 
 def _layer_kinds(text: dict[str, Any], arch: str | None) -> list[str] | None:
     """Each layer's kind of attention as llama.cpp reads it: from layer_types, or without them every
-    layer's full, but Qwen3.5's every full_attention_interval-th (4 by default); None for a kind
+    layer's full, but in HYBRIDS every full_attention_interval-th (4 by default); None for a kind
     candor doesn't know."""
     kinds = text.get("layer_types")
     if kinds is not None:
@@ -255,7 +267,7 @@ def _layer_kinds(text: dict[str, Any], arch: str | None) -> list[str] | None:
     layers = text.get("num_hidden_layers")
     if not isinstance(layers, int):
         return None
-    if arch != "qwen35":
+    if arch not in HYBRIDS:
         return [FULL] * layers
     interval = text.get("full_attention_interval", 4)
     if not isinstance(interval, int) or interval < 1:
@@ -277,16 +289,24 @@ def kv_bytes_per_token(config: dict[str, Any], arch: str | None, bits: float) ->
     kinds = _layer_kinds(text, arch)
     if kinds is None or not (isinstance(kv_heads, int) and isinstance(size, int)):
         return None
-    return kinds.count(FULL) * 2 * kv_heads * size * bits / 8 or None
+    values = 2 * kv_heads * size
+    if arch == "qwen4exp":
+        # The QSA indexer's one key head, cached beside the pooled key of the token's block.
+        indexer = text.get("indexer_head_dim")
+        if not isinstance(indexer, int):
+            return None
+        values += 2 * indexer
+    return kinds.count(FULL) * values * bits / 8 or None
 
 
 def recurrent_bytes_per_slot(config: dict[str, Any], arch: str | None) -> int | None:
-    """The state each slot holds in Qwen3.5's linear-attention layers, the same whatever its context, in
-    f32 whatever the KV cache type, sized as llama.cpp's n_embd_r and n_embd_s size it from the
-    converter's settings. 0 for a model with no such layer; None where the config doesn't give its sizes."""
+    """The state each slot holds in the linear-attention layers of HYBRIDS, the same whatever its
+    context, in f32 whatever the KV cache type, sized as llama.cpp's n_embd_r and n_embd_s size it from
+    the converter's settings, and Qwen4-Exp's n-gram embedding's convolution history. 0 for a model with
+    no such layer; None where the config doesn't give its sizes."""
     text = config.get("text_config", config)
     kinds = _layer_kinds(text, arch) or []
-    if arch != "qwen35" or LINEAR not in kinds:
+    if arch not in HYBRIDS or LINEAR not in kinds:
         return 0
     names = (
         "linear_conv_kernel_dim",
@@ -301,4 +321,13 @@ def recurrent_bytes_per_slot(config: dict[str, Any], arch: str | None) -> int | 
     kernel, key_size, key_heads, value_size, value_heads = sizes
     inner = value_size * value_heads
     conv = (kernel - 1) * (inner + 2 * key_heads * key_size)
-    return kinds.count(LINEAR) * (conv + key_size * inner) * 4
+    floats = kinds.count(LINEAR) * (conv + key_size * inner)
+    if arch == "qwen4exp" and (ple := text.get("ple_layer_ids")):
+        # Its convolution, dilated by the n-gram size, keeps (kernel - 1) * dilation inputs of every stream.
+        names = ("ple_conv_kernel_size", "ngram_size", "hc_count", "hidden_size")
+        ple_sizes = [text.get(name) for name in names]
+        if not all(isinstance(n, int) for n in ple_sizes):
+            return None
+        ple_kernel, dilation, streams, width = ple_sizes
+        floats += len(ple) * (ple_kernel - 1) * dilation * streams * width
+    return floats * 4

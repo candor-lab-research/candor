@@ -1349,3 +1349,21 @@ pilot's quote then goes to the user.
 The repository moved to https://github.com/candor-lab-research/candor, the same anonymous identity
 as the Hugging Face org. Commit hashes before this entry changed in the move; the files that cite
 them, the misscheck scripts included, were updated to the new ones.
+
+### Qwen3.8-Flash-Next support built and reviewed (2026-10-27)
+
+`inspect` passes the model: 144 writers (36 `linear_attn.out_proj`, 12 `self_attn.o_proj`, 48 stacked
+expert `down_proj`, 48 shared-expert `down_proj`). Its PLE projection is reported as left unedited,
+and its memory is known (30 KiB a token and 112.57 MiB a slot).
+- **Residual:** read as the four streams' mean.
+- **Converter:** qwen4exp's `linear_attn.out_proj` columns are reordered as Qwen3.5's are.
+- **Several GPUs:** the directions stage spreads the model across them, each filled to a tenth less
+  than it has free, and refuses before loading a pod with too little RAM. It needs twice the table
+  transformers keeps on the CPU and a tenth more: 225 GB for Flash-Next.
+- **Unchanged:** one GPU and Apple GPUs work as before.
+
+Two independent reviews. The first found the GPUs packed to about 2 GB, so the first batch would run
+out of memory, and an unchecked 205 GB of RAM while loading. It also found the pod one GPU larger than
+needed: four, not five. The second confirmed the fixes and asked for a margin on the RAM check. On a
+tiny random Qwen4-Exp through b11524, the adapters answer as the merged edit (KL 4.55e-9). 981 tests
+pass, plus the e2e ones touched. (findings, "Mixture-of-experts models")

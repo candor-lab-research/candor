@@ -10,6 +10,7 @@ from types import SimpleNamespace
 import gguf
 import torch
 from safetensors.torch import load_file, save_file
+from transformers import Qwen4ExpForCausalLM, Qwen4ExpTextConfig
 
 from candor import config, files, kl, run, toolchain
 from candor.config import Model, RunConfig
@@ -268,6 +269,80 @@ def qwen35() -> dict[str, list[int]]:
         f"{prefix}.1.self_attn.o_proj.weight": [HIDDEN, HIDDEN],
         **{f"{prefix}.{i}.mlp.down_proj.weight": [HIDDEN, 128] for i in range(2)},
     }
+
+
+# Qwen3.8-Flash-Next's sizes: hyper-connections of 4 streams, a full-attention layer with a QSA indexer
+# after every three linear-attention ones, 512 experts and a shared one in every layer, and the n-gram
+# embedding (PLE) in the second layer.
+FLASH_NEXT = {
+    "vocab_size": 248320, "hidden_size": 2560, "num_hidden_layers": 48, "num_attention_heads": 24,
+    "num_key_value_heads": 2, "head_dim": 256,
+    "layer_types": (["linear_attention"] * 3 + ["full_attention"]) * 12,
+    "linear_conv_kernel_dim": 4, "linear_key_head_dim": 128, "linear_num_key_heads": 16,
+    "linear_value_head_dim": 128, "linear_num_value_heads": 48, "num_experts": 512, "num_experts_per_tok": 10,
+    "moe_intermediate_size": 640, "shared_expert_intermediate_size": 640, "hc_count": 4, "hc_lowrank": 320,
+    "indexer_n_heads": 4, "indexer_kv_heads": 1, "indexer_head_dim": 128, "indexer_budget": 2048,
+    "indexer_compress_ratio": 4, "ple_layer_ids": [2], "ple_conv_kernel_size": 4, "ngram_size": 3,
+    "heads_per_ngram": 8, "ngram_vocab_size_base": 20_000_000, "split_ngram_parts": 128,
+    "eos_token_id": 248044, "output_gate_type": "sigmoid",
+    "rope_parameters": {
+        "rope_type": "default", "rope_theta": 10_000_000, "partial_rotary_factor": 0.25,
+        "mrope_section": [11, 11, 10], "mrope_interleaved": True,
+    },
+}  # fmt: skip
+
+
+# A tiny Qwen4-Exp laid out as Flash-Next is, its weights drawn wider than transformers' default, which
+# leaves a tiny model's answers near uniform.
+TINY_QWEN4EXP = {
+    "hidden_size": HIDDEN, "num_hidden_layers": 4, "num_attention_heads": 4, "num_key_value_heads": 2,
+    "head_dim": 32, "layer_types": ["linear_attention"] * 3 + ["full_attention"], "linear_conv_kernel_dim": 4,
+    "linear_key_head_dim": 8, "linear_num_key_heads": 2, "linear_value_head_dim": 8,
+    "linear_num_value_heads": 4, "num_experts": 8, "num_experts_per_tok": 2, "moe_intermediate_size": 32,
+    "shared_expert_intermediate_size": 32, "hc_count": 4, "hc_lowrank": 8, "indexer_n_heads": 2,
+    "indexer_kv_heads": 1, "indexer_head_dim": 16, "indexer_budget": 8, "indexer_compress_ratio": 4,
+    "ple_layer_ids": [2], "ple_conv_kernel_size": 4, "ngram_size": 3, "heads_per_ngram": 2,
+    "ngram_vocab_size_base": 1000, "split_ngram_parts": 2, "eos_token_id": 2, "output_gate_type": "sigmoid",
+    "rope_parameters": {
+        "rope_type": "default", "rope_theta": 10_000_000, "partial_rotary_factor": 0.25,
+        "mrope_section": [2, 1, 1], "mrope_interleaved": True,
+    },
+    "initializer_range": 0.3,
+}  # fmt: skip
+
+
+def tiny_qwen4exp(vocab_size: int = 128) -> Qwen4ExpForCausalLM:
+    torch.manual_seed(0)
+    return Qwen4ExpForCausalLM(Qwen4ExpTextConfig(vocab_size=vocab_size, **TINY_QWEN4EXP)).eval()
+
+
+def write_qwen4exp(folder: Path, model: Qwen4ExpForCausalLM) -> Path:
+    """The model saved as Flash-Next's checkpoint is: under model.language_model, a layer's experts in
+    one tensor of each kind and the n-gram embedding in shards, its config giving the MTP layer count the
+    converter needs."""
+    folder.mkdir()
+    weights = {}
+    for name, tensor in model.state_dict().items():
+        name = name.replace("model.", "model.language_model.", 1)
+        if name.endswith(".ngram_embedding.weight"):
+            for i, shard in enumerate(tensor.chunk(TINY_QWEN4EXP["split_ngram_parts"])):
+                weights[name.replace(".weight", f".shard_{i}.weight")] = shard.contiguous()
+        else:
+            weights[name] = tensor.contiguous()
+    save_file(weights, folder / "model.safetensors")
+    # Its layer types as the checkpoint names them, which transformers renames as it loads.
+    text_config = model.config.to_dict() | {
+        "layer_types": TINY_QWEN4EXP["layer_types"],
+        "mtp_num_hidden_layers": 1,
+    }
+    text_config.pop("architectures", None)
+    model_config = {
+        "architectures": ["Qwen4ExpForConditionalGeneration"],
+        "model_type": "qwen4_exp",
+        "text_config": text_config,
+    }
+    (folder / "config.json").write_text(json.dumps(model_config))
+    return folder
 
 
 HF_NAMES = {

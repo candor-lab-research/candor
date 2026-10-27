@@ -14,7 +14,7 @@ anything else. Every model is scored and shipped as a GGUF in llama-server, and 
 | Phase | What | State |
 | --- | --- | --- |
 | 0-5 | LoRA scoring in llama.cpp, the core maths and `inspect`; rude-llama, Qwen3.5-9B, K2-Horizon-7B and Qwen3.8-27B searched, measured as used and released | Done 2026-10-27 (history; `results/phase-2` to `phase-5`, the milestones) |
-| 6 | Qwen3.8-Flash-Next, the first MoE: Qwen's newest, with hyper-connections and n-gram embeddings (the user, 2026-10-27) | Support being built on the Mac; then a pilot quote |
+| 6 | Qwen3.8-Flash-Next, the first MoE: Qwen's newest, with hyper-connections and n-gram embeddings (the user, 2026-10-27) | Support built and reviewed; the pilot waits for the user's go |
 
 ## How we work
 
@@ -36,11 +36,12 @@ anything else. Every model is scored and shipped as a GGUF in llama-server, and 
 - Anything visual (README, docs, diagrams, model cards, pages, charts) follows `docs/brand.md` (the
   user, 2026-10-23).
 
-## Now
+## Now: waiting for the user
 
-- Qwen3.8-Flash-Next support, on the Mac with tests: its four residual streams (read as their mean),
-  its edit targets (`evidence-2026-10-27/flash-next.md`). Then the pilot's plan and quote, for the
-  user's go. No pods are running.
+- Phase 6's pilot (`runs/flash/pilot-plan.md`, outside git), about $27-50: four RTX PRO 6000 with
+  240 GB of RAM or more for the build and the directions, then one for timing as the search would
+  score (`evidence-2026-10-27/flash-next.md`, section 5). The user also confirms the reasoning effort
+  (medium, as the 27B). No pods are running.
 
 ## Next
 

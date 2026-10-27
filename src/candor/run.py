@@ -423,14 +423,22 @@ class Run:
             )
 
     def check_memory(self) -> None:
-        """Stop if this machine's GPU can't hold the model for reading residuals."""
+        """Stop if this machine's GPUs can't hold the model for reading residuals, or its memory can't
+        hold what transformers loads on the CPU, which would have the model killed partway through."""
         device, _ = self._device()
         model = self.settings.model
-        if short := residuals.shortfall(self._model_without_download, model.revision, device):
+        if short := residuals.shortfall(self._model_without_download, model.revision, device, spread=True):
             needed, budget = short
             raise RunError(
                 f"reading residuals needs about {needed / 1e9:.1f} GB of GPU memory and this machine "
                 f"allows {budget / 1e9:.1f} GB; run it on a pod"
+            )
+        if short := residuals.memory_shortfall(self._model_without_download, model.revision):
+            needed, allowed = short
+            raise RunError(
+                f"loading the model needs about {needed / 1e9:.1f} GB of this machine's memory, where "
+                "transformers joins the weights it keeps off the GPUs, such as an n-gram embedding table, "
+                f"from their shards, and it allows {allowed / 1e9:.1f} GB; run it on a pod with more"
             )
 
     def check_judge(self, model: str, revision: str | None) -> None:
@@ -933,12 +941,23 @@ class Run:
         ids = self.prompt_ids()
         device, dtype = self._device()
         trusted = self.settings.model.trust_remote_code
-        self.report(f"Reading residuals on {device}")
+        placement = residuals.placement(device)
+        spread = "max_memory" in placement
+        self.report("Loading the model across the GPUs" if spread else f"Reading residuals on {device}")
         from transformers import AutoModelForCausalLM
 
         model = AutoModelForCausalLM.from_pretrained(
-            self.model_folder, dtype=dtype, device_map=device, trust_remote_code=trusted
+            self.model_folder, dtype=dtype, trust_remote_code=trusted, **placement
         ).eval()
+        if off := residuals.off_the_gpus(model):
+            del model
+            residuals.free_memory(device)
+            raise RunError(
+                f"the GPUs couldn't hold the whole model, so transformers put {len(off)} of its modules, "
+                f"{off[0]} first, on the CPU or disk; run it on a pod with more GPU memory"
+            )
+        if spread:
+            self.report(f"Reading residuals on GPUs {', '.join(map(str, residuals.gpus_used(model)))}")
         pad_id = residuals.pad_token_id_for(self.model_folder, trusted)
         read = {}
         for answering in stale:

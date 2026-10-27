@@ -164,6 +164,12 @@ def _target_rows(model: str, hidden: int, layers: int, arch: str | None, revisio
             "edit can't remove the direction exactly"
         )
         rows.append(("Output norms", "warn", detail))
+    if found.unedited:
+        detail = (
+            f"{_examples(found.unedited)}: the per-layer n-gram embedding it writes reaches the residual "
+            "stream through a convolution too, so removing a direction from it wouldn't be exact"
+        )
+        rows.append(("Left unedited", "warn", detail))
     if arch and not found.hidden_last:
         unmapped = [w.name for w in found.writers if targets.gguf_name(w, arch, layers) is None]
         if unmapped:
@@ -245,7 +251,10 @@ def _kv_cache_rows(model_config: dict[str, Any], arch: str | None) -> list[Row]:
         f"{per_token / 1024:g} KiB a token at {cache}, so {int(GIB // per_token):,} tokens of context per GiB"
     )
     if per_slot:
-        detail += f", plus {per_slot / 2**20:.2f} MiB a slot for its linear-attention layers' state"
+        state = "linear-attention layers' state"
+        if arch == "qwen4exp" and source.text_config(model_config).get("ple_layer_ids"):
+            state += " and its n-gram embedding's convolution history"
+        detail += f", plus {per_slot / 2**20:.2f} MiB a slot for its {state}"
     return [("KV cache", "ok", detail)]
 
 

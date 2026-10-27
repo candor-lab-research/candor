@@ -147,9 +147,10 @@ def test_qwen35_out_proj_in_any_other_order_is_caught(tmp_path, order):
     ]
 
 
-def test_qwen35_value_heads_are_tiled_like_the_converter():
+@pytest.mark.parametrize("arch", ["qwen35", "qwen4exp"])
+def test_qwen35_and_qwen4exp_value_heads_are_tiled_like_the_converter(arch):
     weight = torch.arange(32.0)[None, :]
-    assert as_converted(weight, OUT_PROJ, "qwen35", TINY_QWEN35)[0].tolist() == CONVERTER_ORDER
+    assert as_converted(weight, OUT_PROJ, arch, TINY_QWEN35)[0].tolist() == CONVERTER_ORDER
 
 
 @pytest.mark.parametrize(

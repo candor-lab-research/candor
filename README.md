@@ -88,8 +88,8 @@ Before the first run:
   binaries, checked by sha256, and its converter in its own environment, pinned by
   `src/candor/data/converter-constraints.txt`. `CANDOR_LLAMA_BIN` points at an existing b11524 build
   instead.
-- **Big models.** Reading residuals needs the model in 16 bits on the GPU. A 3B model fits on an
-  18 GB Mac; larger ones and long jobs run on a [pod](docs/pods.md).
+- **Big models.** Reading residuals needs the model in 16 bits on the GPU, or across a pod's GPUs.
+  A 3B model fits on an 18 GB Mac; larger ones and long jobs run on a [pod](docs/pods.md).
 
 ## Commands
 

@@ -402,6 +402,19 @@ entry is corrected, dropped or overturned is in CLAUDE.md ("Finished, dropped an
   4-layer Laguna, against edits of 0.30-0.51; at 0.2, by 1.0-5.3e-6 on all three. [Hypothesis]
   Top-k routing adds under about 2 times on a real MoE: the first pilot's adapters-against-merged
   check measures it.
+- **Hyper-connections' streams never mix in Qwen4-Exp, so their mean is the residual to read
+  directions from.** [Published: heretic #519 reads the mean for DeepSeek V4 and GLM 5.3] [Measured:
+  transformers 5.19's code] Each block writes its output into each of the 4 streams scaled by a
+  per-stream weight, so removing a direction from a writer removes it from all four, and the
+  per-stream differences of means average to the mean's. [Hypothesis] Each stream's direction lies
+  close to the mean's: the pilot measures their cosine per layer.
+- **Qwen4-Exp's answers in llama-server move with batching more than other models'.** [Measured: a
+  tiny random Qwen4-Exp in BF16 on Metal] KL moved by up to 5e-4 with what a prompt was batched with
+  or how it was chunked, deterministic for a given batching; under 2e-5 without the n-gram
+  embedding, and llama.cpp matched transformers to 1e-8 in F32. The likely cause is the n-gram
+  gate's signed square root, which magnifies small differences near zero. [Hypothesis] The real
+  model's KL noise floor is higher than other models': the pilot reads one trial at 1 slot and at
+  the run's slots.
 
 ## Releases
 

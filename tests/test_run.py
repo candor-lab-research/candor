@@ -2,6 +2,7 @@ import json
 import math
 import os
 import shutil
+from collections import Counter
 from pathlib import Path
 from types import SimpleNamespace
 from typing import Any
@@ -11,6 +12,8 @@ import pytest
 import torch
 import torch.nn.functional as F
 from datasets.exceptions import DatasetNotFoundError
+from transformers import Qwen4ExpForCausalLM, Qwen4ExpTextConfig
+from transformers.integrations.accelerate import _get_device_map, expand_device_map
 
 from candor import config, directions, files, run, targets
 from candor.edit import RowNorm, edit_factors, rank_one
@@ -22,10 +25,12 @@ from candor.weights import ModelFiles
 
 from .custom_code import write_custom_code_model
 from .helpers import (
+    FLASH_NEXT,
     HIDDEN,
     LAYERS,
     LLAMA_SERVER,
     TEMPLATE,
+    TINY_QWEN4EXP,
     adapter_factors,
     fake_everything_but_the_stages,
     fake_residuals,
@@ -33,7 +38,9 @@ from .helpers import (
     pinned,
     residuals_of,
     short,
+    tiny_qwen4exp,
     write_llama,
+    write_qwen4exp,
 )
 from .tiny_gguf import random_weights, write_model
 
@@ -510,11 +517,11 @@ def test_reading_residuals_must_fit_the_gpu_before_anything_is_converted(
     this, _ = current
     needed = 2 * WEIGHTS * 1.1
     monkeypatch.setattr(run.residuals, "device_and_dtype", lambda: ("mps", torch.float16))
-    monkeypatch.setattr(run.residuals, "memory_budget", lambda device: math.floor(needed) - 1)
+    monkeypatch.setattr(run.residuals, "memory_budget", lambda device, spread: math.floor(needed) - 1)
     with pytest.raises(RunError, match=r"needs about 0\.0 GB of GPU memory .* run it on a pod"):
         this.prepare()
     assert fake_conversion == []
-    monkeypatch.setattr(run.residuals, "memory_budget", lambda device: math.ceil(needed))
+    monkeypatch.setattr(run.residuals, "memory_budget", lambda device, spread: math.ceil(needed))
     this.check_memory()
 
 
@@ -531,10 +538,22 @@ def test_a_hub_models_memory_is_checked_without_downloading_it(current, monkeypa
     monkeypatch.setattr(run.source, "tensor_shapes", shapes)
     monkeypatch.setattr(run, "snapshot_download", lambda *_, **__: pytest.fail("downloaded"))
     monkeypatch.setattr(run.residuals, "device_and_dtype", lambda: ("cuda", torch.bfloat16))
-    monkeypatch.setattr(run.residuals, "memory_budget", lambda device: 2_000_000)
+    monkeypatch.setattr(run.residuals, "memory_budget", lambda device, spread: 2_000_000)
     with pytest.raises(RunError, match=r"needs about 2\.2 GB"):
         this.check_memory()
     assert asked == [("org/model", "abc123")]
+
+
+def test_reading_residuals_may_take_what_every_gpu_has_free(current, monkeypatch):
+    this, _ = current
+    needed = 2 * WEIGHTS * 1.1
+    monkeypatch.setattr(run.residuals, "device_and_dtype", lambda: ("cuda", torch.bfloat16))
+    monkeypatch.setattr(torch.cuda, "device_count", lambda: 2)
+    monkeypatch.setattr(torch.cuda, "mem_get_info", lambda gpu=None: (math.ceil(needed / 2), 2 * WEIGHTS))
+    this.check_memory()
+    monkeypatch.setattr(torch.cuda, "device_count", lambda: 1)
+    with pytest.raises(RunError, match="run it on a pod"):
+        this.check_memory()
 
 
 def test_a_gpu_torch_cannot_use_stops_the_run(current, monkeypatch):
@@ -666,6 +685,85 @@ def test_the_model_is_loaded_straight_onto_the_device(tmp_path, model, monkeypat
     this.directions()
     assert loads.models == [{"dtype": torch.float16, "device_map": "mps", "trust_remote_code": trusted}]
     assert loads.tokenizers == [trusted]
+
+
+@pytest.mark.parametrize("gpus", [1, 2])
+def test_on_several_gpus_the_model_is_spread_across_them_and_only_them(tmp_path, model, monkeypatch, gpus):
+    messages = []
+    this = Run(tmp_path, config.RunConfig(model=config.Model(source=str(model))), report=messages.append)
+    monkeypatch.setattr(Run, "prompt_ids", lambda self: {"harmful": [[1]], "harmless": [[2]]})
+    loads = fake_residuals(monkeypatch)
+    free = {gpu: 80_000_000 - gpu for gpu in range(gpus)}
+    monkeypatch.setattr(run.residuals, "device_and_dtype", lambda: ("cuda", torch.bfloat16))
+    monkeypatch.setattr(run.residuals, "free_on_each_gpu", lambda: free)
+    # The GPUs transformers used, which needn't be all of them.
+    monkeypatch.setattr(run.residuals, "gpus_used", lambda model: [1])
+    this.directions()
+    allowed = {gpu: int(room / 1.1) for gpu, room in free.items()}
+    placed = {"device_map": "auto", "max_memory": allowed} if gpus > 1 else {"device_map": "cuda"}
+    assert loads.models == [{"dtype": torch.bfloat16, "trust_remote_code": False, **placed}]
+    assert ("Reading residuals on GPUs 1" if gpus > 1 else "Reading residuals on cuda") in messages
+
+
+def test_flash_next_spread_across_gpus_leaves_each_room_and_only_its_n_gram_embedding_off_them(monkeypatch):
+    """Placed by transformers' own device-map inference, on the meta device, so no weight is made."""
+    with torch.device("meta"):
+        model = Qwen4ExpForCausalLM(Qwen4ExpTextConfig(**FLASH_NEXT)).bfloat16()
+    free = {gpu: 95 * 2**30 for gpu in range(5)}
+    monkeypatch.setattr(run.residuals, "free_on_each_gpu", lambda: free)
+    device_map = _get_device_map(model, "auto", run.residuals.placement("cuda")["max_memory"], None)
+    tensors = dict(model.named_parameters()) | dict(model.named_buffers())
+    placed = expand_device_map(device_map, list(tensors))
+    filled = Counter()
+    for name, where in placed.items():
+        filled[where] += tensors[name].numel() * tensors[name].element_size()
+    # A tenth of what each GPU has free is left for a batch's activations.
+    assert all(filled[gpu] <= room / 1.1 for gpu, room in free.items())
+    # Kept on the CPU by transformers, as no one GPU holds it, and only read from there a row at a time.
+    off = [name for name, where in placed.items() if where not in free]
+    assert off == ["model.layers.1.ple.ple_embedding.ngram_embedding.weight"]
+
+
+def test_a_machine_without_the_memory_to_join_the_n_gram_embedding_is_refused_before_loading(
+    tmp_path, monkeypatch
+):
+    folder = write_qwen4exp(tmp_path / "qwen4exp", tiny_qwen4exp())
+    this = Run(tmp_path, config.RunConfig(model=config.Model(source=str(folder))), report=lambda _: None)
+    held = run.residuals.held_on_the_cpu(str(folder), None)
+    # Twice the table, as its shards are joined, and a tenth more.
+    needed = 2 * held * 1.1
+    monkeypatch.setattr(run.residuals, "system_memory", lambda: int(needed) - 1)
+    with pytest.raises(
+        RunError, match="of this machine's memory, where transformers joins the weights it keeps"
+    ):
+        this.check_memory()
+    monkeypatch.setattr(run.residuals, "system_memory", lambda: int(needed) + 1)
+    this.check_memory()
+
+
+def test_residuals_are_never_read_from_a_model_partly_on_the_disk(tmp_path, model, monkeypatch):
+    this = Run(tmp_path, config.RunConfig(model=config.Model(source=str(model))), report=lambda _: None)
+    monkeypatch.setattr(Run, "prompt_ids", lambda self: {"harmful": [[1]], "harmless": [[2]]})
+    fake_residuals(monkeypatch)
+    monkeypatch.setattr(run.residuals, "off_the_gpus", lambda model: ["model.layers.1", "model.layers.2"])
+    with pytest.raises(RunError, match=r"put 2 of its modules, model\.layers\.1 first, on the CPU or disk"):
+        this.directions()
+    assert not this.path("directions.pt").exists()
+
+
+def test_a_model_with_hyper_connections_has_a_direction_of_the_hidden_size_at_each_index(
+    tmp_path, monkeypatch
+):
+    folder = write_qwen4exp(tmp_path / "qwen4exp", tiny_qwen4exp())
+    this = Run(tmp_path, config.RunConfig(model=config.Model(source=str(folder))), report=lambda _: None)
+    monkeypatch.setattr(
+        Run,
+        "prompt_ids",
+        lambda self: {"harmful": [[1, 7, 3, 8], [1, 9, 4]], "harmless": [[1, 5, 6, 11, 12]]},
+    )
+    found = this.directions()
+    assert found.shape == (TINY_QWEN4EXP["num_hidden_layers"] + 1, HIDDEN)
+    assert torch.isfinite(found).all()
 
 
 def test_a_model_with_its_own_code_is_read_only_when_trusted(tmp_path, monkeypatch):

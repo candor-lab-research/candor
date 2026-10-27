@@ -22,8 +22,10 @@ about 14:30 UTC.
   card) may score it. KV is about 24 KiB a token, but the 36 linear-attention layers hold about
   113 MB of recurrent state per slot, so slots may have to drop below 32.
 - **What costs more than the 27B:**
-  - The directions need the model in 16 bits on several GPUs. candor asks for the weights and a tenth
-    more, 396 GB: five RTX PRO 6000 (480 GB, $12.45/h).
+  - The directions need the model in 16 bits on several GPUs: four RTX PRO 6000 (384 GB, $9.96/h).
+    They also need 240 GB of RAM or more: transformers keeps the n-gram tables (102 GB in 16 bits) in
+    CPU memory and joins their 128 shards there, and candor asks for twice the tables and a tenth
+    more (225 GB).
   - Disk is about 1.2 TB or more.
   - Each finalist's export writes a 360 GB 16-bit copy before quantising.
   - The search card costs 4.2 times an A40 an hour. Whether it is fast enough to make up for that is
@@ -103,13 +105,20 @@ Estimates, for the pilot to measure:
 - **Per slot:** KV 24 KiB a token (12 layers x 2 KV heads x 256 x K and V in f16); recurrent state
   about 113 MB (36 layers x 48 heads x 128 x 128 in f32). At 32 slots of about 9k tokens, about
   7 GB of KV and 3.6 GB of state, which with the weights is about 90-93 GB.
-- **Directions:** 360 GB in 16 bits and a tenth more for activations (396 GB, candor's check), across
-  5 x 96 GB (480 GB). Keeping the n-gram tables (102 GB in 16 bits, lookups only) on the CPU would
-  bring it to 3 x 96 GB, at the cost of more code.
+- **Directions:**
+  - transformers keeps the n-gram tables (102 GB in 16 bits, lookups only) in CPU memory
+    (`_no_placement_params`). It joins their 128 shards there, peaking at about 205 GB of RAM.
+  - transformers' `infer_auto_device_map` keeps the first GPU free for layer 1 (107.6 GB with the
+    tables).
+  - The rest of what the causal LM loads goes on three more GPUs: 251.5 GB (89.5, 88.1 and 73.9). That
+    leaves at least 11 GB each for activations, which peak at 1.9-3.3 GiB for a batch of 32 prompts of
+    128-256 tokens (measured in bf16 on the CPU on four Flash-Next-sized layers).
+  - So the pod is 4 x 96 GB with 240 GB of RAM or more (independent review, 2026-10-27, simulating
+    transformers 5.19's device map).
 
 | Card (secure) | Memory | $/h | Stock | For |
 | --- | --- | --- | --- | --- |
-| RTX PRO 6000 Blackwell | 96 GB | 2.49 | HIGH, 8 data centres | scoring, one card; directions, five |
+| RTX PRO 6000 Blackwell | 96 GB | 2.49 | HIGH, 8 data centres | scoring, one card; directions, four |
 | H200 SXM | 141 GB | 5.29 | LOW, 8 | scoring if 96 GB is too tight |
 | H100 NVL | 94 GB | 3.19 | LOW, 1 | |
 | A100 SXM 80GB | 80 GB | 1.79 | MEDIUM, 6 | directions, six |
@@ -121,8 +130,9 @@ Estimates, for the pilot to measure:
 
 ## 5. What the pilot must settle
 
-1. The build on a 5-GPU pod: download, conversion and quantisation times; the directions across
-   five GPUs, finite and hidden-wide.
+1. The build on a 4-GPU pod: download, conversion and quantisation times; the directions across
+   the GPUs, finite and hidden-wide. Each stream's difference of means against the mean's, by
+   cosine per layer, from the same prompts (the review's check that the mean loses nothing).
 2. That b11524 runs it correctly: the unedited model's refusals, maths and thinking on the first 64
    of each set, as used.
 3. The scoring card: whether the Q4_K_M and 32 slots fit 96 GB, or how many do; tokens a second; and

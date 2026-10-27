@@ -17,6 +17,8 @@ models end to end:
 - conversion with llama.cpp's converter, including a tokenizer saved by transformers 5 and a tiny
   Qwen3.5;
 - the edit-target and tokenization checks;
+- a tiny Qwen4-Exp, Qwen3.8-Flash-Next's architecture: its conversion with its n-gram embedding left
+  unedited, and its adapters answering as the edit written into its GGUF;
 - `init`, `run` (resuming and a settings change), `measure` and `compare` (the judge standing in for
   the 8B second judge), `search`, `score` and `export` on SmolLM2-135M;
 - a real thinking model's budget on Qwen3.5-0.8B, Qwen3.8-27B's `init`, and the judge.

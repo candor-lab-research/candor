@@ -237,20 +237,20 @@ def test_a_judge_the_gpu_cant_hold_stops_the_measurement_before_it_loads(tiny, m
     second = second_judge(tiny, monkeypatch).settings.measure.second_judge
     judge = tiny.settings.measure.judge = weights_folder(tmp_path / "small", 10)
     needed = 2 * sum(math.prod(shape) for shape in source.tensor_shapes(second).values()) * 1.1
-    monkeypatch.setattr(residuals, "memory_budget", lambda device: int(needed) - 1)
+    monkeypatch.setattr(residuals, "memory_budget", lambda device, spread: int(needed) - 1)
     with pytest.raises(
         RunError, match=rf"the judge {re.escape(second)} needs about 0\.0 GB of GPU memory and this machine"
     ):
         Measurement(tiny, None, "base").measure()
     # The run's judge fits, so it judged before the second was refused.
     assert FakeGuard.events == [("load", judge), ("close", judge)]
-    monkeypatch.setattr(residuals, "memory_budget", lambda device: int(needed) + 1)
+    monkeypatch.setattr(residuals, "memory_budget", lambda device, spread: int(needed) + 1)
     answered = counting_answers(monkeypatch)
     Measurement(tiny, None, "base").measure()
     assert answered == [] and FakeGuard.events[-2:] == [("load", second), ("close", second)]
     # The run's judge is held to it as well.
     tiny.settings.measure.judge_revision = "another-commit"
-    monkeypatch.setattr(residuals, "memory_budget", lambda device: 1)
+    monkeypatch.setattr(residuals, "memory_budget", lambda device, spread: 1)
     FakeGuard.events.clear()
     with pytest.raises(RunError, match=rf"the judge {re.escape(judge)} needs about"):
         Measurement(tiny, None, "base").measure()
@@ -264,10 +264,10 @@ def test_a_downloaded_judge_is_sized_from_the_hubs_cache_without_the_network(tin
     (repo / "refs" / "main").write_text("abc")
     weights_folder(repo / "snapshots" / "abc", 10)
     monkeypatch.setattr(source, "get_safetensors_metadata", lambda *_, **__: pytest.fail("asked the Hub"))
-    monkeypatch.setattr(residuals, "memory_budget", lambda device: 1)
+    monkeypatch.setattr(residuals, "memory_budget", lambda device, spread: 1)
     with pytest.raises(RunError, match="the judge org/judge needs about"):
         CHECK_JUDGE(tiny, "org/judge", None)
-    monkeypatch.setattr(residuals, "memory_budget", lambda device: 1000)
+    monkeypatch.setattr(residuals, "memory_budget", lambda device, spread: 1000)
     CHECK_JUDGE(tiny, "org/judge", "abc")
 
 

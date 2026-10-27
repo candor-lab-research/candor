@@ -41,7 +41,7 @@ from candor.engine import LlamaServer, Thinking
 from candor.judge import Guard, Verdict, read_verdict
 from candor.weights import ModelFiles
 
-from .helpers import mean_from_top
+from .helpers import mean_from_top, tiny_qwen4exp, write_qwen4exp
 
 pytestmark = pytest.mark.skipif(os.environ.get("CANDOR_E2E") != "1", reason="set CANDOR_E2E=1 to run")
 MODEL = "HuggingFaceTB/SmolLM2-135M-Instruct"
@@ -318,6 +318,74 @@ def test_qwen35_moe_linear_attention_and_experts_reach_the_gguf_as_candor_expect
     convert.to_gguf(folder, out / "model.gguf", out / "convert.log")
 
     assert converted_targets(folder, out / "model.gguf") == []
+
+
+def qwen4exp_folder(converted, tmp_path) -> Path:
+    """A tiny random Qwen4-Exp, saved as Qwen3.8-Flash-Next's checkpoint is."""
+    folder = write_qwen4exp(tmp_path / "qwen4exp", tiny_qwen4exp(vocab_size=49152))
+    for name in ("tokenizer.json", "tokenizer_config.json"):
+        shutil.copy(converted[0] / name, folder / name)
+    return folder
+
+
+def test_qwen4exp_reaches_the_gguf_as_candor_expects_and_its_n_gram_embedding_is_left_alone(
+    converted, tmp_path
+):
+    folder = qwen4exp_folder(converted, tmp_path)
+    convert.to_gguf(folder, tmp_path / "model.gguf", tmp_path / "convert.log")
+    assert converted_targets(folder, tmp_path / "model.gguf") == []
+    found = targets.find_targets(source.tensor_shapes(str(folder)), 64, 4)
+    assert found.unedited == ["model.language_model.layers.1.ple.value_proj.weight"]
+
+
+def test_qwen4exp_adapters_answer_as_the_edit_written_into_its_gguf(converted, tmp_path):
+    folder = qwen4exp_folder(converted, tmp_path)
+    base = tmp_path / "model.gguf"
+    convert.to_gguf(folder, base, tmp_path / "convert.log")
+    config = source.read_config(str(folder))
+    arch = targets.gguf_architecture(config)
+    assert arch == "qwen4exp"
+    found = targets.find_targets(source.tensor_shapes(str(folder)), 64, 4)
+    files = ModelFiles(folder)
+    direction = torch.nn.functional.normalize(
+        torch.randn(64, generator=torch.Generator().manual_seed(3)), dim=0
+    )
+    # Merged into the GGUF's own weights, which the converter rounded to BF16, rather than the model's: the
+    # n-gram embedding's gate takes a square root, which magnifies so small a difference near 0.
+    stored = {tensor.name: convert.stored(tensor) for tensor in gguf.GGUFReader(base).tensors}
+    scales, replaced = {}, {}
+    for target in targets.edit_targets(found.writers, arch, 4).values():
+        weight = convert.as_converted(
+            files.read(target.names, target.stacked), target.name, arch, config
+        ).float()
+        b, a = rank_one(weight, direction, RowNorm.PRE)
+        write_adapter(tmp_path / f"{target.gguf}.gguf", arch, {target.gguf: (b, a)})
+        scales[tmp_path / f"{target.gguf}.gguf"] = 1.2
+        replaced[target.gguf] = partial(lambda w, b, a: (w + 1.2 * b @ a).numpy(), stored[target.gguf], b, a)
+    edited = {"blk.0.ssm_out.weight", "blk.3.attn_output.weight", "blk.0.ffn_down_exps.weight"}
+    assert edited | {"blk.0.ffn_down_shexp.weight"} <= set(replaced)
+    export._rewritten(base, tmp_path / "merged.gguf", replaced, gguf.GGMLQuantizationType.F32)
+    tensors = [
+        {t.name: bytes(np.asarray(t.data).view(np.uint8)) for t in gguf.GGUFReader(path).tensors}
+        for path in (base, tmp_path / "merged.gguf")
+    ]
+    kept = [name for name in tensors[0] if name not in replaced]
+    assert "per_layer_token_embd.weight" in kept and "blk.1.ple_value.weight" in kept
+    assert all(tensors[1][name] == tensors[0][name] for name in kept)
+    # One slot, so each prompt is computed alone in both servers: batched with another, a prompt's answer
+    # here moves by up to 5e-4 of KL, as that gate magnifies how batching rounds too.
+    binary = toolchain.binaries() / "llama-server"
+    with LlamaServer(
+        binary, base, tmp_path / "server.log", list(scales), parallel=1, context_per_slot=256
+    ) as s:
+        ids = s.chat_ids(CHATS, {})
+        unedited, served = s.top_logprobs(ids, 50), s.top_logprobs(ids, 50, scales)
+    with LlamaServer(
+        binary, tmp_path / "merged.gguf", tmp_path / "server.log", parallel=1, context_per_slot=256
+    ) as s:
+        merged = s.top_logprobs(ids, 50)
+    assert mean_from_top(served, merged) < 1e-5
+    assert mean_from_top(unedited, merged) > 1e-3
 
 
 def test_chat_ids_match_real_chat_requests_and_transformers(converted):

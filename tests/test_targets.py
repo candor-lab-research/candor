@@ -12,7 +12,7 @@ from candor.targets import (
     recurrent_bytes_per_slot,
 )
 
-from .helpers import HIDDEN, LLAMA_3B, QWEN35, llama
+from .helpers import FLASH_NEXT, HIDDEN, LLAMA_3B, QWEN35, TINY_QWEN4EXP, llama
 
 
 def test_finds_writers_and_ignores_same_shaped_readers():
@@ -127,6 +127,57 @@ def test_a_shared_expert_is_a_target_of_its_own():
     shared = grouped["model.layers.1.mlp.shared_expert.down_proj.weight"]
     assert shared.gguf == "blk.1.ffn_down_shexp.weight" and len(shared.writers) == 1
     assert grouped["model.layers.1.mlp.experts.down_proj.weight"].gguf == "blk.1.ffn_down_exps.weight"
+
+
+def qwen4exp(layers: int = 4) -> dict[str, list[int]]:
+    """Qwen4-Exp's layer weights as its checkpoint holds them, a full-attention layer after three
+    linear-attention ones, the n-gram embedding in layer 1, and an MTP layer of its own."""
+    shapes = {}
+    for prefix, count in (("model.language_model.layers", layers), ("mtp.layers", 1)):
+        for i in range(count):
+            layer = f"{prefix}.{i}"
+            if prefix.startswith("mtp") or i % 4 == 3:
+                shapes[f"{layer}.self_attn.o_proj.weight"] = [HIDDEN, 128]
+                shapes[f"{layer}.self_attn.q_proj.weight"] = [256, HIDDEN]
+            else:
+                shapes[f"{layer}.linear_attn.out_proj.weight"] = [HIDDEN, 32]
+                shapes[f"{layer}.linear_attn.in_proj_qkv.weight"] = [HIDDEN, HIDDEN]
+            shapes[f"{layer}.mlp.experts.down_proj"] = [8, HIDDEN, 32]
+            shapes[f"{layer}.mlp.experts.gate_up_proj"] = [8, 64, HIDDEN]
+            shapes[f"{layer}.mlp.shared_expert.down_proj.weight"] = [HIDDEN, 32]
+            shapes[f"{layer}.attn_hyper_connection.input_mix_weight_up.weight"] = [4 * HIDDEN, 8]
+    ple = "model.language_model.layers.1.ple"
+    shapes |= {
+        f"{ple}.value_proj.weight": [HIDDEN, HIDDEN],
+        f"{ple}.key_proj.weight": [4 * HIDDEN, HIDDEN],
+        f"{ple}.conv1d.weight": [4 * HIDDEN, 1, 4],
+        # Rows as many as the hidden size, which only a tiny model's would be.
+        **{f"{ple}.ple_embedding.ngram_embedding.shard_{i}.weight": [HIDDEN, 16] for i in range(2)},
+    }
+    return shapes
+
+
+def test_qwen4exp_leaves_its_n_gram_embedding_unedited_and_says_so():
+    found = find_targets(qwen4exp(), HIDDEN, 4)
+    assert found.ok and not found.unclassified
+    ple = "model.language_model.layers.1.ple"
+    assert found.unedited == [
+        f"{ple}.ple_embedding.ngram_embedding.shard_0.weight",
+        f"{ple}.ple_embedding.ngram_embedding.shard_1.weight",
+        f"{ple}.value_proj.weight",
+    ]
+    assert found.summary() == {
+        "attn": {"linear_attn.out_proj": 3, "self_attn.o_proj": 1},
+        "mlp": {"mlp.experts.down_proj": 4, "mlp.shared_expert.down_proj": 4},
+    }
+    grouped = edit_targets(found.writers, "qwen4exp", 4)
+    assert {t.gguf for t in grouped.values() if t.layer == 3} == {
+        "blk.3.attn_output.weight",
+        "blk.3.ffn_down_exps.weight",
+        "blk.3.ffn_down_shexp.weight",
+    }
+    assert grouped["model.language_model.layers.1.linear_attn.out_proj.weight"].gguf == "blk.1.ssm_out.weight"
+    assert all(w.name.startswith("model.language_model.layers.") for w in found.writers)
 
 
 def test_experts_with_a_number_missing_are_refused():
@@ -247,6 +298,11 @@ SMOLLM2 = {"num_hidden_layers": 30, "num_attention_heads": 9, "num_key_value_hea
             "qwen35",
             64 * 1024,
         ),
+        # Qwen4-Exp's full-attention layers also cache each token's QSA indexer key and its block's pooled
+        # key: 320 bytes a token for the e2e tests' tiny model, as llama.cpp's own log gives it.
+        (TINY_QWEN4EXP, "qwen4exp", 320),
+        (FLASH_NEXT, "qwen4exp", 30 * 1024),
+        ({k: v for k, v in FLASH_NEXT.items() if k != "indexer_head_dim"}, "qwen4exp", None),
     ],
 )
 def test_the_kv_cache_a_token_takes_is_known_only_for_layouts_candor_knows(text, arch, per_token):
@@ -262,6 +318,16 @@ def test_a_hybrids_linear_attention_layers_hold_a_state_for_each_slot():
     assert recurrent_bytes_per_slot(LLAMA_3B, "llama") == 0
     assert recurrent_bytes_per_slot(QWEN35 | {"linear_num_value_heads": None}, "qwen35") is None
     assert recurrent_bytes_per_slot(QWEN35_BY_INTERVAL, "qwen35") == 50.25 * 2**20
+
+
+def test_qwen4exps_slots_also_hold_its_n_gram_embeddings_convolution():
+    # As llama.cpp's own log gives them for 64 slots of the e2e tests' tiny model: 0.89 MiB, of which the
+    # linear-attention layers' R 0.14 and S 0.19, and the n-gram embedding's convolution P 0.56.
+    assert recurrent_bytes_per_slot({"text_config": TINY_QWEN4EXP}, "qwen4exp") == 14592
+    assert recurrent_bytes_per_slot(TINY_QWEN4EXP | {"ple_layer_ids": []}, "qwen4exp") == 14592 - 9216
+    assert recurrent_bytes_per_slot(TINY_QWEN4EXP | {"hc_count": None}, "qwen4exp") is None
+    # 112.57 MiB.
+    assert recurrent_bytes_per_slot(FLASH_NEXT, "qwen4exp") == 118_038_528
 
 
 def test_kv_bytes_for_moe_architectures():

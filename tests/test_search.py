@@ -126,7 +126,7 @@ def too_big_a_judge(tiny, monkeypatch) -> None:
     # Only the judge's memory: the residuals' check comes first.
     monkeypatch.setattr(run.Run, "check_memory", lambda self: None)
     tiny.settings.measure.judge = tiny.settings.model.source
-    monkeypatch.setattr(run.residuals, "memory_budget", lambda device: 1)
+    monkeypatch.setattr(run.residuals, "memory_budget", lambda device, spread: 1)
 
 
 def test_a_judge_the_gpu_cant_hold_stops_the_search_before_it_loads(tiny, monkeypatch):

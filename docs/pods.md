@@ -32,6 +32,12 @@ kept, and about 10 GB of tools: about 85 GB for Qwen3.5-9B, 260 GB for a 27B wit
 A container disk can't grow without a restart, which wipes it, so `candor run` warns when an export
 won't fit.
 
+**GPUs and memory.** With several GPUs, the directions stage spreads the model across them, filling
+each to a tenth less than it has free, and stops if any of it would go to the CPU or the disk. It
+needs the model's weights in 16 bits and a tenth more across the GPUs together. Weights transformers
+keeps off the GPUs, such as Qwen3.8-Flash-Next's 102 GB n-gram table, are joined from their shards in
+the pod's memory, so `candor run` first checks the pod has twice their size and a tenth more.
+
 ## 2. Set it up
 
 ```
