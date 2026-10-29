@@ -200,6 +200,18 @@ def test_inspect_warns_when_edit_targets_were_quantised_to_4_bits_before(tmp_pat
     assert "Quantised before" not in run(model_folder(tmp_path / "zeros")).output
 
 
+def test_inspect_warns_and_carries_on_when_it_cant_read_weights_to_tell_if_quantised_before(
+    tmp_path, monkeypatch
+):
+    def unreadable(model, names, values, revision=None):
+        raise OSError("injected")
+
+    monkeypatch.setattr(cli.source, "first_rows", unreadable)
+    result = run(model_folder(tmp_path))
+    assert result.exit_code == 0, result.output
+    assert "Quantised before │ warn │ couldn't read a few weights to tell: injected" in flat(result.output)
+
+
 def test_a_quantised_checkpoint_fails(tmp_path):
     scales = {f"model.layers.{i}.mlp.down_proj.weight_scale": [HIDDEN, 1] for i in range(2)}
     result = run(model_folder(tmp_path, scales))

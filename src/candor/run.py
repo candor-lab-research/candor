@@ -119,6 +119,26 @@ def read_record(record: Path) -> Any:
         return None
 
 
+def sha256_of(path: Path) -> Path:
+    """Where a file's sha256 is kept beside it."""
+    return path.with_name(path.name + ".sha256.json")
+
+
+def file_sha256(path: Path, report: Callable[[str], None]) -> str:
+    """A file's sha256, kept beside it with its size and time to the nanosecond, so a file of many
+    gigabytes is hashed again only when they change, as when it is built or copied again."""
+    kept = sha256_of(path)
+    stat = path.stat()
+    now = {"size": stat.st_size, "modified": stat.st_mtime_ns}
+    found = read_record(kept) or {}
+    if "sha256" in found and {key: found.get(key) for key in now} == now:
+        return found["sha256"]
+    report(f"Hashing {path.name}")
+    sha256 = toolchain.sha256(path)
+    write_atomic(kept, json.dumps({**now, "sha256": sha256}))
+    return sha256
+
+
 def load_prompts(spec: config.PromptSet) -> list[str]:
     try:
         rows = load_dataset(spec.dataset, spec.subset, split=spec.split, revision=spec.revision)
@@ -494,8 +514,12 @@ class Run:
         out.mkdir(exist_ok=True)
         base, base_inputs, quantized, quantized_inputs = self._planned_gguf()
         quantization = self.settings.deployment.quantization
+        kept = {"convert.log"} | {
+            name
+            for path in (base, quantized)
+            for name in (path.name, record_of(path).name, sha256_of(path).name)
+        }
         for leftover in out.iterdir():
-            kept = {base.name, quantized.name, record_of(base).name, record_of(quantized).name, "convert.log"}
             if leftover.name not in kept:
                 self.report(f"Removing {leftover.relative_to(self.folder)}, which this run no longer uses")
                 _remove(leftover)

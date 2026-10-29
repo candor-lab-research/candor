@@ -343,6 +343,18 @@ def test_the_unedited_models_first_tokens_are_read_again_from_a_gguf_of_other_by
     assert read == [True]
 
 
+def test_a_search_keeps_its_first_tokens_with_the_sha256_a_measurement_hashed(tiny, monkeypatch):
+    small(tiny, trials=1)
+    Measurement(tiny, None, "base", limit=1).measure()
+    hashed = []
+    real = toolchain.sha256
+    monkeypatch.setattr(toolchain, "sha256", lambda path: hashed.append(path) or real(path))
+    Search(tiny).search(1)
+    _, quantized = tiny.gguf()
+    [kept] = tiny.path("search", "base-first-tokens").iterdir()
+    assert json.loads(kept.read_text())["model bytes"] == {"sha256": real(quantized)} and hashed == []
+
+
 def test_a_search_session_reads_only_the_harmful_test_prompts_from_their_dataset(tiny, monkeypatch):
     small(tiny)
     Search(tiny).search(1)

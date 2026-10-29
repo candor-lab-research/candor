@@ -173,39 +173,51 @@ print(\"llama-server sees the GPU:\", toolchain.binaries())
 }
 
 file_times() {
-    # Each file's size and modification time in nanoseconds, by its path under $1, or "." for $1 itself.
+    # Each file's size and modification time in nanoseconds, by its path under $1, or "." for $1 itself;
+    # a link's are its target's, which rsync -L copies.
     python3 -c '
 import json, sys
 from pathlib import Path
 top = Path(sys.argv[1])
-files = [p for p in top.rglob("*") if p.is_file() and not p.is_symlink()] if top.is_dir() else [top]
+files = [p for p in top.rglob("*") if p.is_file()] if top.is_dir() else [top]
 print(json.dumps({str(p.relative_to(top)): [p.stat().st_size, p.stat().st_mtime_ns] for p in files}))
 ' "$1"
 }
 
 push() {
-    local dest differ
+    local dest differ broken python
     dest=$(remote "${2:-$1}")
     plain "$1"
     [[ -e $1 ]] || die "nothing at $1"
+    broken=$(find -L "$1" -type l -print -quit)
+    [[ -z $broken ]] || die "$broken is a link to nothing, so its file can't be copied"
+    python=$(reach "command -v python3 >/dev/null && echo yes || echo no")
+    [[ $python = yes ]] || die "the pod has no python3, which push needs to give its copy this Mac's times"
     if [[ -d $1 ]]; then
         on_pod "mkdir -p $(printf '%q' "$dest")"
-        rsync -a --partial -e "$ssh_command" "${1%/}/" "$host:$dest/"
+        rsync -aL --partial -e "$ssh_command" "${1%/}/" "$host:$dest/"
     else
         on_pod "mkdir -p $(printf '%q' "$(dirname "$dest")")"
-        rsync -a --partial -e "$ssh_command" "$1" "$host:$dest"
+        rsync -aL --partial -e "$ssh_command" "$1" "$host:$dest"
     fi
     # rsync from macOS keeps times only to the second, and a local model's fingerprint holds them to the
-    # nanosecond, so the pod's copy is given this Mac's times and checked against them, file by file.
+    # nanosecond, so the pod's copy is given this Mac's times and checked against them, file by file. A
+    # file left in a folder from before would change the fingerprint too, so those are named.
     differ=$(file_times "$1" | on_pod "python3 -c '
 import json, os, sys
 from pathlib import Path
-for name, (size, modified) in json.load(sys.stdin).items():
-    path = Path(sys.argv[1]) / name
+top, times = Path(sys.argv[1]), json.load(sys.stdin)
+if list(times) == [\".\"] and top.is_dir():
+    top = top / sys.argv[2]
+for name, (size, modified) in times.items():
+    path = top / name
     os.utime(path, ns=(modified, modified))
     if [path.stat().st_size, path.stat().st_mtime_ns] != [size, modified]:
-        print(name)
-' $(printf '%q' "$dest")")
+        print(path)
+left = [p.name for p in top.iterdir() if p.is_file() and not p.name.startswith(\".\") and p.name not in times] if top.is_dir() else []
+if left:
+    print(f\"pod.sh: {top} on the pod also holds files not here ({len(left)}, such as {left[0]}),\", \"which the fingerprint of a local model there counts if they are model files\", file=sys.stderr)
+' $(printf '%q' "$dest") $(printf '%q' "$(basename "$1")")")
     [[ -z $differ ]] ||
         die "$(wc -l <<<"$differ" | tr -d ' ') of the pod's files don't have this Mac's size and time" \
             "to the nanosecond, such as $(head -n 1 <<<"$differ"), so a local model there wouldn't keep" \

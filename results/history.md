@@ -1383,3 +1383,11 @@ fixes the Mac makes for free.
   no more than 25.5%, the most a measured repeat moved. 9 of 18 measured repeats moved more than the
   3% it allowed (findings).
 - The repository moved on the Mac to `~/Documents/Projects/LLM/candor`; its venv was reinstalled.
+- **The other small fixes, each reviewed until clean:** a local model pushed to a pod keeps its
+  fingerprint (`pod.sh push` gives each file the Mac's time to the nanosecond, follows links and
+  names files left on the pod); a search's kept unedited reads and each measured set follow the
+  GGUF's sha256, hashed once per file, and a set resumed from other bytes is answered again; an
+  export says how many tensors it holds finer than its name; `export --outside` names what it leaves
+  out; a stopped `candor proxy` keeps the unedited model's score; `inspect` warns on weights
+  quantised to 4 bits before (`evidence-2026-10-29/quantised-before.md`); `measure --set` measures
+  sets alone. Left: `serve` on a pod with the Mac's tools, whose config went with the move.

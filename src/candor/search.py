@@ -58,7 +58,19 @@ from .files import write_atomic
 from .judge import Guard, is_refusal, judged_refusal, read_verdict
 from .kernel import Kernel
 from .measure import Edit, edit_adapters
-from .run import ANSWER_SETS, ANSWERING, EDITED, STAGES, Run, RunError, answering, digest, duration, seeds
+from .run import (
+    ANSWER_SETS,
+    ANSWERING,
+    EDITED,
+    STAGES,
+    Run,
+    RunError,
+    answering,
+    digest,
+    duration,
+    file_sha256,
+    seeds,
+)
 
 # Harmful prompts judged at a time, so a trial that can't win stops early. The server answers the
 # next ones meanwhile.
@@ -1474,10 +1486,8 @@ def _base_reads(
         return server.top_logprobs(harmless, kl_tokens)
     kept = json.loads(path.read_text()) if path.exists() else {}
     known = kept.get("model bytes", {})
-    found = _model_bytes(model, known, report)
-    if known.get("sha256") == found["sha256"]:
-        if known != found:
-            write_atomic(path, json.dumps(kept | {"model bytes": found}))
+    sha256 = file_sha256(model, report)
+    if known.get("sha256") == sha256:
         return [_read(top) for top in kept["kl"]]
     if kept:
         why = "with other bytes" if known else "whose bytes weren't recorded"
@@ -1485,19 +1495,8 @@ def _base_reads(
     base = server.top_logprobs(harmless, kl_tokens)
     path.parent.mkdir(exist_ok=True)
     # In the order read, so KL sums them as it did.
-    write_atomic(path, json.dumps({"read from": read_from, "model bytes": found, "kl": base}))
+    write_atomic(path, json.dumps({"read from": read_from, "model bytes": {"sha256": sha256}, "kl": base}))
     return base
-
-
-def _model_bytes(model: Path, known: dict[str, Any], report: Callable[[str], None]) -> dict[str, Any]:
-    """The GGUF's sha256, size and modification time. A file of many gigabytes is hashed only when its
-    size or time isn't the one known, as when it was built or copied again."""
-    stat = model.stat()
-    now = {"size": stat.st_size, "modified": stat.st_mtime_ns}
-    if {key: known.get(key) for key in now} == now:
-        return known
-    report(f"Hashing {model.name}: the unedited model's first tokens are kept with its bytes")
-    return {**now, "sha256": toolchain.sha256(model)}
 
 
 def _read(top: dict[str, float]) -> dict[int, float]:

@@ -36,14 +36,14 @@ anything else. Every model is scored and shipped as a GGUF in llama-server, and 
 - Anything visual (README, docs, diagrams, model cards, pages, charts) follows `docs/brand.md` (the
   user, 2026-10-23).
 
-## Now: the small fixes on the Mac, then the first MoE with the user
+## Now: waiting for the user on the first MoE
 
 - The user has $27 of Runpod credit and won't top up (2026-10-29). Flash-Next's pilot
   (`runs/flash/pilot-plan.md`, outside git) is $27-50 on its own, and its search scores on a card
   4.2 times an A40 an hour, so the model is chosen again with the user. candor recommends
   Qwen3-30B-A3B-Instruct-2507 (`evidence-2026-10-23/first-moe.md`): A40-sized, no thinking, a
   published edit to measure against. No pods are running.
-- Meanwhile the Mac's small fixes (Next, 3), each reviewed.
+- The Mac's small fixes are done and reviewed (history, 2026-10-29).
 
 ## Next
 
@@ -67,15 +67,9 @@ anything else. Every model is scored and shipped as a GGUF in llama-server, and 
      tiny model only); K2's budget message was written for a close that starts with a newline;
    - measurements have no DEPENDS entry, so a change to the directions or adapters code answers even
      the unedited model's sets again (seen at the 2026-10-29 directions change);
-   - small fixes: an interrupted `candor
-     proxy` scores the unedited model again; an `inspect` warning when weights were quantised
-     before; the export's file name when some tensors are Q8_0 or F32; a local model copied to a pod
-     rebuilds every stage; the unedited reads a search keeps are keyed on the GGUF's recipe, not its
-     bytes (an A100 and an A40 build differ; A40 builds matched, step 4); `export --outside` to
-     report edited tensors outside candor's targets (findings); a measurement to record its export's
-     sha256, so a file exported again can be matched to it; `measure` to answer one set alone
-     (step 6 patched `measure.SETS`); `serve` on a pod with the Mac's tools (step 6 bridged them by
-     hand, `evidence-2026-10-22/bridge.py`);
+   - `serve` on a pod with the Mac's tools (step 6 bridged them by hand,
+     `evidence-2026-10-22/bridge.py`); the tools' config, `~/Desktop/tune/tools/mcp.json`, which
+     `CANDOR_MCP` names, is missing since the Mac's folders moved (2026-10-29);
    - MoE: memory rows for Laguna and Qwen3.5-MoE, Granite's fused `input_linear`, NemotronH's layers
      (`evidence-2026-10-23/moe-support.md`, section 4), each with its model;
    - heretic 2.x journals aren't read (they record no refusals for a trial);

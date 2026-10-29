@@ -562,6 +562,17 @@ def test_a_file_exported_again_is_matched_to_the_measurement_of_the_first_by_its
     assert {measured[name]["gguf_sha256"] for name in measure.SETS} == {sha256}
 
 
+def test_the_sha256_kept_beside_an_export_is_no_leftover_to_remove(tiny, converting):
+    shipped = export.export(tiny, EDIT)
+    Measurement(tiny, EDIT, "merged", exported=True, limit=1).measure()
+    assert run.sha256_of(shipped).exists()
+    shipped.unlink()
+    said = []
+    tiny.report = said.append
+    export.export(tiny, EDIT)
+    assert len(converting) == 2 and not [line for line in said if line.startswith("Removing")]
+
+
 def test_a_failed_export_leaves_nothing_behind(tiny, monkeypatch):
     tiny.gguf()
 
@@ -651,32 +662,46 @@ def test_a_model_edited_elsewhere_ships_and_measures_as_the_same_edit_of_candors
     assert export.export_outside(tiny, "saved", folder) == shipped and len(converting) == 2
 
 
-def test_what_a_model_edited_elsewhere_changes_outside_candors_targets_is_named_and_left_out(
-    tiny, converting
-):
+def test_what_a_model_edited_elsewhere_holds_outside_candors_targets_is_listed_and_left_out(tiny, converting):
     tiny.gguf()
     folder = saved_elsewhere(tiny)
     weights = load_file(folder / "model.safetensors")
     weights["model.layers.0.self_attn.q_proj.weight"] *= 2
-    # Rounded to the type it is saved in, a weight still holds the run's model's values.
-    weights["model.layers.1.self_attn.q_proj.weight"] = weights["model.layers.1.self_attn.q_proj.weight"].to(
-        torch.bfloat16
+    # Rounded to the type it is saved in, even FP8, a weight still holds the run's model's values.
+    for name, kind in (("self_attn.q_proj", torch.bfloat16), ("mlp.gate_proj", torch.float8_e4m3fn)):
+        weights[f"model.layers.1.{name}.weight"] = weights[f"model.layers.1.{name}.weight"].to(kind)
+    weights["model.layers.0.mlp.gate_proj.weight"] = (2 * weights["model.layers.0.mlp.gate_proj.weight"]).to(
+        torch.float8_e4m3fn
     )
-    weights["model.embed_tokens.weight"] = torch.ones(4, HIDDEN)
+    # Only in this copy, as an untied lm_head would be.
+    weights["lm_head.weight"] = torch.ones(4, HIDDEN)
     save_file(weights, folder / "model.safetensors")
     said = []
     tiny.report = said.append
     shipped = export.export_outside(tiny, "saved", folder)
-    assert (
-        f"2 tensors of {folder} differ from the run's model outside candor's edit targets, and the export "
-        "takes only those, so it lacks any edit these hold: model.embed_tokens.weight, "
-        "model.layers.0.self_attn.q_proj.weight"
-    ) in said
+    left = {
+        "differ": ["model.layers.0.mlp.gate_proj.weight", "model.layers.0.self_attn.q_proj.weight"],
+        "missing": ["lm_head.weight"],
+    }
+    assert json.loads(run.record_of(shipped).read_text())["left_out"] == left
+    assert export.left_out(tiny, "saved") == (folder, left)
+    assert f"Tensors of saved compared with the run's model: {len(weights)} of {len(weights)}" in said
     assert f"Taking the {len(export.deltas(tiny, EDIT))} edited weights from {folder}" in said
     held = export.kept(tiny, shipped, export._taken(tiny, folder))
     assert set(held) == edited_in_gguf(tiny) and all(
         share == pytest.approx(1, abs=1e-4) for share in held.values()
     )
+    # Read back from the record, the list keeps the export matching without comparing the models again.
+    compared = len(said)
+    assert export.export_outside(tiny, "saved", folder) == shipped and len(converting) == 1
+    assert not [line for line in said[compared:] if line.startswith("Tensors of")]
+    # An export made before candor listed them still matches, and says nothing of them.
+    record = json.loads(run.record_of(shipped).read_text())
+    del record["left_out"]
+    run.record_of(shipped).write_text(json.dumps(record))
+    assert export.export_outside(tiny, "saved", folder) == shipped and len(converting) == 1
+    assert export.left_out(tiny, "saved") == (folder, None)
+    Measurement(tiny, None, "saved", outside="saved", limit=1).measure()
 
 
 def test_a_model_edited_elsewhere_is_exported_again_once_it_changes(tiny, converting):
@@ -733,9 +758,9 @@ def test_models_edited_elsewhere_that_cant_be_taken_are_refused(tiny, converting
         Measurement(tiny, None, "missing", outside="missing").measure()
 
 
-def gguf_holding(tiny, path, folder, kind=TYPE.F32, arch: str | None = "llama", only=None):
+def gguf_holding(tiny, path, folder, kind=TYPE.F32, arch: str | None = "llama", only=None, extra=None):
     """A GGUF of only the architecture, if any, and the edit targets of a Hugging Face folder in one
-    type, as taken_from_gguf reads one."""
+    type, as taken_from_gguf reads one, and any extra tensors, each in a type of its own."""
     weights = load_file(folder / "model.safetensors")
     writer = gguf.GGUFWriter(path, arch or "llama")
     if arch is None:
@@ -746,6 +771,8 @@ def gguf_holding(tiny, path, folder, kind=TYPE.F32, arch: str | None = "llama", 
             writer.add_tensor(gguf_name, array.astype(np.float32 if kind == TYPE.F32 else np.float16))
         else:
             writer.add_tensor(gguf_name, gguf.quants.quantize(array, kind), raw_dtype=kind)
+    for name, (array, own) in (extra or {}).items():
+        writer.add_tensor(name, gguf.quants.quantize(array, own), raw_dtype=own)
     writer.write_header_to_file()
     writer.write_kv_data_to_file()
     writer.write_tensors_to_file()
@@ -788,14 +815,32 @@ def test_what_a_gguf_edited_elsewhere_changes_outside_candors_targets_is_named_a
     } | {name: partial(lambda tensor: 2 * export._values(tensor), ours[name]) for name in changed}
     path = made / "saved.gguf"
     export._rewritten(made / "rounded.gguf", path, written, export.F32)
+    export.export_outside(tiny, "saved", path)
+    assert export.left_out(tiny, "saved") == (path, {"differ": sorted(changed), "missing": []})
+
+
+def test_a_gguf_edited_elsewhere_holding_the_run_s_tensors_rounded_to_its_types_holds_them_unchanged(
+    tiny, converting
+):
+    base, _ = tiny.gguf()
+    ours = {tensor.name: convert.stored(tensor).numpy() for tensor in gguf.GGUFReader(base).tensors}
+    extra = {
+        # Rounded to a type llama-quantize gives it, a tensor still holds the run's model's values.
+        "token_embd.weight": (ours["token_embd.weight"], TYPE.Q8_0),
+        "output.weight": (2 * ours["output.weight"], TYPE.Q8_0),
+        # Only in this copy, as rope frequencies some converters write are.
+        "rope_freqs.weight": (np.ones(HIDDEN // 8, np.float32), TYPE.F32),
+    }
+    path = gguf_holding(tiny, tiny.folder.parent / "saved.gguf", saved_elsewhere(tiny), extra=extra)
     said = []
     tiny.report = said.append
     export.export_outside(tiny, "saved", path)
-    assert (
-        f"6 tensors of {path} differ from the run's model outside candor's edit targets, and the export "
-        "takes only those, so it lacks any edit these hold: blk.0.attn_k.weight, blk.0.attn_q.weight, "
-        "blk.1.attn_k.weight, blk.1.attn_q.weight, output.weight and 1 more"
-    ) in said
+    assert export.left_out(tiny, "saved") == (
+        path,
+        {"differ": ["output.weight"], "missing": ["rope_freqs.weight"]},
+    )
+    total = len(tiny.target_names) + len(extra)
+    assert f"Tensors of saved.gguf compared with the run's model: {total} of {total}" in said
 
 
 @pytest.mark.parametrize("kind", [TYPE.F16, TYPE.BF16], ids=["F16", "BF16"])
@@ -828,6 +873,53 @@ def test_ggufs_edited_elsewhere_that_cant_be_taken_are_refused(tiny, converting)
     with pytest.raises(RunError, match="isn't a folder or a GGUF file"):
         export.export_outside(tiny, "notes", text)
     assert converting == []
+
+
+def test_the_command_line_warns_of_what_a_model_edited_elsewhere_holds_that_its_export_leaves_out(
+    tiny, converting
+):
+    tiny.gguf()
+    folder = saved_elsewhere(tiny)
+    weights = load_file(folder / "model.safetensors")
+    differ = sorted(name for name in weights if not name.endswith(("o_proj.weight", "down_proj.weight")))
+    for name in differ:
+        weights[name] = 2 * weights[name]
+    weights["lm_head.weight"] = torch.ones(4, HIDDEN)
+    save_file(weights, folder / "model.safetensors")
+    run_folder = on_disk(tiny)
+    record = run.record_of(run_folder / "exports" / "saved" / "cli-saved-Q4_K_M.gguf")
+    runner = CliRunner(env={"COLUMNS": "200"})
+    named = (
+        f"{folder} differs from the run's model in {len(differ)} tensors outside candor's edit targets; the "
+        f"export takes the run's model's own, so any edit there is left out: {', '.join(differ[:5])} and "
+        f"{len(differ) - 5} more, all listed in {record}"
+    )
+    missing = f"{folder} holds 1 tensor missing from the run's model, which the export leaves out"
+    command = ["export", str(run_folder), "--outside", str(folder), "--name", "saved"]
+    # Built and reused alike.
+    for _ in range(2):
+        exported = runner.invoke(app, command)
+        assert exported.exit_code == 0, exported.output
+        said = " ".join(exported.output.split())
+        assert named in said and f"{missing}: lm_head.weight" in said
+    assert len(converting) == 1
+    measured = runner.invoke(app, ["measure", str(run_folder), "--outside", "saved", "--limit", "1"])
+    assert measured.exit_code == 0, measured.output
+    said = " ".join(measured.output.split())
+    assert (
+        f"{folder} differs from the run's model in {len(differ)} tensors outside candor's edit targets; the "
+        "export takes the run's model's own, so any edit there is left out"
+    ) in said
+    assert missing in said and "lm_head.weight" not in said
+    made = json.loads(record.read_text())
+    del made["left_out"]
+    record.write_text(json.dumps(made))
+    exported = runner.invoke(app, command)
+    assert exported.exit_code == 0, exported.output
+    assert (
+        f"saved's export was made before candor listed the tensors of {folder} it leaves out: remove its "
+        "folder in exports/ and export it again to list them."
+    ) in " ".join(exported.output.split())
 
 
 def test_the_command_line_exports_and_measures_a_model_edited_elsewhere(tiny, converting):

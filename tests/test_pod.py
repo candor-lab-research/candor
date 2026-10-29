@@ -537,6 +537,52 @@ def test_a_local_model_pushed_keeps_its_fingerprint(pod, tmp_path):
     assert (pod.folder / "root" / "elsewhere" / "c.json").stat().st_mtime_ns == TIME
 
 
+def test_a_file_pushed_into_a_folder_and_a_linked_file_keep_their_times(pod, tmp_path):
+    here = tmp_path / "here"
+    model = a_local_model(here / "models" / "m")
+    (tmp_path / "elsewhere.json").write_text("linked")
+    os.utime(tmp_path / "elsewhere.json", ns=(TIME + 5, TIME + 5))
+    (model / "linked.json").symlink_to(tmp_path / "elsewhere.json")
+    made = pod.run("push", "models/m", cwd=here)
+    assert made.returncode == 0, made.stderr
+    copy = pod.folder / "root" / "candor" / "models" / "m"
+    assert not (copy / "linked.json").is_symlink() and (copy / "linked.json").read_text() == "linked"
+    assert fingerprint(copy) == fingerprint(model)
+    (pod.folder / "root" / "elsewhere" / "folder").mkdir(parents=True)
+    made = pod.run("push", "models/m/config.json", "/root/elsewhere/folder", cwd=here)
+    assert made.returncode == 0, made.stderr
+    assert (pod.folder / "root" / "elsewhere" / "folder" / "config.json").stat().st_mtime_ns == TIME
+
+
+def test_push_names_files_left_on_the_pod_that_would_change_a_fingerprint(pod, tmp_path):
+    here = tmp_path / "here"
+    a_local_model(here / "m")
+    assert pod.run("push", "m", cwd=here).returncode == 0
+    (pod.folder / "root" / "candor" / "m" / "old.safetensors").write_text("left")
+    made = pod.run("push", "m", cwd=here)
+    assert made.returncode == 0
+    assert "also holds files not here (1, such as old.safetensors)" in made.stderr
+
+
+def test_push_needs_python_on_the_pod_and_links_to_something(pod, tmp_path):
+    here = tmp_path / "here"
+    model = a_local_model(here / "m")
+    (pod.tools / "ssh").rename(pod.tools / "reach")
+    answer = (
+        f'#!/bin/bash\n[[ $* = *"command -v python3"* ]] && echo no && exit\nexec {pod.tools}/reach "$@"\n'
+    )
+    tool(pod.tools, "ssh", answer)
+    made = pod.run("push", "m", cwd=here)
+    assert made.returncode == 1 and "the pod has no python3" in made.stderr
+    tool(pod.tools, "ssh", "#!/bin/bash\nexit 255\n")
+    made = pod.run("push", "m", cwd=here)
+    assert made.returncode == 1 and "can't reach the pod" in made.stderr
+    (model / "gone.json").symlink_to(tmp_path / "nothing")
+    made = pod.run("push", "m", cwd=here)
+    assert made.returncode == 1 and "m/gone.json is a link to nothing" in made.stderr
+    assert not (pod.folder / "root" / "candor" / "m").exists()
+
+
 def test_push_fails_where_the_pod_cant_keep_this_macs_times(pod, tmp_path):
     here = tmp_path / "here"
     a_local_model(here / "m")

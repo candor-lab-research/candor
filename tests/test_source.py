@@ -1,4 +1,5 @@
 import json
+from contextlib import nullcontext
 from types import SimpleNamespace
 
 import huggingface_hub
@@ -74,10 +75,11 @@ def test_the_first_rows_of_hub_weights_are_read_alone_at_the_pinned_commit(tmp_p
     class Hub:
         """Each file of the local folder, served a range at a time."""
 
-        def get(self, url, headers, timeout):
+        def stream(self, method, url, headers, timeout):
             asked.append(url)
             start, end = map(int, headers["range"].removeprefix("bytes=").split("-"))
-            return SimpleNamespace(content=(tmp_path / url.rsplit("/", 1)[1]).read_bytes()[start : end + 1])
+            content = (tmp_path / url.rsplit("/", 1)[1]).read_bytes()[start : end + 1]
+            return nullcontext(SimpleNamespace(status_code=206, read=lambda: content))
 
     monkeypatch.setattr(source, "get_session", Hub)
     monkeypatch.setattr(source, "hf_raise_for_status", lambda response: None)
@@ -91,6 +93,45 @@ def test_the_first_rows_of_hub_weights_are_read_alone_at_the_pinned_commit(tmp_p
     assert set(read) == {"a.weight", "b.weight"} and all("/resolve/abc123/" in url for url in asked)
     local = source.first_rows(str(tmp_path), ["a.weight"], 10_000)
     assert np.array_equal(local["a.weight"], weights["a.weight"].view(torch.int16).numpy().view(np.uint16))
+
+
+def test_a_server_ignoring_the_range_is_refused_before_its_whole_file_is_read(monkeypatch):
+    read = []
+
+    class Whole:
+        """A server that answers a ranged read with the whole file."""
+
+        def stream(self, method, url, headers, timeout):
+            return nullcontext(SimpleNamespace(status_code=200, read=lambda: read.append(url) or b""))
+
+    monkeypatch.setattr(source, "get_session", Whole)
+    monkeypatch.setattr(source, "hf_raise_for_status", lambda response: None)
+    with pytest.raises(OSError, match="answered a read of 8 bytes with 200, not 206"):
+        source._read("org/model", "model.safetensors", 0, 8, "abc123")
+    assert read == []
+
+
+def bits(weights: torch.Tensor) -> np.ndarray:
+    if weights.dtype == torch.float32:
+        return weights.view(torch.int32).numpy().view(np.uint32)
+    return weights.view(torch.int16).numpy().view(np.uint16)
+
+
+def test_weights_mostly_zero_dont_look_quantised_before_and_quantised_ones_with_zeros_still_do():
+    torch.manual_seed(0)
+    weights = torch.randn(64, 256)
+    # 65% zeros leave about 11 values in a block of 32, too few to tell.
+    zeroed = weights.masked_fill(torch.rand(64, 256) < 0.65, 0.0)
+    for kind in (torch.bfloat16, torch.float32):
+        assert not source.quantised_before(bits(zeroed.to(kind)))
+        assert not source.quantised_before(bits(-zeroed.to(kind)))
+    # Quantised to 4 bits, zero among its levels, with a third of the weights zero.
+    scale = weights.abs().amax(dim=1, keepdim=True) / 7
+    levels = (weights / scale).round().clamp(-8, 7) * scale
+    sparse = levels.masked_fill(torch.rand(64, 256) < 1 / 3, 0.0)
+    for kind in (torch.bfloat16, torch.float32):
+        assert source.quantised_before(bits(sparse.to(kind)))
+        assert not source.quantised_before(bits(weights.to(kind)))
 
 
 def test_read_json_returns_none_for_a_missing_file(tmp_path):

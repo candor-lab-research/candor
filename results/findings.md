@@ -383,6 +383,15 @@ entry is corrected, dropped or overturned is in CLAUDE.md ("Finished, dropped an
   models, the real binary] An override skips the counter Q4_K_M uses to pick Q4_K or Q6_K for later
   ffn_down layers: one at layer 1 changed 8 of 14 later ones. `export` now gives every tensor its
   plain type; rude-llama's shipped exports weren't affected (their overrides ran to the last layer).
+- **Weights quantised to 4 bits before can be told from their first rows.** [Measured: 9 BF16 models,
+  36 weights; gpt-oss-20b-BF16, 4 weights] Never-quantised weights hold a median 32 distinct values
+  in blocks of 32 (lowest 27); gpt-oss's MXFP4-origin experts 8-13, its attention 32. `inspect` warns
+  at 16 or fewer, as rude-llama's MLX-origin layers held. (`evidence-2026-10-29/quantised-before.md`)
+- **`export --outside` takes only candor's targets.** [Measured: candor's code; Published: two
+  public 27B edits] orcarouter's and RANA's `embed_tokens` edits would be left out
+  (`evidence-2026-10-21/public-27b.md`); from huihui it took all 70 edited weights
+  (`phase-5-qwen3.8-27b.md`, step 5). Since 2026-10-29 it names the tensors that differ from or are
+  missing in the run's model, keeps them in its record and warns on every use.
 
 ## Mixture-of-experts models
 
@@ -458,12 +467,6 @@ entry is corrected, dropped or overturned is in CLAUDE.md ("Finished, dropped an
 - **Start strength wide (to 3.0 or more) rather than widening once the best presses 1.5.**
   [Measured: 2 models] The best-supported change; it is only a default setting, and K2's search
   started wide (above). Before making it the default: one more model family.
-- **`export --outside` drops edits outside candor's targets without saying so.** [Measured:
-  candor's code; Published: two public 27B edits] `export.taken_from` reads only the edit targets,
-  so orcarouter's and RANA's `embed_tokens` edits would be lost; it should at least report differing
-  tensors outside them. (`evidence-2026-10-21/public-27b.md`) From huihui it took 70 edited weights,
-  the count DreamFast's fingerprint gives for the whole model, so none was dropped there.
-  (`phase-5-qwen3.8-27b.md`, step 5)
 - **Measure the best public edit as a second reference.** [Hypothesis] `candor export --outside`
   then `candor measure --outside` on trohrbaugh's Qwen3.5-9B edit, as Trial 161 was, would show
   whether its 0/400 holds as used; a first look on the 100 test prompts costs minutes.

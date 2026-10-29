@@ -36,7 +36,7 @@ import torch
 from torch import Tensor
 
 from . import config, convert, source
-from .run import Run, RunError, digest, record_of
+from .run import Run, RunError, digest, every_tenth, read_record, record_of, sha256_of
 from .source import INDEX
 from .weights import ModelFiles
 
@@ -58,6 +58,9 @@ SPLIT = re.compile(r"-\d{5}-of-\d{5}\.gguf$")
 F32 = gguf.GGMLQuantizationType.F32
 # How a weight is edited: by adding b @ a, or by a function of the original weight giving the edited one.
 Change = tuple[Tensor, Tensor] | Callable[[Tensor], Tensor]
+# Where an outside export's record lists the tensors of the copy, outside the edit targets, that it
+# leaves as the run's model has them: those that differ from the run's model and those missing from it.
+LEFT_OUT = "left_out"
 
 
 def edited(weight: Tensor, change: Change) -> Tensor:
@@ -119,28 +122,31 @@ def export_outside(run: Run, name: str, given: Path) -> Path:
     """A copy of the run's model edited elsewhere, such as heretic's save of one of its trials, as a
     folder or an unquantised GGUF, exported as name: the run's model with each edit target's weight
     taken from that copy, written into a copy of the run's GGUF and quantised as the run deploys, and
-    checked as candor's own edits are. The tensors the copy changes outside the edit targets are named,
-    as the export leaves them as the run's model has them. Reused while it matches."""
+    checked as candor's own edits are. The tensors of the copy outside the edit targets that the export
+    leaves as the run's model has them are listed in its record (left_out). Reused while it matches."""
     if RESERVED.fullmatch(name):
         raise RunError(f"{name} is how candor names its own edits and measurements; pick another name")
     given = given.expanduser().absolute()
     with run.locked():
         run.check_remote_code()
         shipped, inputs = _planned_outside(run, name, given)
-        if not run.fresh(shipped, inputs | _listed_apart(run, shipped, partial(_edited_outside, run, given))):
+        if not run.fresh(shipped, inputs | _listed_outside(run, shipped, given)):
             changes = _taken(run, given)
             if not changes:
                 raise RunError(f"{given} holds the run's model unchanged in every edit target")
-            if left := _left_out(run, given):
-                shown = ", ".join(left[:5]) + (f" and {len(left) - 5} more" if len(left) > 5 else "")
-                run.report(
-                    f"{len(left)} tensors of {given} differ from the run's model outside candor's edit "
-                    f"targets, and the export takes only those, so it lacks any edit these hold: {shown}"
-                )
+            left = _left_out(run, given)
             run.report(f"Taking the {len(changes)} edited weights from {given}")
-            _ship(run, shipped, inputs, changes)
+            _ship(run, shipped, inputs | {LEFT_OUT: left}, changes)
         _report_apart(run, shipped)
         return shipped
+
+
+def left_out(run: Run, name: str) -> tuple[Path, dict[str, list[str]] | None]:
+    """The model edited elsewhere exported as name, and the tensors of it outside the edit targets that
+    its export leaves as the run's model has them, by kind, as its record lists them: None for an export
+    made before candor listed them."""
+    made = json.loads(record_of(_path(run, name)).read_text())
+    return _given(made), made.get(LEFT_OUT)
 
 
 def _taken(run: Run, given: Path) -> dict[str, Change]:
@@ -218,53 +224,76 @@ def _converted_back(
     return convert.as_original(convert.stored(tensor), name, arch, model_config)
 
 
-def _left_out(run: Run, given: Path) -> list[str]:
+def _left_out(run: Run, given: Path) -> dict[str, list[str]]:
     return left_out_of_gguf(run, given) if given.is_file() else left_out_of(run, given)
 
 
-def left_out_of(run: Run, folder: Path) -> list[str]:
-    """The tensors of folder, by its names, outside the edit targets that differ from the run's model's
-    or that the run's model hasn't, which an export leaves as the run's model has them. A tensor holding
-    the run's model's values rounded to its own type counts as unchanged. Each is read once, one at a
-    time."""
+def left_out_of(run: Run, folder: Path) -> dict[str, list[str]]:
+    """The tensors of folder outside the edit targets, by its names, that an export leaves as the run's
+    model has them: those that differ from the run's model's, and those missing from it, such as an
+    untied lm_head. A tensor holding the run's model's values rounded to its own type counts as
+    unchanged. Each is read once, one at a time."""
     theirs, ours = ModelFiles(folder), ModelFiles(run.model_folder)
     targeted = {name for target in run.edit_targets.values() for name in target.names}
     named = {n if n in theirs.shard_of else n.replace(".language_model.", ".", 1): n for n in ours.shard_of}
-    left = []
+    left: dict[str, list[str]] = {"differ": [], "missing": []}
+    done = every_tenth(
+        run.report, f"Tensors of {folder.name} compared with the run's model", len(theirs.shard_of)
+    )
     for name in theirs.shard_of:
         original = named.get(name)
-        if original in targeted:
-            continue
-        if original is None or not _same(theirs.tensor(name), ours.tensor(original)):
-            left.append(name)
-    return sorted(left)
+        if original is None:
+            left["missing"].append(name)
+        elif original not in targeted and not _same(theirs.tensor(name), ours.tensor(original)):
+            left["differ"].append(name)
+        done()
+    return {kind: sorted(names) for kind, names in left.items()}
 
 
-def left_out_of_gguf(run: Run, path: Path) -> list[str]:
-    """The tensors of a GGUF of the run's model outside the edit targets that differ from the run's own
-    unquantised GGUF or that it hasn't, as left_out_of finds them in a folder."""
+def left_out_of_gguf(run: Run, path: Path) -> dict[str, list[str]]:
+    """The tensors of a GGUF of the run's model outside the edit targets that an export leaves as the
+    run's model has them, as left_out_of finds them in a folder, against the run's own unquantised GGUF."""
     base, _ = run.gguf()
     ours = {tensor.name: tensor for tensor in gguf.GGUFReader(base).tensors}
     targeted = {target.gguf for target in run.edit_targets.values()}
-    left = []
-    for tensor in gguf.GGUFReader(path).tensors:
-        if tensor.name in targeted:
-            continue
+    tensors = gguf.GGUFReader(path).tensors
+    left: dict[str, list[str]] = {"differ": [], "missing": []}
+    done = every_tenth(run.report, f"Tensors of {path.name} compared with the run's model", len(tensors))
+    for tensor in tensors:
         original = ours.get(tensor.name)
-        if original is None or not _same_in_gguf(tensor, original):
-            left.append(tensor.name)
-    return sorted(left)
+        if original is None:
+            left["missing"].append(tensor.name)
+        elif tensor.name not in targeted and not _same_in_gguf(tensor, original):
+            left["differ"].append(tensor.name)
+        done()
+    return {kind: sorted(names) for kind, names in left.items()}
 
 
 def _same(weight: Tensor, original: Tensor) -> bool:
-    return weight.shape == original.shape and torch.equal(weight, original.to(weight.dtype))
+    """Whether weight holds original's values rounded to weight's own type."""
+    if weight.shape != original.shape:
+        return False
+    rounded = original.to(weight.dtype)
+    if weight.dtype.itemsize == 1:
+        # torch.equal has no Float8 kernel in every torch a pod may run.
+        weight, rounded = weight.float(), rounded.float()
+    return torch.equal(weight, rounded)
 
 
 def _same_in_gguf(tensor: gguf.ReaderTensor, original: gguf.ReaderTensor) -> bool:
+    """Whether a GGUF's tensor holds original's values rounded to its own type, as gguf-py rounds them,
+    which matches llama.cpp. A type gguf-py can't round to, such as a K-quant, counts as differing, as
+    nothing tells its rounding from an edit."""
     if tensor.tensor_type == original.tensor_type:
         return np.array_equal(tensor.data, original.data)
-    kind = UNQUANTISED.get(tensor.tensor_type)
-    return kind is not None and _same(convert.stored(tensor), convert.stored(original).to(kind).float())
+    weight, values = convert.stored(tensor), convert.stored(original)
+    if weight.shape != values.shape:
+        return False
+    try:
+        rounded = gguf.quants.quantize(values.numpy(), tensor.tensor_type)
+    except NotImplementedError:
+        return False
+    return np.array_equal(gguf.quants.dequantize(rounded, tensor.tensor_type), weight.numpy())
 
 
 def _planned_outside(run: Run, name: str, given: Path) -> tuple[Path, dict[str, Any]]:
@@ -503,6 +532,16 @@ def _listed_apart(run: Run, path: Path, changed: Callable[[], set[str]]) -> dict
     return {} if unlisted and apart.keys() <= changed() else {"apart": apart}
 
 
+def _listed_outside(run: Run, path: Path, given: Path) -> dict[str, Any]:
+    """What an outside export's record must hold besides its inputs: the tensors it holds apart, as
+    listed, and the tensors of the copy it leaves as the run's model has them, as listed when it was
+    built. Its inputs give those, so they are read back rather than found again, and a record from
+    before candor listed them still matches."""
+    made = read_record(record_of(path)) or {}
+    left = {LEFT_OUT: made[LEFT_OUT]} if LEFT_OUT in made else {}
+    return _listed_apart(run, path, partial(_edited_outside, run, given)) | left
+
+
 def _edited(run: Run, edit: "Edit") -> set[str]:
     """The GGUF names of the weights the edit changes."""
     return {target.gguf for target in run.edit_targets.values() if edit.strength(target.writers[0])}
@@ -554,7 +593,7 @@ def _sweep(run: Run, shipped: Path) -> None:
     """Remove the work folders exports killed part way left in any edit's folder, which hold copies
     of the model, and this edit's exports in another quantisation, saying so."""
     root = run.path("exports")
-    kept = {shipped.name, record_of(shipped).name, "convert.log"}
+    kept = {shipped.name, record_of(shipped).name, sha256_of(shipped).name, "convert.log"}
     for folder in root.iterdir() if root.exists() else []:
         for leftover in folder.iterdir() if folder.is_dir() else []:
             if leftover.is_dir():
@@ -572,12 +611,16 @@ def outside_export(run: Run, name: str) -> tuple[Path, dict[str, Any]]:
     if not record_of(path).exists():
         quantization = run.settings.deployment.quantization
         raise RunError(f"{name} has no export in {quantization}; run candor export --outside first")
-    made = json.loads(record_of(path).read_text())
-    given = Path(made["file"] if "file" in made else made["folder"])
+    given = _given(json.loads(record_of(path).read_text()))
     planned, inputs = _planned_outside(run, name, given)
-    if not run.current(planned, inputs | _listed_apart(run, planned, partial(_edited_outside, run, given))):
+    if not run.current(planned, inputs | _listed_outside(run, planned, given)):
         raise RunError(f"{name}'s export no longer matches this run or {given}; export it again")
     return planned, json.loads(record_of(planned).read_text())
+
+
+def _given(made: dict[str, Any]) -> Path:
+    """The folder or GGUF an outside export's record says it was taken from."""
+    return Path(made["file"] if "file" in made else made["folder"])
 
 
 def exported(run: Run, edit: "Edit") -> tuple[Path, dict[str, Any]]:

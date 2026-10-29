@@ -52,7 +52,9 @@ uv run candor inspect Qwen/Qwen3.5-9B      # a Hugging Face id or a local folder
 - It warns when those weights look quantised to 4 bits before and saved unquantised, as rude-llama's
   were: most blocks of 32 values hold 16 or fewer, where weights never quantised hold nearly all 32.
   Quantising them to 4 bits again rounds most of an edit away, so [export](#export) keeps them as Q8_0
-  or F32 and the file is larger.
+  or F32 and the file is larger. Zeros are left out, and only blocks of more than 16 other values
+  count, so weights mostly zero don't look quantised. Weights it can't read, as from a server that
+  ignores a ranged read, give a warning instead.
 - For an architecture whose KV cache candor knows (Llama, Qwen3.5, K2-Horizon) it shows how much a
   token of context takes at f16 and how many tokens fit in a GiB. For a hybrid such as Qwen3.5 it
   also shows the state its linear-attention layers hold for each slot.
@@ -259,8 +261,9 @@ deployed GGUF in llama-server.
 
 **What it keeps.** One number per prompt, in `measurements/NAME/`. Answers and the judge's replies go
 only to `private/`. Each set's results also hold the sha256 of the GGUF that answered it
-(`gguf_sha256`), read once before answering, so a file exported again can be matched to the
-measurement; `measure` shows its first 16 digits.
+(`gguf_sha256`), so a file exported again can be matched to the measurement; `measure` shows its first
+16 digits. It is kept beside the GGUF (`.sha256.json`) with the file's size and time, and hashed again
+only when they change; the search's kept first tokens use the same.
 
 **Options.**
 
@@ -276,6 +279,8 @@ measurement; `measure` shows its first 16 digits.
 | `--set SET` | Only `harmful_held_out`, `harmless_held_out` or `maths`; repeat it for more. Kept as a full measurement of the same name keeps it, so `measure` without it later answers only the rest |
 
 A stopped measurement resumes from the last answer it saved, and the Mac is kept awake while it runs.
+A set stopped part way is answered afresh from a GGUF of other bytes, which the same recipe quantised
+on another pod can give, or where its saved answers were saved before candor recorded the bytes.
 
 ### The second judge
 
@@ -316,7 +321,8 @@ does.
   drew a thinking model's answer with its thinking's seed, and misread maths answers written
   `\boxed{18}` or `-$5`. Measuring again under the name of one made by older code keeps the old one
   as `NAME-measuring-N`.
-- It shows the GPUs, and each judge's device, where they differ.
+- It shows the GPUs, and each judge's device, where they differ, and for the same edit the sha256 of
+  the GGUFs that answered, where they differ.
 - It reads no KL between measurements made on different backends (Metal against CUDA, or a
   `CANDOR_LLAMA_BIN` build), where KL moves by a few percent whatever the edit does.
 
@@ -342,7 +348,8 @@ the weight. So export measures how much of each edited weight's change the quant
 3. If one still falls short, the file is refused.
 
 Every other tensor keeps its plain type. The file's name still gives the run's quantisation, so
-export says how many tensors it holds as Q8_0 or F32 instead, and its record lists them.
+export says how many tensors it holds as Q8_0 or F32 instead, built or reused. Its record lists them
+(`apart`), unless it was built before candor listed them.
 
 **What it keeps.** Only `exports/EDIT/RUN-EDIT-QUANTISATION.gguf`. `measure --exported` measures that
 exact file, and `compare` sets it against the unedited model and against the trial measured with
@@ -353,9 +360,16 @@ elsewhere, such as heretic's own save of one of its trials, the same way: the ru
 edited weight taken from the copy, so it is written, quantised and checked alike. `measure --outside
 NAME` measures it. `--outside` also takes one unquantised GGUF (F32, F16 or BF16), for an edit
 published only that way. A weight that differs from the run's only by rounding to the file's type
-counts as unedited. Only candor's edit targets are taken: building the file, export names the tensors
-outside them that differ from the run's model, such as an edited `embed_tokens`, and leaves those as
-the run's.
+counts as unedited. Only candor's edit targets are taken:
+
+- Tensors of the copy outside them that differ from the run's model, such as an edited
+  `embed_tokens`, are taken as the run's model has them. One holding the run's values rounded to its
+  own type, such as BF16 or Q8_0, counts as unchanged; one in a type candor can't round to, such as a
+  K-quant, counts as differing.
+- Tensors missing from the run's model, such as an untied `lm_head`, are left out.
+
+Its record lists both (`left_out`). `export` warns of them, built or reused, naming the first five of
+each, and `measure --outside` counts them. An export made before candor listed them says so.
 
 ## serve
 

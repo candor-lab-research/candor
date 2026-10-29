@@ -20,7 +20,7 @@ from typing import Any
 
 import numpy as np
 
-from . import config, export, heretic, kl, toolchain
+from . import config, export, heretic, kl
 from .edit import FULL_RANK
 from .engine import Answer, LlamaServer, Thinking
 from .files import write_atomic
@@ -34,6 +34,7 @@ from .run import (
     RunError,
     answering,
     digest,
+    file_sha256,
     load_prompts,
     read_record,
     record_of,
@@ -286,19 +287,24 @@ class Measurement:
             model, scales, edit = quantized, {}, None
             if self.outside is not None:
                 model, made_from = export.outside_export(run, self.outside)
-                edit = {"exported": digest(made_from)}
+                # What it leaves out follows from what it was made from, and records older than the list
+                # lack it, so the same export measures as the same edit either way.
+                edit = {"exported": digest({k: v for k, v in made_from.items() if k != "left_out"})}
             elif self.exported:
                 assert self.edit is not None
                 model, made_from = export.exported(run, self.edit)
                 edit = {"exported": digest(made_from)}
             # For a thinking model, KL is read after the unedited model's own thinking, which every
-            # measurement compared with this one must share.
-            kl_ids = run.kl_ids(all_ids, "harmless_held_out", self.limit)
-            if not kl_ids:
-                raise RunError(
-                    f"the unedited model's thinking ended by itself on none of the first {self.limit} "
-                    "held-out harmless prompts, so KL can't be read after it; measure more of them"
-                )
+            # measurement compared with this one must share. Only the harmless set reads KL, so measuring
+            # the others alone samples no thinking.
+            kl_ids: list[list[int]] = []
+            if "harmless_held_out" in self.sets:
+                kl_ids = run.kl_ids(all_ids, "harmless_held_out", self.limit)
+                if not kl_ids:
+                    raise RunError(
+                        f"the unedited model's thinking ended by itself on none of the first {self.limit} "
+                        "held-out harmless prompts, so KL can't be read after it; measure more of them"
+                    )
             # Only once nothing before measuring can fail.
             self._keep_older()
             self.folder.mkdir(parents=True, exist_ok=True)
@@ -322,8 +328,7 @@ class Measurement:
                 room = max(
                     len(p) + run.answer_tokens[name] + thinking_room for name, _ in todo for p in ids[name]
                 )
-                run.report(f"Hashing {model.name}")
-                sha256 = toolchain.sha256(model)
+                sha256 = file_sha256(model, run.report)
                 server = run.server(
                     model,
                     list(scales),
@@ -465,7 +470,7 @@ class Measurement:
             done = self.progress(f"{SHORT_LABELS[name]}: first tokens", len(prompts_read))
             top = server.top_logprobs(prompts_read, settings.scoring.kl_tokens, scales, done)
             read[key] = [[[t, p] for t, p in sorted(found.items())] for found in top]
-        answers, before, answering = self._answered(server, name, ids, scales, thinking, inputs)
+        answers, before, answering = self._answered(server, name, ids, scales, thinking, inputs, sha256)
         # Only what follows a thinking model's thinking is its answer, so only that is judged.
         texts = [a.text for a in answers]
         result: dict[str, Any] = {
@@ -490,6 +495,7 @@ class Measurement:
             "seconds": before + time.perf_counter() - started,
             "slots": self.slots,
             "paired": digest(inputs["paired"]),
+            "edit": digest(inputs["edit"]),
             "answers": digest(texts),
         }
         self._write_private(f"{name}.json", {"answers": texts})
@@ -508,16 +514,26 @@ class Measurement:
         scales: dict[Path, float],
         thinking: Thinking | None,
         inputs: dict[str, Any],
+        sha256: str,
     ) -> tuple[list[Answer], float, float]:
         """Every prompt's answer, the seconds earlier sessions spent answering it and the seconds this
-        one did. Each answer is saved as it comes, to the private folder, with the set's record; those a
-        measurement stopped part way saved from the same inputs are kept, and only the rest are asked
-        for, each with its own seed, as it would have been."""
+        one did. Each answer is saved as it comes, to the private folder, with the set's record and the
+        sha256 of the GGUF answering; those a measurement stopped part way saved from the same inputs
+        and a GGUF of the same bytes are kept, and only the rest are asked for, each with its own seed,
+        as it would have been. The same recipe can quantise to other bytes, as an A100's and an A40's
+        Q4_K_M of the same model did, so those saved before candor recorded the bytes are answered
+        again, as nothing shows which file answered them."""
         run = self.run
         journal = self._private(f"{name}.answering.jsonl")
-        record = {"record": run.record_for(self.folder / f"{name}.json", inputs)}
+        record = {"record": run.record_for(self.folder / f"{name}.json", inputs), "gguf_sha256": sha256}
         saved = _journal(journal)
         kept: dict[int, dict[str, Any]] = {e["i"]: e for e in saved[1:]} if saved[:1] == [record] else {}
+        if not kept and saved[1:] and saved[0].get("record") == record["record"]:
+            why = "with other bytes" if "gguf_sha256" in saved[0] else "whose bytes weren't recorded"
+            run.report(
+                f"Answering the {LABELS[name]} afresh: those a stopped measurement saved were answered by a "
+                f"GGUF {why}"
+            )
         before = max((e["at"] for e in kept.values()), default=0.0)
         todo = [i for i in range(len(ids)) if i not in kept]
         if kept:
@@ -670,13 +686,18 @@ def summary(results: dict[str, dict[str, Any]]) -> list[tuple[str, str]]:
         written = sum(result["tokens"]) + sum(result.get("thinking", []))
         rate = written / result["answer_seconds"] if result["answer_seconds"] else 0
         rows.append((f"{SHORT_LABELS[name]}, time", f"{seconds(result):.0f} s, {rate:.0f} tokens/s"))
-    # The first 16 digits, so the table fits 80 columns; sets answered apart may each have had their own file.
+    rows.append(("GGUF sha256", _hashes(results)))
+    return rows
+
+
+def _hashes(results: dict[str, dict[str, Any]]) -> str:
+    """The sha256 of the GGUF that answered each set, its first 16 digits so a table fits 80 columns:
+    sets answered apart may each have had their own file."""
     hashes = (
         result["gguf_sha256"][:16] if "gguf_sha256" in result else "not recorded"
         for result in results.values()
     )
-    rows.append(("GGUF sha256", "; ".join(dict.fromkeys(hashes))))
-    return rows
+    return "; ".join(dict.fromkeys(hashes))
 
 
 def _kl(a: list[list[list[float]]], b: list[list[list[float]]]) -> list[float]:
@@ -753,7 +774,8 @@ def compare(a: dict[str, dict[str, Any]], b: dict[str, dict[str, Any]]) -> list[
     """Two measurements of the same prompts, prompt by prompt: each count for both, the change, how
     many prompts went each way, the McNemar p-value of that split and a 95% interval for the change;
     then the KL divergence of b's first tokens from a's, with a 95% interval for it, unless they were
-    read on different backends; and the seeds, slots and machines where they differ."""
+    read on different backends; and the seeds, slots and machines where they differ, and for the same
+    edit the sha256 of the GGUFs that answered, where they differ."""
     for name in SETS:
         if a[name]["paired"] != b[name]["paired"]:
             raise RunError(
@@ -825,6 +847,12 @@ def compare(a: dict[str, dict[str, Any]], b: dict[str, dict[str, Any]]) -> list[
     ]
     if gpus[0] != gpus[1]:
         rows.append(("GPU", *gpus, "", "", "", ""))
+    # The same recipe can quantise to other bytes, as on an A100 and an A40. Sets answered before candor
+    # recorded the edit can't be told to share it.
+    hashes = [_hashes(m) for m in (a, b)]
+    same_edit = all("edit" in a[name] and a[name]["edit"] == b[name].get("edit") for name in SETS)
+    if same_edit and hashes[0] != hashes[1]:
+        rows.append(("GGUF sha256", *hashes, "", "", "", ""))
     labelled = [("Judged on", [m["harmful_held_out"] for m in (a, b)])]
     if all(SECOND in m["harmful_held_out"] for m in (a, b)):
         labelled.append(("Second judge on", [m["harmful_held_out"][SECOND] for m in (a, b)]))

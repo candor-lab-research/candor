@@ -3,6 +3,7 @@ import hashlib
 import io
 import json
 import math
+import os
 import re
 import shutil
 
@@ -22,8 +23,8 @@ from candor.measure import Edit, Measurement
 from candor.run import Run, RunError
 from candor.targets import Writer
 
-from .helpers import EDIT, PARAMETERS, flat, on_disk, recorded_syncs, write_journal
-from .tiny_gguf import END_THINK, THINK, THINKING_TOKENS
+from .helpers import EDIT, PARAMETERS, TEMPLATE, flat, on_disk, recorded_syncs, write_journal
+from .tiny_gguf import END_THINK, THINK, THINKING_TOKENS, random_weights, write_model
 from .tiny_run import (
     ALWAYS_THINKING_TEMPLATE,
     CHECK_JUDGE,
@@ -76,6 +77,81 @@ def test_a_measurement_records_the_sha256_of_the_gguf_that_answered_it_hashed_on
     maths.write_text(json.dumps(older))
     again = Measurement(tiny, None, "base").measure()
     assert dict(measure.summary(again))["GGUF sha256"] == f"{sha256[:16]}; not recorded" and len(hashed) == 1
+
+
+def test_a_gguf_is_hashed_again_only_once_its_size_or_time_changes(tiny, monkeypatch):
+    hashed = []
+    real = toolchain.sha256
+    monkeypatch.setattr(toolchain, "sha256", lambda path: hashed.append(path) or real(path))
+    Measurement(tiny, None, "base").measure()
+    # Answering everything again from the same file, beside which the run keeps its sha256.
+    again = Measurement(tiny, None, "base-slots-2", slots=2).measure()
+    _, quantized = tiny.gguf()
+    assert hashed == [quantized] and run.sha256_of(quantized).exists()
+    # The same bytes at another time, as a file copied again.
+    moved = 1_700_000_000_000_000_000
+    os.utime(quantized, ns=(moved, moved))
+    later = Measurement(tiny, None, "base-slots-3", slots=3).measure()
+    assert hashed == [quantized, quantized]
+    assert {result["gguf_sha256"] for m in (again, later) for result in m.values()} == {real(quantized)}
+
+
+def stopped_answering(tiny, monkeypatch) -> None:
+    with monkeypatch.context() as stopped:
+        stopping_after(stopped, 2)
+        with pytest.raises(KeyboardInterrupt):
+            Measurement(tiny, None, "base").measure()
+
+
+def test_a_set_stopped_part_way_is_answered_afresh_by_a_gguf_of_other_bytes(tiny, monkeypatch):
+    stopped_answering(tiny, monkeypatch)
+    said = []
+    tiny.report = said.append
+    _, quantized = tiny.gguf()
+    # The same recipe quantised to other bytes, as on another pod.
+    write_model(quantized, random_weights(seed=1), chat_template=TEMPLATE)
+    answered = counting_answers(monkeypatch)
+    results = Measurement(tiny, None, "base").measure()
+    assert answered == [3, 3, 3]
+    assert (
+        "Answering the held-out harmful prompts afresh: those a stopped measurement saved were answered by a "
+        "GGUF with other bytes"
+    ) in said
+    assert {result["gguf_sha256"] for result in results.values()} == {toolchain.sha256(quantized)}
+
+
+def test_a_set_stopped_part_way_before_candor_recorded_the_ggufs_bytes_is_answered_afresh(tiny, monkeypatch):
+    stopped_answering(tiny, monkeypatch)
+    journal = tiny.path("private", "measurements", "base", "harmful_held_out.answering.jsonl")
+    first, *saved = journal.read_text().splitlines()
+    older = json.loads(first)
+    del older["gguf_sha256"]
+    journal.write_text("".join(line + "\n" for line in [json.dumps(older), *saved]))
+    said = []
+    tiny.report = said.append
+    answered = counting_answers(monkeypatch)
+    Measurement(tiny, None, "base").measure()
+    assert answered == [3, 3, 3]
+    assert (
+        "Answering the held-out harmful prompts afresh: those a stopped measurement saved were answered by a "
+        "GGUF whose bytes weren't recorded"
+    ) in said
+
+
+def test_compare_names_the_ggufs_of_the_same_edit_only_where_their_bytes_differ(tiny):
+    a = Measurement(tiny, None, "base").measure()
+    b = Measurement(tiny, None, "base-slots-2", slots=2).measure()
+    assert "GGUF sha256" not in {row[0] for row in measure.compare(a, b)}
+    # The same recipe quantised to other bytes, as on another pod.
+    elsewhere = {name: dict(result, gguf_sha256="ab" * 32) for name, result in b.items()}
+    rows = {row[0]: row for row in measure.compare(a, elsewhere)}
+    assert rows["GGUF sha256"][1:3] == (a["maths"]["gguf_sha256"][:16], "ab" * 8)
+    # Another edit's file has other bytes anyway, and sets answered before candor recorded the edit
+    # can't be told to share it.
+    edited = Measurement(tiny, EDIT, "edited").measure()
+    older = {name: {k: v for k, v in result.items() if k != "edit"} for name, result in elsewhere.items()}
+    for other in (edited, older):
+        assert "GGUF sha256" not in {row[0] for row in measure.compare(a, other)}
 
 
 def test_an_edits_record_names_where_it_reads_its_directions_only_where_the_answer_starts():
@@ -744,7 +820,7 @@ def test_measure_answers_the_sets_named_alone_under_the_measurements_own_name(ti
     assert "candor measure: base-first-2" in measured.output
     assert "Harmful refused, judge" in measured.output and "Harmful: answering: 2 of 2" in measured.output
     assert "Harmless" not in measured.output and "Maths" not in measured.output
-    assert "Measuring every prompt would take at most about" in measured.output
+    assert "Measuring every prompt of these sets would take at most about" in flat(measured.output)
     assert sorted(path.name for path in (folder / "measurements" / "base-first-2").glob("*.json")) == [
         "harmful_held_out.json",
         "harmful_held_out.json.inputs.json",
@@ -1038,6 +1114,15 @@ def test_a_limit_that_leaves_no_thinking_ended_by_itself_is_refused(tiny, monkey
     monkeypatch.setattr(LlamaServer, "thoughts", last_only)
     with pytest.raises(RunError, match="none of the first 2 held-out harmless prompts"):
         Measurement(thinking(tiny), None, "base", limit=2).measure()
+
+
+def test_a_thinking_model_measuring_only_sets_that_read_no_kl_samples_no_thinking(tiny, monkeypatch):
+    def unsampled(self):
+        raise AssertionError("sampled the unedited model's thinking")
+
+    monkeypatch.setattr(Run, "thinking_traces", unsampled)
+    results = Measurement(thinking(tiny), None, "base", limit=2, sets=["maths"]).measure()
+    assert list(results) == ["maths"] and len(results["maths"]["finished"]) == 2
 
 
 def test_kl_cant_be_read_after_thinking_that_never_ends_by_itself(tiny, monkeypatch):

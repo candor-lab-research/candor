@@ -128,9 +128,13 @@ def _read(model: str, file: str, start: int, length: int, revision: str | None) 
             return f.read(length)
     url = hf_hub_url(model, file, revision=revision)
     headers = build_hf_headers() | {"range": f"bytes={start}-{start + length - 1}"}
-    response = get_session().get(url, headers=headers, timeout=constants.HF_HUB_DOWNLOAD_TIMEOUT)
-    hf_raise_for_status(response)
-    return response.content
+    timeout = constants.HF_HUB_DOWNLOAD_TIMEOUT
+    with get_session().stream("GET", url, headers=headers, timeout=timeout) as response:
+        hf_raise_for_status(response)
+        # A server that ignores the range sends the whole file, which can be gigabytes.
+        if response.status_code != 206:
+            raise OSError(f"{url} answered a read of {length} bytes with {response.status_code}, not 206")
+        return response.read()
 
 
 def _header(model: str, file: str, revision: str | None) -> tuple[int, dict[str, Any]]:
@@ -169,10 +173,15 @@ def first_rows(
 
 def quantised_before(rows: np.ndarray) -> bool:
     """Whether a weight's rows look quantised before and saved unquantised: most of their blocks of
-    BLOCK values hold at most FEWEST values. Blocks of one value, as zeroed weights hold, tell nothing."""
-    blocks = np.sort(rows[:, : rows.shape[1] // BLOCK * BLOCK].reshape(-1, BLOCK), axis=1)
-    distinct = 1 + np.count_nonzero(np.diff(blocks, axis=1), axis=1)
-    told = distinct[distinct > 1]
+    BLOCK values hold at most FEWEST values other than zero. Only blocks holding more than FEWEST values
+    other than zero tell, as fewer can't hold more whatever they are, which weights mostly zero, as
+    some are, would otherwise show."""
+    blocks = rows[:, : rows.shape[1] // BLOCK * BLOCK].reshape(-1, BLOCK)
+    # Zero and negative zero: every bit but the sign's unset.
+    zero = (blocks & (np.iinfo(blocks.dtype).max >> 1)) == 0
+    values = np.sort(np.where(zero, 0, blocks), axis=1)
+    distinct = 1 + np.count_nonzero(np.diff(values, axis=1), axis=1) - zero.any(axis=1)
+    told = distinct[np.count_nonzero(~zero, axis=1) > FEWEST]
     return told.size > 0 and bool(np.median(told) <= FEWEST)
 
 

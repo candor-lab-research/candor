@@ -41,7 +41,7 @@ from transformers.utils import logging as transformers_logging
 from . import checks, config, export, measure, proxy, residuals, search, serve, source, targets
 from .convert import ConversionError
 from .engine import LLAMA_CPP_RELEASE, ServerError, terminate
-from .run import PROMPT_SETS, Run, RunError, duration, every_tenth
+from .run import PROMPT_SETS, Run, RunError, duration, every_tenth, record_of
 from .toolchain import ToolchainError
 
 app = typer.Typer(
@@ -65,6 +65,8 @@ GIB = 2**30
 # How many edit targets inspect reads, spread over the layers, and about how many of each one's first
 # values, to tell weights quantised before.
 SAMPLED_WEIGHTS, SAMPLED_VALUES = 4, 4096
+# How many of each kind of tensor export names that the export of a model edited elsewhere leaves out.
+LEFT_OUT_SHOWN = 5
 WITHOUT_TOOLS = " (drop --mcp, or put CANDOR_MCP= before the command, to serve without tools)"
 
 Row = tuple[str, str, str]
@@ -202,7 +204,8 @@ def _quantised_before_rows(model: str, writers: list[targets.Writer], revision: 
     if not (flagged := [name for name, rows in read.items() if source.quantised_before(rows)]):
         return []
     detail = (
-        f"{_examples(flagged)} hold at most {source.FEWEST} values in most blocks of {source.BLOCK}, as "
+        f"{_examples(flagged)} hold at most {source.FEWEST} values in most blocks of {source.BLOCK} (zeros "
+        "aside), as "
         "weights quantised to 4 bits and saved unquantised do: quantising them to 4 bits again would "
         "round most of an edit away, so candor export keeps such weights as Q8_0 or F32 and the file is "
         "larger"
@@ -814,19 +817,22 @@ def measure_command(
         table.add_row(*map(escape, row))
     console.print(table)
     console.print(f"Numbers in {escape(str(measurement.folder))}; answers only in the run's private folder.")
+    if outside is not None:
+        _warn_left_out(console, run, outside)
     if limit:
         seconds = sum(
             measure.seconds(results[s]) * measurement.sizes[s] / len(results[s]["finished"]) for s in results
         )
+        every = "every prompt of these sets" if sets else "every prompt"
         if limit < 4 * slots:
             # Too few prompts to keep every slot busy, so this speed undersells a full run.
             console.print(
-                f"Measuring every prompt would take at most about {duration(seconds)}: {limit} prompts "
+                f"Measuring {every} would take at most about {duration(seconds)}: {limit} prompts "
                 f"can't keep all {slots} slots busy, so a full run goes faster."
             )
         else:
             console.print(
-                f"Measuring every prompt would take about {duration(seconds)} at this speed. Edits "
+                f"Measuring {every} would take about {duration(seconds)} at this speed. Edits "
                 "that refuse less give longer answers, so allow more for them."
             )
 
@@ -926,6 +932,8 @@ def export_command(
             shipped = export.export(run, search.trial_edit(run, trial))
     shown = name or _edit_name(trial or 0, heretic is not None)
     console.print(f"{escape(shown)}: {escape(str(shipped))}, {shipped.stat().st_size / 1e9:.1f} GB")
+    if name is not None:
+        _warn_left_out(console, run, name, record_of(shipped))
     # Named as candor measure names them at the run's slots.
     slots = run.settings.slots.measure
     base = _measurement_name(None, False, slots, None, False, None)
@@ -953,6 +961,35 @@ def export_command(
         ]
     for command in commands:
         console.print(escape("  " + shlex.join(["uv", "run", "candor", *command])), soft_wrap=True)
+
+
+def _warn_left_out(console: Console, run: Run, name: str, listed: Path | None = None) -> None:
+    """Warn of the tensors of the model edited elsewhere exported as name that its export leaves out, by
+    kind: counted, and given the record that lists them all, the first few named."""
+    given, left = export.left_out(run, name)
+    shown = escape(str(given))
+    if left is None:
+        console.print(
+            f"[yellow]{escape(name)}'s export was made before candor listed the tensors of {shown} it leaves "
+            "out[/]: remove its folder in exports/ and export it again to list them."
+        )
+        return
+    kinds = {
+        "differ": (
+            "differs from the run's model in {} outside candor's edit targets",
+            "; the export takes the run's model's own, so any edit there is left out",
+        ),
+        "missing": ("holds {} missing from the run's model", ", which the export leaves out"),
+    }
+    for kind, (found, rest) in kinds.items():
+        if not (names := left[kind]):
+            continue
+        counted = f"{len(names)} tensor" + ("" if len(names) == 1 else "s")
+        if listed is not None:
+            more = len(names) - LEFT_OUT_SHOWN
+            rest += ": " + ", ".join(names[:LEFT_OUT_SHOWN])
+            rest += f" and {more} more, all listed in {listed}" if more > 0 else ""
+        console.print(f"[yellow]{shown} {found.format(counted)}[/]{escape(rest)}")
 
 
 @app.command("serve", short_help="Chat with the unedited model or a trial's export, as measured.")

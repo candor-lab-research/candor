@@ -69,7 +69,9 @@ its `uv.lock`.
   code under it.
 - rsync from macOS keeps file times only to the second, and a local model's fingerprint holds them to
   the nanosecond, so `push` gives the pod's copy this Mac's times and checks every file's size and
-  time against them. It fails, naming a file, where the pod's disk can't keep them.
+  time against them. It fails, naming a file, where the pod's disk can't keep them, and names files
+  a pushed folder holds on the pod but not here, which would change its fingerprint. Links are copied
+  as the files they point to, and a link to nothing stops the push.
 - `wait` keeps the Mac awake until the command ends, so nothing needs a timed `caffeinate`. It pulls
   `runs/RUN` every 30 minutes and once more at the end, and exits 0 only if the command did.
 - `wait` stops early, with an error, if the pod stops answering for about five minutes or the
