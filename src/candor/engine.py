@@ -28,9 +28,10 @@ LLAMA_CPP_RELEASE = "b11524"
 MAX_ARGUMENT = 128 * 1024
 # For requests that only read or change a setting; answers get _answering's longer limit.
 QUICK = httpx.Timeout(30, connect=5)
-# How long a slot may stay busy after its request was stopped, as the server notices its connection
-# closed only as it works.
-IDLE_SECONDS = 60
+# How long a slot may stay busy after its request was stopped, and how often to ask meanwhile: the
+# server notices a closed connection only once a second passes with no result for any request, so asking
+# more often than that keeps the request running.
+IDLE_SECONDS, IDLE_EVERY = 60, 1.5
 # How llama.cpp logs a buffer the GPU had no room for, on CUDA and on Metal, and then that the buffer
 # was the KV cache, or a hybrid model's recurrent state.
 NO_ROOM = re.compile(
@@ -53,7 +54,7 @@ class Stopped(Exception):
 class Requests:
     """The requests behind one set of answers, each on a connection of its own, so stop() can end every
     one still running at once. llama-server drops a request whose connection closes once a second passes
-    with no request finishing, rather than finish a thinking no one will read."""
+    with no result for any request, /slots reads included, so requests made meanwhile keep it running."""
 
     def __init__(self) -> None:
         self.stopped = False
@@ -603,7 +604,7 @@ class LlamaServer:
         while any(slot["is_processing"] for slot in self._call("GET", "/slots")):
             if time.monotonic() > deadline:
                 raise ServerError(f"a slot was still busy {seconds:g} s after its request was stopped")
-            time.sleep(0.05)
+            time.sleep(IDLE_EVERY)
 
     def _first_token(self, payload: dict[str, Any], result: dict[str, Any]) -> dict[int, float]:
         # The server records no probabilities for a token that is an incomplete UTF-8 sequence.

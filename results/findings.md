@@ -373,8 +373,11 @@ entry is corrected, dropped or overturned is in CLAUDE.md ("Finished, dropped an
   one as-used trial both ways before adopting it (package 11).
 - **With GPU sampling, a first-token read beside other slots' sampling can come back empty.**
   [Measured on Metal, Qwen3.5-0.8B: 7 of 8 reads; on CUDA, Spark-X2.5-4B: the KL read after the one
-  of 4 trials that stopped on its budget] K2's 121 reads after a stop came back whole. Since
-  2026-10-29 first tokens are read once no slot is busy, and an empty read fails clearly.
+  of 4 trials that stopped on its budget] K2's 121 reads after a stop came back whole. llama-server
+  b11524 drops a closed request only once a second passes with no result for any request, so the KL
+  reads straight after a stop kept the abandoned answers running (Spark-X's server log: no cancel
+  until exit). Since 2026-10-29 a trial whose answers stop early gets a new server, and an empty read
+  fails clearly.
   (`phase-5-qwen3.8-27b.md`, step 1; `phase-6-spark-x2.5-4b.md`, step 1)
 - **More slots raise throughput but slow a trial.** [Measured: Spark-X2.5-4B, A40, one trial at 32
   and 64 slots] 64 slots gave 19% more tokens a second, but the trial took 240 s against 198 s: each

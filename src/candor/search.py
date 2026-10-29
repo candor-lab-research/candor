@@ -1579,6 +1579,10 @@ class _Scorer:
                     forced_above is not None and forced > forced_above
                 ):
                     break
+        if judged < len(self.harmful):
+            # The server runs the answers left on while requests keep coming (see engine.Requests), which
+            # slows and can spoil what it reads next: a new one holds none.
+            self.load(list(self.server.adapters))
         # A trial stopped for its refusals stays over the cap, which a search can't change, so its KL
         # is never read. One stopped for its thinking never counts, but once search.max_budget_hits
         # rises and the trials are judged again, the sampler may take it as within the caps and rank

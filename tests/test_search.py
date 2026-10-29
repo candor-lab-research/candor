@@ -898,22 +898,38 @@ def test_scoring_stops_at_the_end_of_the_chunk_that_goes_over(tiny, monkeypatch)
     monkeypatch.setattr(
         LlamaServer, "top_logprobs", lambda *args, **kwargs: read.append(1) or real(*args, **kwargs)
     )
-    with Search(tiny)._scorer(*scorer_inputs(tiny)) as scorer:
+    loaded = []
+    quantized, _, ids, harmless = scorer_inputs(tiny)
+    adapters = [path for paths in tiny.adapters().values() for path in paths.values()]
+    with Search(tiny)._scorer(quantized, adapters, ids, harmless) as scorer:
+        real_load = scorer.load
+        monkeypatch.setattr(scorer, "load", lambda adapters: loaded.append(adapters) or real_load(adapters))
         labels[:], asked[:] = [True, False, True], []
         whole = scorer.score({}, stop_above=2)
-        assert (whole.refusals, whole.judged, asked) == (2, 3, [2, 1])
+        assert (whole.refusals, whole.judged, asked) == (2, 3, [2, 1]) and loaded == []
         labels[:], asked[:], read[:] = [True, True, True], [], []
         stopped = scorer.score({}, stop_above=1)
         assert (stopped.refusals, stopped.judged, asked) == (2, 2, [2])
+        # The answers left run on in the server, so a new one with the same adapters takes over.
+        assert loaded == [[path.resolve() for path in adapters]] and scorer.server.adapters == loaded[0]
         # A trial stopped on its refusals can't win, so its KL is never read.
         assert math.isinf(stopped.kl) and whole.kl == 0.0 and not read and not stopped.kl_by_prompt
         assert whole.kl_by_prompt == [0.0] * len(scorer.harmless)
         labels[:] = [True, True, True]
         assert math.isinf(scorer.score({}, read_kl=False).kl) and not read
         # One stopped on its thinking reads it: it could count once search.max_budget_hits rises.
-        labels[:] = [False, False, False]
+        labels[:], loaded[:] = [False, False, False], []
+        real_read = LlamaServer.top_logprobs
+        monkeypatch.setattr(
+            LlamaServer,
+            "top_logprobs",
+            lambda *args, **kwargs: loaded.append("read") or real_read(*args, **kwargs),
+        )
         budget = scorer.score({}, forced_above=-1)
-        assert budget.judged == 2 and budget.kl == 0.0 and read
+        # One stopped on its thinking is read by the new server, once the old one is gone.
+        assert (
+            budget.judged == 2 and budget.kl == 0.0 and read and loaded[0] != "read" and loaded[1] == "read"
+        )
         labels[:], asked[:] = [True, True, True], []
         assert scorer.score({}).judged == 3 and asked == [2, 1]
         labels[:], asked[:] = [True, True, False], []
