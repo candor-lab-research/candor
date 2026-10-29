@@ -66,8 +66,7 @@ anything else. Every model is scored and shipped as a GGUF in llama-server, and 
    - measurements have no DEPENDS entry, so a change to the directions or adapters code answers even
      the unedited model's sets again (seen at the 2026-10-29 directions change);
    - `serve` on a pod with the Mac's tools (step 6 bridged them by hand,
-     `evidence-2026-10-22/bridge.py`); the tools' config, `~/Desktop/tune/tools/mcp.json`, which
-     `CANDOR_MCP` names, is missing since the Mac's folders moved (2026-10-29);
+     `evidence-2026-10-22/bridge.py`; the tools are at `~/Documents/Projects/LLM/tune/tools`);
    - MoE: memory rows for Laguna and Qwen3.5-MoE, Granite's fused `input_linear`, NemotronH's layers
      (`evidence-2026-10-23/moe-support.md`, section 4), each with its model;
    - heretic 2.x journals aren't read (they record no refusals for a trial);
