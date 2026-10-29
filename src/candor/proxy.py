@@ -155,16 +155,18 @@ def check(run: Run, chosen: Sequence[int] = ()) -> Check:
                 saved[mode][str(todo[index])] = asdict(score)
                 _save(run, saved, name)
 
-            scores = search.score_locked(
+            def keep_base(refusals: int, mode: str = mode) -> None:
+                saved["base"][mode] = refusals
+                _save(run, saved, name)
+
+            search.score_locked(
                 [made[i] for i in todo],
                 thinks,
                 scored=keep,
                 base=mode not in saved["base"],
                 beside_search=False,
+                base_scored=keep_base,
             )
-            if scores.base_refusals is not None:
-                saved["base"][mode] = scores.base_refusals
-                _save(run, saved, name)
         on = [Score(**saved["on"][str(i)]) for i in range(len(made))]
         repeated = min(range(len(made)), key=lambda i: (on[i].refusals, on[i].kl))
         if not saved["repeat"]:

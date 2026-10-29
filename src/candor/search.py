@@ -946,9 +946,11 @@ class Search:
         scored: Callable[[int, Score], None] = lambda index, score: None,
         base: bool = True,
         beside_search: bool = True,
+        base_scored: Callable[[int], None] = lambda refusals: None,
     ) -> Scores:
         """score, for a caller that holds the run's lock. Unless beside_search is False, the scores are
-        to be set beside the search's trials, so a search here made from other inputs is refused."""
+        to be set beside the search's trials, so a search here made from other inputs is refused.
+        base_scored gets the unedited model's refusals as soon as they are scored, before any edit's."""
         run = self.run
         run.check_remote_code()
         run.check_residuals()
@@ -974,7 +976,10 @@ class Search:
         with self._scorer(
             quantized, list(dict.fromkeys(files)), ids, harmless, thinks, seed, beside_search
         ) as scorer:
-            base_refusals = scorer.score({}, read_kl=False).refusals if base else None
+            base_refusals = None
+            if base:
+                base_refusals = scorer.score({}, read_kl=False).refusals
+                base_scored(base_refusals)
             scores = []
             for index, edit in enumerate(edits):
                 run.report(f"Scoring {edit.name}")

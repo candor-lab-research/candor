@@ -172,6 +172,34 @@ def test_a_template_that_cannot_render_one_message_fails_cleanly(tmp_path):
     assert "can't render a one-message chat" in result.output
 
 
+def dequantised(shape: torch.Size) -> torch.Tensor:
+    """Random weights quantised to 4 bits in groups of 64, each with its own scale and offset as MLX
+    quantises, then saved in BF16."""
+    groups = torch.randn(shape).reshape(-1, 64)
+    low, high = groups.aminmax(dim=1, keepdim=True)
+    scale = (high - low) / 15
+    return ((groups - low) / scale).round().mul(scale).add(low).reshape(shape).bfloat16()
+
+
+def test_inspect_warns_when_edit_targets_were_quantised_to_4_bits_before(tmp_path):
+    torch.manual_seed(0)
+    folder = model_folder(tmp_path)
+    weights = {name: torch.randn(shape).bfloat16() for name, shape in llama().items()}
+    save_file(weights, folder / "model.safetensors")
+    assert "Quantised before" not in run(folder).output
+    down = "model.layers.1.mlp.down_proj.weight"
+    weights[down] = dequantised(weights[down].shape)
+    save_file(weights, folder / "model.safetensors")
+    result = run(folder)
+    assert result.exit_code == 0, result.output
+    assert f"Quantised before │ warn │ {down} hold at most 16 values in most blocks of 32" in flat(
+        result.output
+    )
+    # Zeroed weights hold one value in every block, which tells nothing.
+    (tmp_path / "zeros").mkdir()
+    assert "Quantised before" not in run(model_folder(tmp_path / "zeros")).output
+
+
 def test_a_quantised_checkpoint_fails(tmp_path):
     scales = {f"model.layers.{i}.mlp.down_proj.weight_scale": [HIDDEN, 1] for i in range(2)}
     result = run(model_folder(tmp_path, scales))
@@ -353,10 +381,11 @@ def test_a_failure_while_writing_exits_3_and_leaves_nothing(tmp_path, monkeypatc
 
 def test_init_checks_the_commit_it_pins(tmp_path, monkeypatch):
     folder = str(model_folder(tmp_path))
-    real_config, real_json, real_shapes = (
+    real_config, real_json, real_shapes, real_rows = (
         cli.source.read_config,
         cli.source.read_json,
         cli.source.tensor_shapes,
+        cli.source.first_rows,
     )
     real_tokenizer = cli.AutoTokenizer.from_pretrained
     read = []
@@ -374,6 +403,10 @@ def test_init_checks_the_commit_it_pins(tmp_path, monkeypatch):
         read.append((model, revision))
         return real_shapes(folder)
 
+    def first_rows(model, names, values, revision=None):
+        read.append((model, revision))
+        return real_rows(folder, names, values)
+
     def from_pretrained(model, revision=None, **kwargs):
         read.append((model, revision))
         return real_tokenizer(folder, **kwargs)
@@ -381,10 +414,11 @@ def test_init_checks_the_commit_it_pins(tmp_path, monkeypatch):
     monkeypatch.setattr(cli.source, "read_config", read_config)
     monkeypatch.setattr(cli.source, "read_json", read_json)
     monkeypatch.setattr(cli.source, "tensor_shapes", tensor_shapes)
+    monkeypatch.setattr(cli.source, "first_rows", first_rows)
     monkeypatch.setattr(cli.AutoTokenizer, "from_pretrained", from_pretrained)
     cli._rows("org/model", "abc")
     asked = [revision for model, revision in read if model == "org/model"]
-    assert len(asked) == 4 and set(asked) == {"abc"}
+    assert len(asked) == 5 and set(asked) == {"abc"}
     # init checks the commit the model is at, which it pins.
     checked = []
     monkeypatch.setattr(cli, "_revision", lambda model: "abc")

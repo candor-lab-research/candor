@@ -22,7 +22,7 @@ from candor.measure import Edit, Measurement
 from candor.run import Run, RunError
 from candor.targets import Writer
 
-from .helpers import EDIT, PARAMETERS, on_disk, recorded_syncs, write_journal
+from .helpers import EDIT, PARAMETERS, flat, on_disk, recorded_syncs, write_journal
 from .tiny_gguf import END_THINK, THINK, THINKING_TOKENS
 from .tiny_run import (
     ALWAYS_THINKING_TEMPLATE,
@@ -670,6 +670,31 @@ def test_a_limit_measures_the_first_prompts_and_knows_the_full_sizes(tiny):
     assert measurement.sizes == dict.fromkeys(measure.SETS, 3)
 
 
+def test_sets_measured_alone_are_kept_as_a_full_measurement_keeps_them_and_finished_by_one(tiny, monkeypatch):
+    whole = Measurement(tiny, None, "whole").measure()
+    answered = counting_answers(monkeypatch)
+    alone = Measurement(tiny, None, "base", sets=["maths", "harmful_held_out"]).measure()
+    assert list(alone) == ["harmful_held_out", "maths"] and answered == [3, 3]
+    assert [label for label, _ in measure.summary(alone) if label.startswith("Harmless")] == []
+    # The same files, each with the record a full measurement gives it.
+    measured, full = tiny.path("measurements", "base"), tiny.path("measurements", "whole")
+    files = sorted(path.name for path in full.iterdir() if not path.name.startswith("harmless_held_out"))
+    assert sorted(path.name for path in measured.iterdir()) == files
+    for record in measured.glob("*.inputs.json"):
+        assert record.read_text() == (full / record.name).read_text()
+    with pytest.raises(RunError, match=r"missing harmless_held_out\.json, harmless_held_out\.judged\.json"):
+        measure.load(tiny, "base")
+    answered.clear()
+    Measurement(tiny, None, "base").measure()
+    assert answered == [3]
+    assert measure.compare(whole, measure.load(tiny, "base"))
+
+
+def test_only_sets_candor_measures_can_be_named(tiny):
+    with pytest.raises(ValueError, match=r"not sets candor measures: harmful$"):
+        Measurement(tiny, None, "base", sets=["harmful", "maths"])
+
+
 def test_measurements_of_different_prompts_are_not_compared(tiny):
     whole = Measurement(tiny, None, "base").measure()
     part = Measurement(tiny, None, "base-first-2", limit=2).measure()
@@ -706,6 +731,26 @@ def test_measure_and_compare_from_the_command_line_show_counts_only(tiny):
     for name in measure.SETS:
         for answer in json.loads((private / f"{name}.json").read_text())["answers"]:
             assert len(answer.strip()) < 4 or answer.strip() not in measured.output + compared.output
+
+
+def test_measure_answers_the_sets_named_alone_under_the_measurements_own_name(tiny):
+    folder = on_disk(tiny)
+    runner = CliRunner(env={"COLUMNS": "250"})
+    refused = runner.invoke(app, ["measure", str(folder), "--set", "maths", "--set", "harmful"])
+    assert refused.exit_code == 2
+    assert "not a set candor measure answers: harmful; choose from harmful_held_out" in flat(refused.output)
+    measured = runner.invoke(app, ["measure", str(folder), "--limit", "2", "--set", "harmful_held_out"])
+    assert measured.exit_code == 0, measured.output
+    assert "candor measure: base-first-2" in measured.output
+    assert "Harmful refused, judge" in measured.output and "Harmful: answering: 2 of 2" in measured.output
+    assert "Harmless" not in measured.output and "Maths" not in measured.output
+    assert "Measuring every prompt would take at most about" in measured.output
+    assert sorted(path.name for path in (folder / "measurements" / "base-first-2").glob("*.json")) == [
+        "harmful_held_out.json",
+        "harmful_held_out.json.inputs.json",
+        "harmful_held_out.judged.json",
+        "harmful_held_out.judged.json.inputs.json",
+    ]
 
 
 def test_a_heretic_study_needs_a_trial():

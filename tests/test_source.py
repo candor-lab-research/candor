@@ -2,6 +2,7 @@ import json
 from types import SimpleNamespace
 
 import huggingface_hub
+import numpy as np
 import pytest
 import torch
 from safetensors.torch import save_file
@@ -56,6 +57,40 @@ def test_hub_shapes_and_float_type_are_read_at_the_pinned_commit(monkeypatch):
     assert source.float_type("org/model", "abc123") == "F16"
     stored["b.weight"] = SimpleNamespace(dtype="BF16", shape=[4, 2])
     assert source.float_type("org/model", "abc123") == "BF16"
+
+
+def test_the_first_rows_of_hub_weights_are_read_alone_at_the_pinned_commit(tmp_path, monkeypatch):
+    torch.manual_seed(0)
+    weights = {
+        "a.weight": torch.randn(3, 40).bfloat16(),
+        "b.weight": torch.randn(70, 8),
+        "packed.weight": torch.zeros(2, 4, dtype=torch.int32),
+    }
+    shard = "model-00001-of-00001.safetensors"
+    save_file(weights, tmp_path / shard)
+    (tmp_path / source.INDEX).write_text(json.dumps({"weight_map": dict.fromkeys(weights, shard)}))
+    asked = []
+
+    class Hub:
+        """Each file of the local folder, served a range at a time."""
+
+        def get(self, url, headers, timeout):
+            asked.append(url)
+            start, end = map(int, headers["range"].removeprefix("bytes=").split("-"))
+            return SimpleNamespace(content=(tmp_path / url.rsplit("/", 1)[1]).read_bytes()[start : end + 1])
+
+    monkeypatch.setattr(source, "get_session", Hub)
+    monkeypatch.setattr(source, "hf_raise_for_status", lambda response: None)
+    monkeypatch.setattr(source, "hf_hub_download", lambda model, name, revision: str(tmp_path / name))
+    read = source.first_rows("org/model", list(weights), 100, "abc123")
+    # Whole rows holding 100 values, at least one, as their bits.
+    assert np.array_equal(read["a.weight"], weights["a.weight"][:2].view(torch.int16).numpy().view(np.uint16))
+    assert np.array_equal(
+        read["b.weight"], weights["b.weight"][:12].view(torch.int32).numpy().view(np.uint32)
+    )
+    assert set(read) == {"a.weight", "b.weight"} and all("/resolve/abc123/" in url for url in asked)
+    local = source.first_rows(str(tmp_path), ["a.weight"], 10_000)
+    assert np.array_equal(local["a.weight"], weights["a.weight"].view(torch.int16).numpy().view(np.uint16))
 
 
 def test_read_json_returns_none_for_a_missing_file(tmp_path):

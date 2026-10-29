@@ -62,6 +62,9 @@ FAILED_CHECK, COULD_NOT_INSPECT = 1, 3
 # rich otherwise looks back only 30 seconds.
 DAY = 24 * 3600
 GIB = 2**30
+# How many edit targets inspect reads, spread over the layers, and about how many of each one's first
+# values, to tell weights quantised before.
+SAMPLED_WEIGHTS, SAMPLED_VALUES = 4, 4096
 WITHOUT_TOOLS = " (drop --mcp, or put CANDOR_MCP= before the command, to serve without tools)"
 
 Row = tuple[str, str, str]
@@ -158,6 +161,7 @@ def _target_rows(model: str, hidden: int, layers: int, arch: str | None, revisio
     if found.quantized:
         detail = f"{_examples(found.quantized)} carry quantisation scales; use the unquantised original"
         rows.append(("Quantised", "fail", detail))
+    rows += _quantised_before_rows(model, found.writers, revision)
     if found.output_norms:
         detail = (
             "this model normalises each block's output before adding it to the residual stream, so the "
@@ -185,6 +189,25 @@ def _target_rows(model: str, hidden: int, layers: int, arch: str | None, revisio
                 example += f"; {experts[0].name} -> {experts[0].gguf}, a layer's experts"
             rows.append(("GGUF names", "ok", f"all map, e.g. {example}"))
     return rows
+
+
+def _quantised_before_rows(model: str, writers: list[targets.Writer], revision: str | None) -> list[Row]:
+    """A warning when edit targets read across the layers look quantised to 4 bits before, as
+    rude-llama's were: quantising them to 4 bits again rounds most of an edit away."""
+    picked = [writers[i * (len(writers) - 1) // (SAMPLED_WEIGHTS - 1)].name for i in range(SAMPLED_WEIGHTS)]
+    try:
+        read = source.first_rows(model, list(dict.fromkeys(picked)), SAMPLED_VALUES, revision)
+    except Exception as error:
+        return [("Quantised before", "warn", f"couldn't read a few weights to tell: {error}")]
+    if not (flagged := [name for name, rows in read.items() if source.quantised_before(rows)]):
+        return []
+    detail = (
+        f"{_examples(flagged)} hold at most {source.FEWEST} values in most blocks of {source.BLOCK}, as "
+        "weights quantised to 4 bits and saved unquantised do: quantising them to 4 bits again would "
+        "round most of an edit away, so candor export keeps such weights as Q8_0 or F32 and the file is "
+        "larger"
+    )
+    return [("Quantised before", "warn", detail)]
 
 
 def _tokenizer_rows(model: str, revision: str | None) -> list[Row]:
@@ -330,7 +353,8 @@ def _print_table(console: Console, title: str, rows: list[Row]) -> None:
 
 @app.command(short_help="Check a model before spending anything on it.")
 def inspect(model: Annotated[str, typer.Argument(help="A Hugging Face model id or a local folder.")]) -> None:
-    """Check a model before spending anything on it. Reads the config, tokenizer and file headers only.
+    """Check a model before spending anything on it. Reads only the config, the tokenizer, the file
+    headers and the first rows of a few weights.
 
     Exits with 1 when a check fails and 3 when the model can't be inspected at all.
     """
@@ -708,12 +732,25 @@ def measure_command(
             "set."
         ),
     ] = None,
+    sets: Annotated[
+        list[str] | None,
+        typer.Option(
+            "--set",
+            help=f"Measure only this set, one of {', '.join(measure.SETS)}; repeat it for more. It is kept "
+            "as a full measurement keeps it, so the others can be measured later under the same name.",
+        ),
+    ] = None,
 ) -> None:
     """Measure the unedited model, a trial of candor search, or a heretic trial rebuilt with this run's
     directions, on the prompts the search never sees and on maths. Answers go only to the run's private
     folder; this shows counts. A stopped measurement carries on where it stopped."""
     console = Console()
     folder = folder.expanduser()
+    if unknown := [given for given in dict.fromkeys(sets or ()) if given not in measure.SETS]:
+        raise typer.BadParameter(
+            f"not a set candor measure answers: {', '.join(unknown)}; choose from {', '.join(measure.SETS)}",
+            param_hint="--set",
+        )
     if heretic is not None and trial is None:
         raise typer.BadParameter("say which of the study's trials with --trial", param_hint="--heretic")
     if exported and trial is None:
@@ -766,7 +803,9 @@ def measure_command(
             # The export holds the edit, so the trial needn't be rebuildable as scored; the
             # export itself is checked against the run as it is now.
             edit = search.recorded_edit(run, trial) if exported else search.trial_edit(run, trial)
-        measurement = measure.Measurement(run, edit, name, slots, limit, progress, exported, seed, outside)
+        measurement = measure.Measurement(
+            run, edit, name, slots, limit, progress, exported, seed, outside, sets or measure.SETS
+        )
         results = measurement.measure()
     table = Table(title=f"candor measure: {name}", title_justify="left", box=box.SIMPLE_HEAD)
     table.add_column("")
@@ -777,8 +816,7 @@ def measure_command(
     console.print(f"Numbers in {escape(str(measurement.folder))}; answers only in the run's private folder.")
     if limit:
         seconds = sum(
-            measure.seconds(results[s]) * measurement.sizes[s] / len(results[s]["finished"])
-            for s in measure.SETS
+            measure.seconds(results[s]) * measurement.sizes[s] / len(results[s]["finished"]) for s in results
         )
         if limit < 4 * slots:
             # Too few prompts to keep every slot busy, so this speed undersells a full run.

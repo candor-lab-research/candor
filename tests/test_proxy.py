@@ -131,17 +131,27 @@ def faked(
     die_after: int | None = None,
     forced: dict[bool, list[int]] | None = None,
 ) -> list[tuple]:
-    """Search.score_locked scoring each edit with the refusals, and any answers at the thinking budget,
-    given for its mode, by edit name, stopped once as if killed before edit die_after of its first call;
-    records each call's edit names, thinks, seed and base."""
+    """Search.score_locked scoring the unedited model first, then each edit with the refusals, and any
+    answers at the thinking budget, given for its mode, by edit name, stopped once as if killed before
+    edit die_after of its first call; records each call's edit names, thinks, seed and base."""
     calls = []
     dying = [die_after]
 
     def score_locked(
-        self, edits, thinks=None, seed=None, scored=lambda i, s: None, base=True, beside_search=True
+        self,
+        edits,
+        thinks=None,
+        seed=None,
+        scored=lambda i, s: None,
+        base=True,
+        beside_search=True,
+        base_scored=lambda refusals: None,
     ):
         assert not beside_search
         calls.append(([edit.name for edit in edits], thinks, seed, base))
+        base_refusals = (7 if thinks else 6) if base else None
+        if base_refusals is not None:
+            base_scored(base_refusals)
         scores = []
         for i, edit in enumerate(edits):
             if i == dying[0]:
@@ -160,7 +170,7 @@ def faked(
             )
             scored(i, score)
             scores.append(score)
-        return Scores(3, (7 if thinks else 6) if base else None, scores)
+        return Scores(3, base_refusals, scores)
 
     monkeypatch.setattr(Search, "score_locked", score_locked)
     return calls
@@ -180,8 +190,8 @@ def test_the_check_scores_both_ways_carries_on_after_a_stop_and_repeats_the_best
     assert ("scores.json", tiny.path("proxy", "scores.json").read_text()) in synced
     calls.clear()
     checked = proxy.check(tiny)
-    # The three edits scored before the stop aren't scored again.
-    assert calls[0][0] == [f"edit-{n}" for n in range(4, count + 1)] and calls[0][1:] == (False, None, True)
+    # The unedited model and the three edits scored before the stop aren't scored again.
+    assert calls[0][0] == [f"edit-{n}" for n in range(4, count + 1)] and calls[0][1:] == (False, None, False)
     assert calls[1][0] == [f"edit-{n}" for n in range(1, count + 1)] and calls[1][1:] == (True, None, True)
     assert calls[2] == (["edit-5"], True, tiny.settings.sampling.seed + 1, False)
     assert [s.refusals for s in checked.off] == off and [s.refusals for s in checked.on] == on
@@ -255,6 +265,31 @@ def test_the_check_scores_a_real_thinking_model_both_ways(tiny, monkeypatch):
     saved = json.loads(tiny.path("proxy", "scores.json").read_text())
     assert set(saved) == {"inputs", "base", "off", "on", "repeat", "machines"}
     assert saved["machines"] == [tiny.machine()]
+
+
+def test_a_check_stopped_after_scoring_the_unedited_model_doesnt_score_it_again(tiny, monkeypatch):
+    searched_thinking_off(tiny, monkeypatch, trials=8)
+    monkeypatch.setattr(proxy, "BEST", 1)
+    # Whether each score the scorer gives is of an edit, stopped once at the first edit, which comes
+    # after the unedited model with thinking off.
+    edited, stopped = [], []
+    real = search._Scorer.score
+
+    def score(self, scales, *args, **kwargs):
+        edited.append(bool(scales))
+        if scales and not stopped:
+            stopped.append(True)
+            raise KeyboardInterrupt
+        return real(self, scales, *args, **kwargs)
+
+    monkeypatch.setattr(search._Scorer, "score", score)
+    with pytest.raises(KeyboardInterrupt):
+        proxy.check(tiny)
+    assert edited == [False, True]
+    edited.clear()
+    checked = proxy.check(tiny)
+    # Only the unedited model with thinking on is left to score.
+    assert edited.count(False) == 1 and set(checked.base) == {"off", "on"}
 
 
 def test_proxy_shows_both_counts_and_whether_the_cheap_score_may_be_used(tiny, monkeypatch):

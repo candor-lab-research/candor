@@ -47,7 +47,12 @@ uv run candor
 uv run candor inspect Qwen/Qwen3.5-9B      # a Hugging Face id or a local folder
 ```
 
-- Reads only the config, the tokenizer and the file headers, so it is quick and needs no GPU.
+- Reads only the config, the tokenizer, the file headers and the first rows of four edit targets, so
+  it is quick and needs no GPU.
+- It warns when those weights look quantised to 4 bits before and saved unquantised, as rude-llama's
+  were: most blocks of 32 values hold 16 or fewer, where weights never quantised hold nearly all 32.
+  Quantising them to 4 bits again rounds most of an edit away, so [export](#export) keeps them as Q8_0
+  or F32 and the file is larger.
 - For an architecture whose KV cache candor knows (Llama, Qwen3.5, K2-Horizon) it shows how much a
   token of context takes at f16 and how many tokens fit in a GiB. For a hybrid such as Qwen3.5 it
   also shows the state its linear-attention layers hold for each slot.
@@ -205,7 +210,8 @@ effort but medium.
 
 **Good to know.**
 
-- Its scores are kept in `proxy/`, so a stopped check carries on.
+- Its scores, the unedited model's too, are kept in `proxy/` as each is done, so a stopped check
+  carries on without scoring again what it finished.
 - `--trial`, repeated, scores the trials named instead (the search's best, once it may score thinking
   off), each also at 1.4 times its strength. They are kept apart in `proxy/trials.json`, with counts
   but no verdict. Naming other trials starts that afresh.
@@ -267,6 +273,7 @@ measurement; `measure` shows its first 16 digits.
 | `--name NAME` | Name the measurement, but never as candor names its own (`base`, `trial-N`, `heretic-N`) |
 | `--slots N` | Override `slots.measure` |
 | `--seed N` | Sample with other draws ([models.md](models.md#sampling)) |
+| `--set SET` | Only `harmful_held_out`, `harmless_held_out` or `maths`; repeat it for more. Kept as a full measurement of the same name keeps it, so `measure` without it later answers only the rest |
 
 A stopped measurement resumes from the last answer it saved, and the Mac is kept awake while it runs.
 

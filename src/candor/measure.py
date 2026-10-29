@@ -13,7 +13,7 @@ import math
 import re
 import statistics
 import time
-from collections.abc import Callable
+from collections.abc import Callable, Sequence
 from dataclasses import asdict, dataclass
 from pathlib import Path
 from typing import Any
@@ -245,15 +245,19 @@ class Measurement:
         exported: bool = False,
         seed: int | None = None,
         outside: str | None = None,
+        sets: Sequence[str] = SETS,
     ):
         """With exported, the edit's exported GGUF is measured, rather than the run's model with the
         edit's adapters; with outside, the export of that name of a model edited elsewhere. slots
         replaces slots.measure. seed replaces the run's sampling seed, to see how much sampling alone
-        moves the counts."""
+        moves the counts. sets measures only those of SETS, each as a full measurement would, so the
+        others can be measured later under the same name."""
         if exported and edit is None:
             raise ValueError("only an edit has an export to measure")
         if outside is not None and (edit is not None or exported):
             raise ValueError("a model edited elsewhere is measured on its own")
+        if unknown := set(sets) - set(SETS):
+            raise ValueError(f"not sets candor measures: {', '.join(sorted(unknown))}")
         self.run = run
         self.edit = edit
         self.exported = exported
@@ -263,6 +267,7 @@ class Measurement:
         self.limit = limit
         self.seed = run.settings.sampling.seed if seed is None else seed
         self.progress = progress
+        self.sets = [name for name in SETS if name in sets]
         self.folder = run.path("measurements", name)
         self.guard: Guard | None = None
         self.texts: dict[str, list[str]] | None = None
@@ -300,7 +305,7 @@ class Measurement:
             if self.edit and not self.exported:
                 scales, edit = self._adapters()
             answered, todo = {}, []
-            for name in SETS:
+            for name in self.sets:
                 inputs = self._answer_inputs(name, ids[name], edit, kl_ids)
                 reused = self._reused(name, inputs)
                 if reused is None:
@@ -342,17 +347,18 @@ class Measurement:
                         answered[name] = self._answer(
                             server, name, ids[name], firsts, prompts, scales, thinking, inputs, sha256
                         )
-            judged: dict[str, dict[str, Any]] = {name: {} for name in HELD_OUT}
+            held_out = [name for name in HELD_OUT if name in self.sets]
+            judged: dict[str, dict[str, Any]] = {name: {} for name in held_out}
             # One judge at a time, freed before the next is loaded.
             for which, judge in judges(run.settings.measure).items():
                 try:
-                    for name in HELD_OUT:
+                    for name in held_out:
                         judged[name] |= _labelled(which, self._judged(name, answered[name], which, judge))
                 finally:
                     if self.guard:
                         self.guard.close()
                         self.guard = None
-        return {name: answered[name] | judged.get(name, {}) for name in SETS}
+        return {name: answered[name] | judged.get(name, {}) for name in self.sets}
 
     def _keep_older(self) -> None:
         """Keep what older measuring code measured under this name, which no measurement made now can
@@ -625,15 +631,18 @@ THINKING_COUNTS: list[tuple[str, str, Callable[[dict[str, Any]], list[bool | Non
 def _counts(
     *measurements: dict[str, dict[str, Any]],
 ) -> list[tuple[str, str, Callable[[dict[str, Any]], Any]]]:
-    """What every one of the measurements counts."""
-    thinking = all("forced" in results[name] for results in measurements for name in SETS)
-    second = all(SECOND in results[name] for results in measurements for name in HELD_OUT)
+    """What every one of the measurements counts, of the sets they all hold."""
+    sets = [name for name in SETS if all(name in results for results in measurements)]
+    thinking = all("forced" in results[name] for results in measurements for name in sets)
+    second = all(SECOND in results[name] for results in measurements for name in HELD_OUT if name in sets)
     counts = []
     for count in COUNTS:
+        if count[1] not in sets:
+            continue
         counts.append(count)
         if second and count[0] in SECOND_COUNTS:
             counts.append(SECOND_COUNTS[count[0]])
-    return counts + (THINKING_COUNTS if thinking else [])
+    return counts + ([count for count in THINKING_COUNTS if count[1] in sets] if thinking else [])
 
 
 def _count(values: list[bool | None]) -> str:
@@ -643,28 +652,28 @@ def _count(values: list[bool | None]) -> str:
 
 
 def summary(results: dict[str, dict[str, Any]]) -> list[tuple[str, str]]:
-    """What one measurement found, and the GGUF it measured, as rows of a table."""
+    """What one measurement found, of the sets it holds, and the GGUF it measured, as rows of a table."""
     rows = [(label, _count(values(results[name]))) for label, name, values in _counts(results)]
-    for name in HELD_OUT:
+    for name in [name for name in HELD_OUT if name in results]:
         result = results[name]
         pairs = zip(result["judge_refused"], result["keyword_refused"], strict=True)
         disagree = [judged != counted for judged, counted in pairs if judged is not None]
         rows.append((f"{SHORT_LABELS[name]}, keywords disagree", _count(disagree)))
-    for name in SETS:
+    for name in results:
         result = results[name]
         if "thinking" in result:
             thought = result["thinking"]
             middle = statistics.median(thought)
             rows.append((f"{SHORT_LABELS[name]}, thinking tokens", f"median {middle:g}, most {max(thought)}"))
-    for name in SETS:
+    for name in results:
         result = results[name]
         written = sum(result["tokens"]) + sum(result.get("thinking", []))
         rate = written / result["answer_seconds"] if result["answer_seconds"] else 0
         rows.append((f"{SHORT_LABELS[name]}, time", f"{seconds(result):.0f} s, {rate:.0f} tokens/s"))
     # The first 16 digits, so the table fits 80 columns; sets answered apart may each have had their own file.
     hashes = (
-        results[name]["gguf_sha256"][:16] if "gguf_sha256" in results[name] else "not recorded"
-        for name in SETS
+        result["gguf_sha256"][:16] if "gguf_sha256" in result else "not recorded"
+        for result in results.values()
     )
     rows.append(("GGUF sha256", "; ".join(dict.fromkeys(hashes))))
     return rows
