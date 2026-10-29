@@ -16,10 +16,15 @@ from pathlib import Path
 
 import pytest
 
+from candor import config
+from candor.run import Run
+
 ROOT = Path(__file__).parent.parent
 WATCHDOG = ROOT / "scripts" / "pod" / "watchdog.sh"
 POD = ROOT / "scripts" / "pod.sh"
 CURL = "curl -fsS -X DELETE -H Authorization: Bearer key https://api.runpod.io/v2/pods/pod1"
+# A file time past the second, which rsync from macOS drops.
+TIME = 1_700_000_000_123_456_789
 
 SSH = r"""#!/bin/bash
 while [[ $1 = -* ]]; do
@@ -504,6 +509,51 @@ def test_push_and_pull_files_and_folders(pod, tmp_path):
     assert not (back / "r" / "gguf").exists() and not (back / "r" / "exports").exists()
     assert pod.run("pull", "runs/r/exports/trial-1", str(back / "t"), cwd=here).returncode == 0
     assert (back / "t" / "m.gguf").read_text() == "export"
+
+
+def a_local_model(folder: Path) -> Path:
+    """A model folder whose files have times past the second, as macOS gives them."""
+    (folder / "weights").mkdir(parents=True)
+    for index, name in enumerate(["config.json", "model.safetensors", "weights/extra.bin"]):
+        (folder / name).write_text(name)
+        os.utime(folder / name, ns=(TIME + index, TIME + index))
+    return folder
+
+
+def fingerprint(model: Path) -> str:
+    return Run(model, config.RunConfig(model=config.Model(source=str(model)))).model_fingerprint
+
+
+def test_a_local_model_pushed_keeps_its_fingerprint(pod, tmp_path):
+    here = tmp_path / "here"
+    model = a_local_model(here / "models" / "m")
+    made = pod.run("push", "models/m", cwd=here)
+    assert made.returncode == 0, made.stderr
+    copy = pod.folder / "root" / "candor" / "models" / "m"
+    assert fingerprint(copy) == fingerprint(model)
+    assert (copy / "weights" / "extra.bin").stat().st_mtime_ns == TIME + 2
+    # A file pushed to another name keeps its time too.
+    assert pod.run("push", "models/m/config.json", "/root/elsewhere/c.json", cwd=here).returncode == 0
+    assert (pod.folder / "root" / "elsewhere" / "c.json").stat().st_mtime_ns == TIME
+
+
+def test_push_fails_where_the_pod_cant_keep_this_macs_times(pod, tmp_path):
+    here = tmp_path / "here"
+    a_local_model(here / "m")
+    # The pod's disk keeps times only to the second.
+    seconds = tmp_path / "seconds"
+    seconds.mkdir()
+    (seconds / "sitecustomize.py").write_text(
+        "import os\n"
+        "utime = os.utime\n"
+        "os.utime = lambda path, ns: utime(path, ns=tuple(t // 10**9 * 10**9 for t in ns))\n"
+    )
+    (pod.tools / "ssh").rename(pod.tools / "reach")
+    tool(pod.tools, "ssh", f'#!/bin/bash\nPYTHONPATH={seconds} exec {pod.tools}/reach "$@"\n')
+    made = pod.run("push", "m", cwd=here)
+    assert made.returncode == 1
+    assert "3 of the pod's files don't have this Mac's size and time to the nanosecond" in made.stderr
+    assert "a run would rebuild every stage" in made.stderr
 
 
 def test_pull_stops_when_nothing_is_there_or_the_pod_cant_be_reached(pod, tmp_path):

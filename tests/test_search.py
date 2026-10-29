@@ -4,6 +4,7 @@ import hashlib
 import itertools
 import json
 import math
+import os
 import re
 import shutil
 import statistics
@@ -18,7 +19,7 @@ from optuna.study import StudyDirection
 from optuna.trial import FixedTrial, TrialState
 from typer.testing import CliRunner
 
-from candor import cli, config, kl, menu, proxy, run, search
+from candor import cli, config, kl, menu, proxy, run, search, toolchain
 from candor.cli import app
 from candor.engine import GREEDY, Answer, LlamaServer
 from candor.judge import is_refusal
@@ -28,8 +29,8 @@ from candor.run import Run, RunError
 from candor.search import Score, Search
 from candor.targets import Writer
 
-from .helpers import flat, on_disk, recorded_syncs, small, write_journal
-from .tiny_gguf import END_THINK
+from .helpers import TEMPLATE, flat, on_disk, recorded_syncs, small, write_journal
+from .tiny_gguf import END_THINK, random_weights, write_model
 from .tiny_run import (
     ALWAYS_THINKING_TEMPLATE,
     ANSWERED,
@@ -296,6 +297,49 @@ def test_the_unedited_models_first_tokens_are_read_once_a_search_until_the_machi
     read.clear()
     monkeypatch.setattr(run.Run, "machine", lambda self: here)
     Search(tiny).search(4)
+    assert read == [True]
+
+
+def test_the_unedited_models_first_tokens_are_read_again_from_a_gguf_of_other_bytes(tiny, monkeypatch):
+    small(tiny, trials=3)
+    Search(tiny).search(1)
+    read, hashed, said = [], [], []
+    real_top, real_hash = LlamaServer.top_logprobs, toolchain.sha256
+
+    def top(self, prompts, k, scales=None, done=None):
+        read.append(bool(scales))
+        return real_top(self, prompts, k, scales, done)
+
+    monkeypatch.setattr(LlamaServer, "top_logprobs", top)
+    monkeypatch.setattr(toolchain, "sha256", lambda path: hashed.append(path) or real_hash(path))
+    tiny.report = said.append
+    _, quantized = tiny.gguf()
+    # The same bytes at another time, as a file copied again, are hashed once more and nothing is read.
+    moved = 1_700_000_000_000_000_000
+    os.utime(quantized, ns=(moved, moved))
+    Search(tiny).search(2)
+    assert read == [True] and hashed == [quantized]
+    read.clear()
+    hashed.clear()
+    Search(tiny).search(3)
+    assert read == [True] and hashed == []
+    # The same recipe quantised to other bytes, as on another pod.
+    write_model(quantized, random_weights(seed=1), chat_template=TEMPLATE)
+    read.clear()
+    Search(tiny).search(4)
+    assert read == [False, True] and hashed == [quantized]
+    assert "those kept were read from a GGUF with other bytes" in " ".join(said)
+    # Those kept before candor recorded the bytes.
+    [kept] = tiny.path("search", "base-first-tokens").iterdir()
+    record = json.loads(kept.read_text())
+    del record["model bytes"]
+    kept.write_text(json.dumps(record))
+    read.clear()
+    Search(tiny).search(5)
+    assert read == [False, True]
+    assert "those kept were read from a GGUF whose bytes weren't recorded" in " ".join(said)
+    read.clear()
+    Search(tiny).search(6)
     assert read == [True]
 
 

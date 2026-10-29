@@ -8,7 +8,9 @@
 #                                    token, install candor, and check torch and llama-server see the GPU
 #   scripts/pod.sh code              copy this working tree's code again, uncommitted changes too,
 #                                    and bring the pod's packages in line with it
-#   scripts/pod.sh push SRC [DEST]   copy a file or folder to the pod (DEST defaults to SRC)
+#   scripts/pod.sh push SRC [DEST]   copy a file or folder to the pod (DEST defaults to SRC), each
+#                                    file with its time here to the nanosecond, which a local
+#                                    model's fingerprint holds
 #   scripts/pod.sh pull PATH [DEST]  copy a file or folder back (DEST defaults to PATH), leaving
 #                                    out gguf/ and exports/ folders unless PATH is one of them
 #   scripts/pod.sh start NAME CMD..  run a command in the code folder, detached, logged as NAME
@@ -170,8 +172,19 @@ print(\"llama-server sees the GPU:\", toolchain.binaries())
 '"
 }
 
+file_times() {
+    # Each file's size and modification time in nanoseconds, by its path under $1, or "." for $1 itself.
+    python3 -c '
+import json, sys
+from pathlib import Path
+top = Path(sys.argv[1])
+files = [p for p in top.rglob("*") if p.is_file() and not p.is_symlink()] if top.is_dir() else [top]
+print(json.dumps({str(p.relative_to(top)): [p.stat().st_size, p.stat().st_mtime_ns] for p in files}))
+' "$1"
+}
+
 push() {
-    local dest
+    local dest differ
     dest=$(remote "${2:-$1}")
     plain "$1"
     [[ -e $1 ]] || die "nothing at $1"
@@ -182,6 +195,21 @@ push() {
         on_pod "mkdir -p $(printf '%q' "$(dirname "$dest")")"
         rsync -a --partial -e "$ssh_command" "$1" "$host:$dest"
     fi
+    # rsync from macOS keeps times only to the second, and a local model's fingerprint holds them to the
+    # nanosecond, so the pod's copy is given this Mac's times and checked against them, file by file.
+    differ=$(file_times "$1" | on_pod "python3 -c '
+import json, os, sys
+from pathlib import Path
+for name, (size, modified) in json.load(sys.stdin).items():
+    path = Path(sys.argv[1]) / name
+    os.utime(path, ns=(modified, modified))
+    if [path.stat().st_size, path.stat().st_mtime_ns] != [size, modified]:
+        print(name)
+' $(printf '%q' "$dest")")
+    [[ -z $differ ]] ||
+        die "$(wc -l <<<"$differ" | tr -d ' ') of the pod's files don't have this Mac's size and time" \
+            "to the nanosecond, such as $(head -n 1 <<<"$differ"), so a local model there wouldn't keep" \
+            "its fingerprint and a run would rebuild every stage"
 }
 
 pull() {

@@ -1086,7 +1086,9 @@ class Search:
             }
             # Kept only beside a search.
             folder = self.folder if kept and self.folder.is_dir() else None
-            base = _base_reads(server, harmless, settings.scoring.kl_tokens, folder, read_from)
+            base = _base_reads(
+                server, harmless, settings.scoring.kl_tokens, folder, read_from, quantized, run.report
+            )
             scorer = _Scorer(
                 server,
                 guard,
@@ -1453,19 +1455,44 @@ def _base_reads(
     kl_tokens: int,
     folder: Path | None,
     read_from: dict[str, Any],
+    model: Path,
+    report: Callable[[str], None],
 ) -> list[dict[int, float]]:
     """The unedited model's first tokens on the KL prompts. Given a search's folder, those read there
-    before from the same inputs on the same machine are used again, so every session of the search sets
-    its trials against the same ones, and those read now are kept there."""
+    before from the same inputs on the same machine, and from a GGUF of the same bytes, are used again,
+    so every session of the search sets its trials against the same ones, and those read now are kept
+    there. The same recipe can quantise to other bytes, as an A100's and an A40's Q4_K_M of the same
+    model did. Those kept before candor recorded the bytes are read again, as nothing shows which file
+    they were read from."""
     path = folder / "base-first-tokens" / f"{digest(read_from)}.json" if folder else None
-    if path and path.exists():
-        return [_read(top) for top in json.loads(path.read_text())["kl"]]
+    if path is None:
+        return server.top_logprobs(harmless, kl_tokens)
+    kept = json.loads(path.read_text()) if path.exists() else {}
+    known = kept.get("model bytes", {})
+    found = _model_bytes(model, known, report)
+    if known.get("sha256") == found["sha256"]:
+        if known != found:
+            write_atomic(path, json.dumps(kept | {"model bytes": found}))
+        return [_read(top) for top in kept["kl"]]
+    if kept:
+        why = "with other bytes" if known else "whose bytes weren't recorded"
+        report(f"Reading the unedited model's first tokens again: those kept were read from a GGUF {why}")
     base = server.top_logprobs(harmless, kl_tokens)
-    if path:
-        path.parent.mkdir(exist_ok=True)
-        # In the order read, so KL sums them as it did.
-        write_atomic(path, json.dumps({"read from": read_from, "kl": base}))
+    path.parent.mkdir(exist_ok=True)
+    # In the order read, so KL sums them as it did.
+    write_atomic(path, json.dumps({"read from": read_from, "model bytes": found, "kl": base}))
     return base
+
+
+def _model_bytes(model: Path, known: dict[str, Any], report: Callable[[str], None]) -> dict[str, Any]:
+    """The GGUF's sha256, size and modification time. A file of many gigabytes is hashed only when its
+    size or time isn't the one known, as when it was built or copied again."""
+    stat = model.stat()
+    now = {"size": stat.st_size, "modified": stat.st_mtime_ns}
+    if {key: known.get(key) for key in now} == now:
+        return known
+    report(f"Hashing {model.name}: the unedited model's first tokens are kept with its bytes")
+    return {**now, "sha256": toolchain.sha256(model)}
 
 
 def _read(top: dict[str, float]) -> dict[int, float]:

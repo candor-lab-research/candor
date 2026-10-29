@@ -144,7 +144,10 @@ at its strengths and llama-server restarts with it, which adds seconds to every 
 - It resumes where it stopped, and refuses to carry on a search made under other settings before it
   rebuilds anything.
 - The unedited model's first tokens, which KL is read against, are kept in `search/base-first-tokens/`
-  for each set of inputs and machine, so every session sets its trials against the same ones.
+  for each set of inputs and machine, so every session sets its trials against the same ones. They are
+  kept with the sha256 of the GGUF they were read from, hashed again only when its size or time
+  changes, and read again from a GGUF with other bytes, which the same recipe quantised on another pod
+  can give. Those kept before candor recorded the sha256 are read again once.
 - A search carried on on another machine says so, as KL read there can differ by a few percent.
 
 **Progress.** Every `search.report_every` trials (25; 0 for never) it shows its pace and the time

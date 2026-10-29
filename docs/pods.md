@@ -56,7 +56,7 @@ its `uv.lock`.
 
 | Command | What it does |
 | :--- | :--- |
-| `push SRC [DEST]` | Copy a file or folder to the pod |
+| `push SRC [DEST]` | Copy a file or folder to the pod, each file with its time here to the nanosecond (below) |
 | `start NAME candor ...` | Run a command detached, logged as NAME |
 | `log NAME` | The end of that log |
 | `stop NAME` | Stop that command |
@@ -67,6 +67,9 @@ its `uv.lock`.
 - Paths are the same as here, under `/root/candor` on the pod. Anything there that git doesn't ignore
   is replaced by the next `code`, which refuses while a command is running, as it would change the
   code under it.
+- rsync from macOS keeps file times only to the second, and a local model's fingerprint holds them to
+  the nanosecond, so `push` gives the pod's copy this Mac's times and checks every file's size and
+  time against them. It fails, naming a file, where the pod's disk can't keep them.
 - `wait` keeps the Mac awake until the command ends, so nothing needs a timed `caffeinate`. It pulls
   `runs/RUN` every 30 minutes and once more at the end, and exits 0 only if the command did.
 - `wait` stops early, with an error, if the pod stops answering for about five minutes or the
