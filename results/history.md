@@ -1420,3 +1420,11 @@ budget came back empty on CUDA; and `candor score`'s refusal band is 2, the most
 until repeats are paired by prompt. The e2e tests pass on CUDA, the Qwen4-Exp model given heads its
 CUDA kernel takes. Trials take 251 s, so 600 on an A40 would take nearly all the credit; 64 slots
 are slower a trial. Numbers in `phase-6-spark-x2.5-4b.md`, step 1.
+
+### Spark-X's search on the A40, staged at 300 trials (the user, 2026-10-29)
+
+The user chose the A40 ($0.59/h, secure) over a community RTX 4090 ($0.34/h), and fewer trials than
+600. 300 first: on Qwen3.5-9B the one-layer best was within 1% of its final KL by trial 300 and K2's
+search stopped at 313, but the 27B's shipped edit was trial 532 and the simulator gives 300 trials
+about half 600's chance of a pick within 10% of the best. So at 300 the progress goes to the user;
+the search carries on from its journal if the bests are still moving.

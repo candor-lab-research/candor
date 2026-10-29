@@ -14,7 +14,7 @@ anything else. Every model is scored and shipped as a GGUF in llama-server, and 
 | Phase | What | State |
 | --- | --- | --- |
 | 0-5 | LoRA scoring in llama.cpp, the core maths and `inspect`; rude-llama, Qwen3.5-9B, K2-Horizon-7B and Qwen3.8-27B searched, measured as used and released | Done 2026-10-27 (history; `results/phase-2` to `phase-5`, the milestones) |
-| 6 | Spark-X2.5-4B, smaller and newer, the largest recent gap (the user, 2026-10-29); Flash-Next's support kept for when there is credit | Pilot done (`results/phase-6-spark-x2.5-4b.md`, step 1); the search's plan waits for the user |
+| 6 | Spark-X2.5-4B, smaller and newer, the largest recent gap (the user, 2026-10-29); Flash-Next's support kept for when there is credit | Pilot done (`results/phase-6-spark-x2.5-4b.md`, step 1); the search running to 300 trials |
 
 ## How we work
 
@@ -36,12 +36,12 @@ anything else. Every model is scored and shipped as a GGUF in llama-server, and 
 - Anything visual (README, docs, diagrams, model cards, pages, charts) follows `docs/brand.md` (the
   user, 2026-10-23).
 
-## Now: the search's plan with the user
+## Now: Spark-X2.5-4B's search, to 300 trials
 
-- The pilot ran Spark-X correctly as used; trials take 251 s at 32 slots, so 600 on an A40 are
-  41.8 h, $24.70, against about $25.70 of credit with no top-up (results, step 1). 64 slots are
-  slower a trial. To settle with the user: a cheaper card (an RTX 4090 at $0.34/h, timed first), or
-  fewer trials. No pods are running.
+- One A40 (`sk7e6bm640dlrt`, secure, $0.59/h), from 11:43 UTC on 2026-10-29, carrying on from the
+  pilot's 3 trials at 32 slots: about 21 h and $12.35 at the pilot's 251 s a trial. The watchdog
+  deletes it at 19:44 GMT on 2026-10-30; `pod.sh wait` pulls every 30 minutes.
+- At 300, its progress goes to the user before any more trials (history, 2026-10-29).
 
 ## Next
 
