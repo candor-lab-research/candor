@@ -227,7 +227,11 @@ entry is corrected, dropped or overturned is in CLAUDE.md ("Finished, dropped an
   sampler drawing fewer edits that think long. On the simulator it cost no measurable share of picks
   pooled, but some landscapes lose up to 6.5 points, beyond chance. So: on for a thinking model
   whose pilot shows budget hits common. Owed: whether the fixed prompt order biases it.
-  (`phase-4-k2-horizon-7b.md`, step 5)
+  (`phase-4-k2-horizon-7b.md`, step 5) [Hypothesis] A cap of 8, set on K2, may bind on a model
+  whose own thinking reaches the budget often: Spark-X2.5-4B's reaches it on 5 of 100 harmless test
+  prompts and 22 of 300 held out (K2: 0 and 1), 25 of its 93 trials went over the cap, and its
+  finalists sit at 5-7. Test: the finalists' held-out budget hits against the unedited model's, and
+  on the simulator, a cap set from the model's own rate. (`phase-6-spark-x2.5-4b.md`, step 2)
 - **"full" row normalisation against "pre" rests on one pair of searches.** [Measured: Qwen3.5-9B,
   69 and 70 trials from the same 40 Sobol starts, thinking off] "pre" was at 50 of 100 (KL 0.059),
   "full" at 32 (KL 0.069), both still falling. K2 used "full" untested; init still defaults to

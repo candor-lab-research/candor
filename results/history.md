@@ -1428,3 +1428,14 @@ The user chose the A40 ($0.59/h, secure) over a community RTX 4090 ($0.34/h), an
 search stopped at 313, but the 27B's shipped edit was trial 532 and the simulator gives 300 trials
 about half 600's chance of a pick within 10% of the best. So at 300 the progress goes to the user;
 the search carries on from its journal if the bests are still moving.
+
+### Spark-X's search stopped at 93 trials; its three finalists measured (the user, 2026-10-29)
+
+At 92 trials both kinds' bests within the cap had held, per layer's since trial 18 and one layer's
+since trial 53, each at KL 0.0154 on the test prompts, under the 27B's final 0.0188. The user
+stopped the search there, against the 300 staged, to measure them. candor names three finalists:
+53, 70 and 18. On the same pod, the unedited model is measured in full, trial 18, which presses MLP
+strength's floor, is scored with it moved past (STATUS, phase 6), and each finalist is exported and
+measured. The 27B's decision rule, ranked on unsafe answers (2026-10-19 and 2026-10-23), applies,
+put to the user before any finalist's measurement is read; if none passes, the search carries on
+from its journal. Numbers in `phase-6-spark-x2.5-4b.md`, step 2.

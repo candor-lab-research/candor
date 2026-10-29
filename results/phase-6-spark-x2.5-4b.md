@@ -74,3 +74,50 @@ What it shows:
   same directions.
 - On an A40 the search alone takes nearly all the credit; 64 slots don't help, as a trial waits on
   its longest answers and each answer runs slower with more beside it.
+
+## Step 2: the search, stopped at 93 trials (2026-10-29)
+
+One A40 (`sk7e6bm640dlrt`, secure, CA-MTL-1, $0.59/h) at 32 slots, carrying on from the pilot's 3
+trials, 11:43-21:56 UTC, about $6.05 by time. It was restarted at 12:33 UTC after trial 9 stalled
+(the server reload after an early stop, fdfa995). The user stopped it at 93 trials scored, against
+the 300 staged, once both kinds' bests within the cap had held: per layer's since trial 18, one
+layer's since trial 53. The trial in flight at the stop is lost; the search can carry on from its
+journal.
+
+| | One layer | Per layer |
+| --- | --- | --- |
+| Trials scored | 47 | 46 |
+| Stopped early | 12 | 12 |
+| Over the budget cap (more than 8 of 100) | 13 | 12 |
+| Within both caps, scored in full | 9 | 14 |
+| Seconds a trial, mean / median | 339 / 356 | 432 / 469 |
+| Answers that reached the budget | 191 of 4,076 | 234 of 4,160 |
+
+Trials numbered under 40, about the evenly spread start, took 266 s on average; the 56 aimed trials
+after it took 464 s, as edits that refuse little think longer. Over the aimed trials 323 of 4,932
+answers (6.5%) reached the budget, and 15 refused none of 100, scored in full.
+
+How the bests moved: per layer's trial 18 (1 refused, KL 0.0154) held for its last 38 trials, while
+0 refused fell from KL 0.0199 (trial 62) to 0.0188 (64) and 0.0175 (70). One layer had none within
+the cap until trial 53 (0 refused, KL 0.0154), which held for its last 21.
+
+The finalists, as candor names them: each kind's least KL at each count within the caps (2 refused,
+8 at the budget), unless one refusing fewer has less.
+
+| Trial | Kind | Direction | Refused of 100 | KL | At the budget | Strength, attention / MLP |
+| --- | --- | --- | --- | --- | --- | --- |
+| 53 | one layer | layer 17, think start | 0 | 0.0154 | 6 | 3.56 / 1.44 |
+| 70 | per layer | think start | 0 | 0.0175 | 5 | 2.60 / 2.03 |
+| 18 | per layer | answer start | 1 | 0.0154 | 7 | 2.65 / 0.91 |
+
+Trial 70's KL is 0.0021 above trial 18's, paired by prompt (SE 0.0037): a tie. Trial 18 presses MLP
+strength's floor (0.912 against 0.8), so before it is measured it is scored as the search scores,
+with that strength moved to 0.65 and 0.5 (`evidence-2026-10-29/beyond-spark.py`).
+
+What it shows:
+- Within 93 trials both kinds found edits refusing 0 or 1 of 100 at KL 0.0154, under the 27B's
+  0.0188 after 600. These are search scores: held out, KL has come out 1.3-2.5 times the search's
+  (K2's 207, 0.024 to 0.061; the 27B's 435, 0.0188 to 0.0247).
+- The budget cap binds: 25 of 93 trials went over it and the finalists sit at 5-7. The unedited
+  model's own thinking reaches the budget on 5 of 100 harmless test prompts and 22 of 300 held out
+  (K2: 0 and 1), so a cap set on K2 sits close to this model's own rate (findings, hypothesis).

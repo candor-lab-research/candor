@@ -14,7 +14,7 @@ anything else. Every model is scored and shipped as a GGUF in llama-server, and 
 | Phase | What | State |
 | --- | --- | --- |
 | 0-5 | LoRA scoring in llama.cpp, the core maths and `inspect`; rude-llama, Qwen3.5-9B, K2-Horizon-7B and Qwen3.8-27B searched, measured as used and released | Done 2026-10-27 (history; `results/phase-2` to `phase-5`, the milestones) |
-| 6 | Spark-X2.5-4B, smaller and newer, the largest recent gap (the user, 2026-10-29); Flash-Next's support kept for when there is credit | Pilot done (`results/phase-6-spark-x2.5-4b.md`, step 1); the search running to 300 trials |
+| 6 | Spark-X2.5-4B, smaller and newer, the largest recent gap (the user, 2026-10-29); Flash-Next's support kept for when there is credit | Pilot done (`results/phase-6-spark-x2.5-4b.md`, step 1); search stopped at 93 trials (step 2); its three finalists being measured |
 
 ## How we work
 
@@ -36,19 +36,19 @@ anything else. Every model is scored and shipped as a GGUF in llama-server, and 
 - Anything visual (README, docs, diagrams, model cards, pages, charts) follows `docs/brand.md` (the
   user, 2026-10-23).
 
-## Now: Spark-X2.5-4B's search, to 300 trials
+## Now: Spark-X2.5-4B's finalists measured
 
-- One A40 (`sk7e6bm640dlrt`, secure, $0.59/h), from 11:43 UTC on 2026-10-29, carrying on from the
-  pilot's 3 trials at 32 slots: about 21 h and $12.35 at the pilot's 251 s a trial. The watchdog
-  deletes it at 19:44 GMT on 2026-10-30; `pod.sh wait` pulls every 30 minutes.
-- At 300, its progress goes to the user before any more trials (history, 2026-10-29).
+- The same A40 (`sk7e6bm640dlrt`), from 21:57 UTC on 2026-10-29, runs `/root/finalists.sh`: the
+  unedited model measured in full, trial 18 scored past its MLP floor, then trials 53, 70 and 18
+  exported and measured; about 9-11 h, $5.50-6.50. The watchdog deletes it at 19:44 GMT on
+  2026-10-30; `pod.sh wait finalists` pulls every 30 minutes.
+- The decision rule is the 27B's, ranked on unsafe answers (history, 2026-10-19 and 2026-10-23),
+  put to the user before any finalist's measurement is read.
 
 ## Next
 
-1. Phase 6 after the pilot: the decision rule signed off before the search (the 27B's, ranked on
-   unsafe answers; history, 2026-10-23); the reference, the best public edit measured with
-   `--outside` as candor ships its own; any finalist that presses a range end scored moved past it
-   (`evidence-2026-10-27/beyond.py`).
+1. Phase 6: the reference, the best public edit, measured with `--outside` as candor ships its own,
+   on the user's go (the most downloaded uncensored GGUF is soyaakinohara's Heretic-jp, 317,078).
 2. Phase 4, later: low effort's two closes; Uno not now. The budget limit
    (`search.max_budget_hits`, on K2 from trial 138) costs no measurable hits on the simulator and
    stays on (`phase-4-k2-horizon-7b.md`, step 5).
