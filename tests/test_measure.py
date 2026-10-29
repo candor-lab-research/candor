@@ -1,4 +1,5 @@
 import copy
+import hashlib
 import io
 import json
 import math
@@ -13,7 +14,7 @@ from rich.console import Console
 from safetensors.torch import save_file
 from typer.testing import CliRunner
 
-from candor import cli, config, measure, menu, residuals, run, source
+from candor import cli, config, measure, menu, residuals, run, source, toolchain
 from candor.cli import app
 from candor.engine import LlamaServer, ServerError
 from candor.kernel import Kernel
@@ -54,6 +55,27 @@ def test_a_measurement_keeps_numbers_per_prompt_and_answers_only_in_private(tiny
         assert (private / f"{name}.judged.json").exists() == (name in run.HELD_OUT)
         for answer in texts["answers"]:
             assert len(answer) < 4 or json.dumps(answer)[1:-1] not in numbers
+
+
+def test_a_measurement_records_the_sha256_of_the_gguf_that_answered_it_hashed_once(tiny, monkeypatch):
+    hashed = []
+    real = toolchain.sha256
+    monkeypatch.setattr(toolchain, "sha256", lambda path: hashed.append(path) or real(path))
+    results = Measurement(tiny, None, "base").measure()
+    _, quantized = tiny.gguf()
+    sha256 = hashlib.sha256(quantized.read_bytes()).hexdigest()
+    assert hashed == [quantized]
+    assert {results[name]["gguf_sha256"] for name in measure.SETS} == {sha256}
+    assert dict(measure.summary(results))["GGUF sha256"] == sha256[:16]
+    maths = tiny.path("measurements", "base", "maths.json")
+    assert sha256 not in run.record_of(maths).read_text()
+    assert Measurement(tiny, None, "base").measure() == results and len(hashed) == 1
+    # A set answered before candor recorded it is reused as it is.
+    older = json.loads(maths.read_text())
+    del older["gguf_sha256"]
+    maths.write_text(json.dumps(older))
+    again = Measurement(tiny, None, "base").measure()
+    assert dict(measure.summary(again))["GGUF sha256"] == f"{sha256[:16]}; not recorded" and len(hashed) == 1
 
 
 def test_an_edits_record_names_where_it_reads_its_directions_only_where_the_answer_starts():

@@ -1,3 +1,4 @@
+import hashlib
 import json
 import re
 import shutil
@@ -244,9 +245,12 @@ def test_what_killed_exports_left_behind_is_removed_before_the_disk_check(tiny, 
 
 
 def test_an_export_that_holds_the_whole_edit_keeps_all_of_it(tiny, converting):
+    said = []
+    tiny.report = said.append
     shipped = export.export(tiny, EDIT)
     held = export.kept(tiny, shipped, export.deltas(tiny, EDIT))
     assert held and all(share == pytest.approx(1, abs=1e-4) for share in held.values())
+    assert not [line for line in said if "finer than its name's" in line]
 
 
 def losing(tiny, monkeypatch, share=0.5, at_q8_0: float | Callable[[str], float] = 1.0, at_f32=1.0):
@@ -323,6 +327,25 @@ def test_weights_q8_0_still_rounds_the_edit_away_from_stay_f32_and_the_rest_q8_0
         and line.endswith(f"in {len(down)} of {len(edited)} edited weights; storing those as F32")
         for line in said
     )
+
+
+def test_an_export_says_how_many_tensors_it_holds_finer_than_its_name_gives(tiny, converting, monkeypatch):
+    losing(tiny, monkeypatch, at_q8_0=lambda name: 0.5 if "ffn_down" in name else 1.0)
+    said = []
+    tiny.report = said.append
+    held = (
+        "tiny-trial-Q4_K_M.gguf holds 4 tensors finer than its name's Q4_K_M, as that would round the edit "
+        "away from them: 2 as Q8_0, 2 as F32"
+    )
+    shipped = export.export(tiny, EDIT)
+    assert said[-1] == held
+    # Reused, even from a record made before candor listed what an export holds apart, it says so again.
+    record = json.loads(run.record_of(shipped).read_text())
+    del record["apart"]
+    run.record_of(shipped).write_text(json.dumps(record))
+    said.clear()
+    assert export.export(tiny, EDIT) == shipped and len(converting) == 1
+    assert said[-1] == held
 
 
 def test_a_run_deploying_q8_0_stores_what_it_rounds_away_as_f32(tiny, converting, monkeypatch):
@@ -529,6 +552,16 @@ def test_llama_quantize_given_every_tensors_type_changes_only_the_one_given_anot
     assert convert.tensor_types(apart) == plain | {"blk.1.ffn_down.weight": kind}
 
 
+def test_a_file_exported_again_is_matched_to_the_measurement_of_the_first_by_its_sha256(tiny, converting):
+    shipped = export.export(tiny, EDIT)
+    measured = Measurement(tiny, EDIT, "merged", exported=True, limit=1).measure()
+    shutil.rmtree(shipped.parent)
+    again = export.export(tiny, EDIT)
+    assert len(converting) == 2
+    sha256 = hashlib.sha256(again.read_bytes()).hexdigest()
+    assert {measured[name]["gguf_sha256"] for name in measure.SETS} == {sha256}
+
+
 def test_a_failed_export_leaves_nothing_behind(tiny, monkeypatch):
     tiny.gguf()
 
@@ -616,6 +649,34 @@ def test_a_model_edited_elsewhere_ships_and_measures_as_the_same_edit_of_candors
     ours = Measurement(tiny, EDIT, "merged", exported=True).measure()
     assert kl_between(ours, theirs) < 1e-5
     assert export.export_outside(tiny, "saved", folder) == shipped and len(converting) == 2
+
+
+def test_what_a_model_edited_elsewhere_changes_outside_candors_targets_is_named_and_left_out(
+    tiny, converting
+):
+    tiny.gguf()
+    folder = saved_elsewhere(tiny)
+    weights = load_file(folder / "model.safetensors")
+    weights["model.layers.0.self_attn.q_proj.weight"] *= 2
+    # Rounded to the type it is saved in, a weight still holds the run's model's values.
+    weights["model.layers.1.self_attn.q_proj.weight"] = weights["model.layers.1.self_attn.q_proj.weight"].to(
+        torch.bfloat16
+    )
+    weights["model.embed_tokens.weight"] = torch.ones(4, HIDDEN)
+    save_file(weights, folder / "model.safetensors")
+    said = []
+    tiny.report = said.append
+    shipped = export.export_outside(tiny, "saved", folder)
+    assert (
+        f"2 tensors of {folder} differ from the run's model outside candor's edit targets, and the export "
+        "takes only those, so it lacks any edit these hold: model.embed_tokens.weight, "
+        "model.layers.0.self_attn.q_proj.weight"
+    ) in said
+    assert f"Taking the {len(export.deltas(tiny, EDIT))} edited weights from {folder}" in said
+    held = export.kept(tiny, shipped, export._taken(tiny, folder))
+    assert set(held) == edited_in_gguf(tiny) and all(
+        share == pytest.approx(1, abs=1e-4) for share in held.values()
+    )
 
 
 def test_a_model_edited_elsewhere_is_exported_again_once_it_changes(tiny, converting):
@@ -707,6 +768,34 @@ def test_a_gguf_edited_elsewhere_ships_and_measures_as_the_same_edit_of_candors(
     path.touch()
     with pytest.raises(RunError, match="saved's export no longer matches this run or"):
         Measurement(tiny, None, "saved", outside="saved").measure()
+
+
+def test_what_a_gguf_edited_elsewhere_changes_outside_candors_targets_is_named_and_left_out(tiny, converting):
+    base, _ = tiny.gguf()
+    ours = {tensor.name: tensor for tensor in gguf.GGUFReader(base).tensors}
+    made = tiny.folder.parent
+    # Rounded to the type it is stored in, a tensor still holds the run's model's values.
+    rounded = {"blk.0.attn_v.weight": partial(export._values, ours["blk.0.attn_v.weight"])}
+    export._rewritten(base, made / "rounded.gguf", rounded, TYPE.F16)
+    changed = [
+        "token_embd.weight",
+        "output.weight",
+        *(f"blk.{i}.attn_{k}.weight" for i in range(2) for k in "qk"),
+    ]
+    written = {
+        tiny.target_names[name]: partial(export._written, tiny, name, change)
+        for name, change in export.deltas(tiny, EDIT).items()
+    } | {name: partial(lambda tensor: 2 * export._values(tensor), ours[name]) for name in changed}
+    path = made / "saved.gguf"
+    export._rewritten(made / "rounded.gguf", path, written, export.F32)
+    said = []
+    tiny.report = said.append
+    export.export_outside(tiny, "saved", path)
+    assert (
+        f"6 tensors of {path} differ from the run's model outside candor's edit targets, and the export "
+        "takes only those, so it lacks any edit these hold: blk.0.attn_k.weight, blk.0.attn_q.weight, "
+        "blk.1.attn_k.weight, blk.1.attn_q.weight, output.weight and 1 more"
+    ) in said
 
 
 @pytest.mark.parametrize("kind", [TYPE.F16, TYPE.BF16], ids=["F16", "BF16"])

@@ -252,7 +252,9 @@ deployed GGUF in llama-server.
   see [where KL is read](models.md#where-directions-and-kl-are-read).
 
 **What it keeps.** One number per prompt, in `measurements/NAME/`. Answers and the judge's replies go
-only to `private/`.
+only to `private/`. Each set's results also hold the sha256 of the GGUF that answered it
+(`gguf_sha256`), read once before answering, so a file exported again can be matched to the
+measurement; `measure` shows its first 16 digits.
 
 **Options.**
 
@@ -332,7 +334,8 @@ the weight. So export measures how much of each edited weight's change the quant
 2. Where Q8_0 still falls short, it is left in F32.
 3. If one still falls short, the file is refused.
 
-Every other tensor keeps its plain type.
+Every other tensor keeps its plain type. The file's name still gives the run's quantisation, so
+export says how many tensors it holds as Q8_0 or F32 instead, and its record lists them.
 
 **What it keeps.** Only `exports/EDIT/RUN-EDIT-QUANTISATION.gguf`. `measure --exported` measures that
 exact file, and `compare` sets it against the unedited model and against the trial measured with
@@ -343,7 +346,9 @@ elsewhere, such as heretic's own save of one of its trials, the same way: the ru
 edited weight taken from the copy, so it is written, quantised and checked alike. `measure --outside
 NAME` measures it. `--outside` also takes one unquantised GGUF (F32, F16 or BF16), for an edit
 published only that way. A weight that differs from the run's only by rounding to the file's type
-counts as unedited.
+counts as unedited. Only candor's edit targets are taken: building the file, export names the tensors
+outside them that differ from the run's model, such as an edited `embed_tokens`, and leaves those as
+the run's.
 
 ## serve
 

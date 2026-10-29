@@ -20,7 +20,7 @@ from typing import Any
 
 import numpy as np
 
-from . import config, export, heretic, kl
+from . import config, export, heretic, kl, toolchain
 from .edit import FULL_RANK
 from .engine import Answer, LlamaServer, Thinking
 from .files import write_atomic
@@ -317,6 +317,8 @@ class Measurement:
                 room = max(
                     len(p) + run.answer_tokens[name] + thinking_room for name, _ in todo for p in ids[name]
                 )
+                run.report(f"Hashing {model.name}")
+                sha256 = toolchain.sha256(model)
                 server = run.server(
                     model,
                     list(scales),
@@ -338,7 +340,7 @@ class Measurement:
                                 firsts["first_token_thinking"] = ids[name]
                                 firsts["first_token_empty"] = all_ids[name + ANSWERING][: self.limit]
                         answered[name] = self._answer(
-                            server, name, ids[name], firsts, prompts, scales, thinking, inputs
+                            server, name, ids[name], firsts, prompts, scales, thinking, inputs, sha256
                         )
             judged: dict[str, dict[str, Any]] = {name: {} for name in HELD_OUT}
             # One judge at a time, freed before the next is loaded.
@@ -439,10 +441,12 @@ class Measurement:
         scales: dict[Path, float],
         thinking: Thinking | None,
         inputs: dict[str, Any],
+        sha256: str,
     ) -> dict[str, Any]:
-        """A set's answers and what reading them gives, committed once every prompt is answered. What
-        needs no answers is done first, so failing there loses none; answers are saved as they come,
-        so a measurement stopped part way answers only the prompts left."""
+        """A set's answers and what reading them gives, with the sha256 of the GGUF that answered them,
+        committed once every prompt is answered. What needs no answers is done first, so failing there
+        loses none; answers are saved as they come, so a measurement stopped part way answers only the
+        prompts left."""
         run = self.run
         settings = run.settings
         started = time.perf_counter()
@@ -464,6 +468,7 @@ class Measurement:
             "answer_seconds": before + answering,
             "seed": self.seed,
             "machine": run.machine(),
+            "gguf_sha256": sha256,
         }
         if thinking:
             result["thinking"] = [a.thinking for a in answers]
@@ -638,7 +643,7 @@ def _count(values: list[bool | None]) -> str:
 
 
 def summary(results: dict[str, dict[str, Any]]) -> list[tuple[str, str]]:
-    """What one measurement found, as rows of a table."""
+    """What one measurement found, and the GGUF it measured, as rows of a table."""
     rows = [(label, _count(values(results[name]))) for label, name, values in _counts(results)]
     for name in HELD_OUT:
         result = results[name]
@@ -656,6 +661,12 @@ def summary(results: dict[str, dict[str, Any]]) -> list[tuple[str, str]]:
         written = sum(result["tokens"]) + sum(result.get("thinking", []))
         rate = written / result["answer_seconds"] if result["answer_seconds"] else 0
         rows.append((f"{SHORT_LABELS[name]}, time", f"{seconds(result):.0f} s, {rate:.0f} tokens/s"))
+    # The first 16 digits, so the table fits 80 columns; sets answered apart may each have had their own file.
+    hashes = (
+        results[name]["gguf_sha256"][:16] if "gguf_sha256" in results[name] else "not recorded"
+        for name in SETS
+    )
+    rows.append(("GGUF sha256", "; ".join(dict.fromkeys(hashes))))
     return rows
 
 
