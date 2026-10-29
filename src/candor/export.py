@@ -84,10 +84,14 @@ def _path(run: Run, name: str) -> Path:
     return run.path("exports", name, f"{run.folder.name}-{name}-{quantization}.gguf")
 
 
-def _planned(run: Run, edit: "Edit") -> tuple[Path, dict[str, Any]]:
-    """Where the edit's export goes and what it is built from."""
+def _planned(run: Run, edit: "Edit", read: bool = True) -> tuple[Path, dict[str, Any]]:
+    """Where the edit's export goes and what it is built from. Without read the directions are only
+    planned, so an export built from others is found out before any residual is read again."""
     run.gguf()
-    run.edit_directions(edit.name, edit.direction_layer, edit.answering)
+    if read:
+        run.edit_directions(edit.name, edit.direction_layer, edit.answering)
+    else:
+        run.planned_directions()
     inputs = {
         **run.adapter_inputs(edit.answering),
         "base": run.inputs["base"],
@@ -510,7 +514,7 @@ def exported(run: Run, edit: "Edit") -> tuple[Path, dict[str, Any]]:
     """The edit's export and its record, which holds what it was built from and the code that built
     it, for a caller holding the run's lock. Fails unless it matches the run and the edit as they
     are now."""
-    path, inputs = _planned(run, edit)
+    path, inputs = _planned(run, edit, read=False)
     if not run.current(path, inputs | _listed_apart(run, path, partial(_edited, run, edit))):
         raise RunError(f"{edit.name} has no export matching this run; run candor export first")
     return path, json.loads(record_of(path).read_text())

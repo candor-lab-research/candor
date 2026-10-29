@@ -173,6 +173,14 @@ def test_an_exported_measurement_is_redone_when_the_export_code_changes(tiny, co
     assert kl_between(before, after) > 1e-3
 
 
+def test_an_export_built_from_older_directions_is_refused_before_any_are_read(tiny, converting, monkeypatch):
+    export.export(tiny, EDIT)
+    monkeypatch.setitem(run.STAGES, "directions.pt", run.STAGES["directions.pt"] + 1)
+    monkeypatch.setattr(Run, "directions", lambda self, answering=False: pytest.fail("read the directions"))
+    with pytest.raises(RunError, match="no export matching"):
+        Measurement(tiny, EDIT, "merged", exported=True, limit=1).measure()
+
+
 def test_an_export_and_a_scored_edit_are_kept_when_only_the_measuring_code_changes(
     tiny, converting, monkeypatch
 ):

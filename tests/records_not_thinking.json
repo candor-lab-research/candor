@@ -24,7 +24,7 @@
  "adapters/layer-0.inputs.json": {
   "code": {
    "adapters": 1,
-   "directions.pt": 1,
+   "directions.pt": 2,
    "gguf": 1,
    "prompts.json": 1
   },
@@ -52,7 +52,7 @@
  "adapters/layer-1.inputs.json": {
   "code": {
    "adapters": 1,
-   "directions.pt": 1,
+   "directions.pt": 2,
    "gguf": 1,
    "prompts.json": 1
   },
@@ -80,7 +80,7 @@
  "adapters/per-layer.inputs.json": {
   "code": {
    "adapters": 1,
-   "directions.pt": 1,
+   "directions.pt": 2,
    "gguf": 1,
    "prompts.json": 1
   },
@@ -109,7 +109,7 @@
   "base": "6f879886c606baf9",
   "code": {
    "adapters": 1,
-   "directions.pt": 1,
+   "directions.pt": 2,
    "exports": 3,
    "gguf": 1,
    "prompts.json": 1
@@ -170,7 +170,7 @@
  "measurements/base/harmful_held_out.json.inputs.json": {
   "code": {
    "adapters": 1,
-   "directions.pt": 1,
+   "directions.pt": 2,
    "gguf": 1,
    "measurements": 2,
    "prompts.json": 1
@@ -189,7 +189,7 @@
   "answers": "40122af96b6ba03e",
   "code": {
    "adapters": 1,
-   "directions.pt": 1,
+   "directions.pt": 2,
    "gguf": 1,
    "measurements": 2,
    "prompts.json": 1
@@ -203,7 +203,7 @@
  "measurements/base/harmless_held_out.json.inputs.json": {
   "code": {
    "adapters": 1,
-   "directions.pt": 1,
+   "directions.pt": 2,
    "gguf": 1,
    "measurements": 2,
    "prompts.json": 1
@@ -223,7 +223,7 @@
   "answers": "1c8e218f3c5e86d7",
   "code": {
    "adapters": 1,
-   "directions.pt": 1,
+   "directions.pt": 2,
    "gguf": 1,
    "measurements": 2,
    "prompts.json": 1
@@ -237,7 +237,7 @@
  "measurements/base/maths.json.inputs.json": {
   "code": {
    "adapters": 1,
-   "directions.pt": 1,
+   "directions.pt": 2,
    "gguf": 1,
    "measurements": 2,
    "prompts.json": 1
@@ -255,7 +255,7 @@
  "measurements/edited/adapters.inputs.json": {
   "code": {
    "adapters": 1,
-   "directions.pt": 1,
+   "directions.pt": 2,
    "gguf": 1,
    "measurements": 2,
    "prompts.json": 1
@@ -285,7 +285,7 @@
  "measurements/edited/harmful_held_out.json.inputs.json": {
   "code": {
    "adapters": 1,
-   "directions.pt": 1,
+   "directions.pt": 2,
    "gguf": 1,
    "measurements": 2,
    "prompts.json": 1
@@ -327,7 +327,7 @@
   "answers": "ec4369e8574a697e",
   "code": {
    "adapters": 1,
-   "directions.pt": 1,
+   "directions.pt": 2,
    "gguf": 1,
    "measurements": 2,
    "prompts.json": 1
@@ -341,7 +341,7 @@
  "measurements/edited/harmless_held_out.json.inputs.json": {
   "code": {
    "adapters": 1,
-   "directions.pt": 1,
+   "directions.pt": 2,
    "gguf": 1,
    "measurements": 2,
    "prompts.json": 1
@@ -384,7 +384,7 @@
   "answers": "1657f383eca6925d",
   "code": {
    "adapters": 1,
-   "directions.pt": 1,
+   "directions.pt": 2,
    "gguf": 1,
    "measurements": 2,
    "prompts.json": 1
@@ -398,7 +398,7 @@
  "measurements/edited/maths.json.inputs.json": {
   "code": {
    "adapters": 1,
-   "directions.pt": 1,
+   "directions.pt": 2,
    "gguf": 1,
    "measurements": 2,
    "prompts.json": 1
@@ -516,7 +516,7 @@
   "answer length": 100,
   "code": {
    "adapters": 1,
-   "directions.pt": 1,
+   "directions.pt": 2,
    "edits": 1,
    "gguf": 1,
    "prompts.json": 1,

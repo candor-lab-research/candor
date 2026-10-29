@@ -55,7 +55,7 @@ def directions_by_seed():
 
     def found() -> torch.Tensor:
         generator = torch.Generator().manual_seed(state["seed"])
-        return F.normalize(torch.randn(LAYERS + 1, HIDDEN, generator=generator), dim=-1)
+        return F.normalize(torch.randn(LAYERS, HIDDEN, generator=generator), dim=-1)
 
     return state, found
 
@@ -106,7 +106,7 @@ def test_adapters_hold_the_edit_for_their_layers_direction(current, model, direc
     made = this.adapters()
     found = directions_by_seed[1]()
     weight = ModelFiles(model).tensor("model.layers.1.mlp.down_proj.weight")
-    for set_name, direction in (("per-layer", found[2]), ("layer-0", found[1])):
+    for set_name, direction in (("per-layer", found[1]), ("layer-0", found[0])):
         b, a = rank_one(weight, direction, RowNorm(row_norm))
         stored_b, stored_a = adapter_factors(made[set_name]["blk.1.ffn_down.weight"])
         torch.testing.assert_close(stored_a, a)
@@ -126,7 +126,7 @@ def test_a_full_edit_has_one_adapter_built_at_its_strengths_and_no_shared_ones(
     # Only the weights the edit changes: the MLP's at layer 1, where its strength peaks.
     assert tensors == {"blk.1.ffn_down.weight.lora_a", "blk.1.ffn_down.weight.lora_b"}
     weight = ModelFiles(model).tensor("model.layers.1.mlp.down_proj.weight")
-    b, a = edit_factors(weight, directions_by_seed[1]()[2], 1.3, RowNorm.FULL)
+    b, a = edit_factors(weight, directions_by_seed[1]()[1], 1.3, RowNorm.FULL)
     stored_b, stored_a = adapter_factors(path)
     torch.testing.assert_close(stored_b @ stored_a, b @ a)
     assert stored_a.shape[0] == 3
@@ -568,11 +568,18 @@ def test_a_gpu_torch_cannot_use_stops_the_run(current, monkeypatch):
 
 def test_directions_read_on_a_pod_are_used_without_the_up_front_memory_check(current, monkeypatch):
     this, _ = current
-    monkeypatch.setattr(Run, "check_memory", lambda self: pytest.fail("checked the memory"))
+    checked = []
+    monkeypatch.setattr(Run, "check_memory", lambda self: checked.append(True))
     monkeypatch.setattr(Run, "adapters", lambda self: {"per-layer": {"t": Path("t.gguf")}})
     this.path("directions.pt").write_bytes(b"read on a pod")
+    record = run.record_of(this.path("directions.pt"))
+    record.write_text(json.dumps({"code": {"directions.pt": run.STAGES["directions.pt"]}}))
     this.path("prompts.json").write_text(json.dumps({"harmful": [[1]]}))
-    assert this.prepare()["adapters"] == 1
+    assert this.prepare()["adapters"] == 1 and checked == []
+    # Directions read by older code are read again, so the memory that takes is checked first.
+    record.write_text(json.dumps({"code": {"directions.pt": run.STAGES["directions.pt"] - 1}}))
+    this.check_residuals()
+    assert checked == [True]
 
 
 def test_memory_is_checked_again_before_residuals_are_read(tmp_path, model, monkeypatch):
@@ -751,7 +758,7 @@ def test_residuals_are_never_read_from_a_model_partly_on_the_disk(tmp_path, mode
     assert not this.path("directions.pt").exists()
 
 
-def test_a_model_with_hyper_connections_has_a_direction_of_the_hidden_size_at_each_index(
+def test_a_model_with_hyper_connections_has_a_direction_of_the_hidden_size_at_each_layer(
     tmp_path, monkeypatch
 ):
     folder = write_qwen4exp(tmp_path / "qwen4exp", tiny_qwen4exp())
@@ -762,7 +769,7 @@ def test_a_model_with_hyper_connections_has_a_direction_of_the_hidden_size_at_ea
         lambda self: {"harmful": [[1, 7, 3, 8], [1, 9, 4]], "harmless": [[1, 5, 6, 11, 12]]},
     )
     found = this.directions()
-    assert found.shape == (TINY_QWEN4EXP["num_hidden_layers"] + 1, HIDDEN)
+    assert found.shape == (TINY_QWEN4EXP["num_hidden_layers"], HIDDEN)
     assert torch.isfinite(found).all()
 
 
@@ -777,7 +784,7 @@ def test_a_model_with_its_own_code_is_read_only_when_trusted(tmp_path, monkeypat
         this.directions()
     settings.model.trust_remote_code = True
     found = this.directions()
-    assert found.shape == (LAYERS + 1, HIDDEN)
+    assert found.shape == (LAYERS, HIDDEN)
     assert torch.isfinite(found).all()
 
 

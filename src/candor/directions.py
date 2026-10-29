@@ -8,7 +8,7 @@ from torch import Tensor
 
 
 def difference_of_means(harmful: Tensor, harmless: Tensor, orthogonalize: bool = True) -> Tensor:
-    """One unit direction per residual index, pointing from the harmless mean to the harmful mean.
+    """One unit direction per layer, pointing from the harmless mean to the harmful mean.
 
     With orthogonalize, the part along the mean harmless residual is removed first, so the edit
     leaves alone what ordinary prompts rely on.
@@ -24,8 +24,7 @@ def difference_of_means(harmful: Tensor, harmless: Tensor, orthogonalize: bool =
 
 def after_layer(directions: Tensor, layer: float) -> Tensor:
     """The direction read after a fractional layer, interpolated between its neighbours."""
-    position = layer + 1
-    low = math.floor(position)
-    if position == low or low + 1 >= len(directions):
+    low = math.floor(layer)
+    if layer == low or low + 1 >= len(directions):
         return directions[low]
-    return F.normalize(torch.lerp(directions[low], directions[low + 1], position - low), dim=0)
+    return F.normalize(torch.lerp(directions[low], directions[low + 1], layer - low), dim=0)

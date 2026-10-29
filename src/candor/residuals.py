@@ -182,17 +182,17 @@ def left_pad(batch: list[list[int]], pad_id: int) -> tuple[Tensor, Tensor]:
 def last_token_residuals(
     model: PreTrainedModel, prompts: list[list[int]], pad_id: int, batch_size: int = 32
 ) -> Tensor:
-    """Residuals at each prompt's last token, shape (prompts, layers + 1, hidden), float32 on the CPU.
+    """Residuals at each prompt's last token, shape (prompts, layers, hidden), float32 on the CPU.
 
-    Index 0 is the embedding output and index i + 1 the output of layer i, before any final norm.
-    They are read with forward hooks rather than output_hidden_states, which some remote code breaks
-    (K2-Horizon's returns none). A model with hyper-connections, as Qwen4-Exp has, carries several
-    streams of the hidden size from layer to layer, each the embedding plus some multiple of each
-    block's output and what the n-gram embedding writes into it; its residual is their mean, as heretic
-    reads it.
+    Index i is the output of layer i, before any final norm. They are read with forward hooks rather
+    than output_hidden_states, which some remote code breaks (K2-Horizon's returns none). A model with
+    hyper-connections, as Qwen4-Exp has, carries several streams of the hidden size from layer to
+    layer, each the embedding plus some multiple of each block's output and what the n-gram embedding
+    writes into it; its residual is their mean, as heretic reads it. Prompts are batched longest first,
+    so each batch pads to a width near its own, and one too long for the memory fails at once.
     """
     decoder = model.get_decoder()
-    modules = [decoder.get_input_embeddings(), *cast(nn.ModuleList, decoder.layers)]
+    layers = cast(nn.ModuleList, decoder.layers)
     text = model.config.get_text_config()
     streams, width = getattr(text, "hc_count", 1), text.hidden_size
     captured: dict[int, Tensor] = {}
@@ -209,14 +209,15 @@ def last_token_residuals(
 
         return hook
 
-    handles = [module.register_forward_hook(capture(i)) for i, module in enumerate(modules)]
+    handles = [layer.register_forward_hook(capture(i)) for i, layer in enumerate(layers)]
     # Spread across GPUs, the model's first parameter needn't be on the embedding's, and every later
     # layer moves what it is given to its own.
-    device = next(modules[0].parameters()).device
+    device = next(decoder.get_input_embeddings().parameters()).device
+    order = sorted(range(len(prompts)), key=lambda i: len(prompts[i]), reverse=True)
     chunks = []
     try:
         for start in range(0, len(prompts), batch_size):
-            ids, mask = left_pad(prompts[start : start + batch_size], pad_id)
+            ids, mask = left_pad([prompts[i] for i in order[start : start + batch_size]], pad_id)
             positions = (mask.cumsum(-1) - 1).clamp(min=0)
             decoder(
                 input_ids=ids.to(device),
@@ -224,8 +225,8 @@ def last_token_residuals(
                 position_ids=positions.to(device),
                 use_cache=False,
             )
-            chunks.append(torch.stack([captured[i].cpu() for i in range(len(modules))], dim=1))
+            chunks.append(torch.stack([captured[i].cpu() for i in range(len(layers))], dim=1))
     finally:
         for handle in handles:
             handle.remove()
-    return torch.cat(chunks)
+    return torch.cat(chunks)[torch.tensor(order).argsort()]

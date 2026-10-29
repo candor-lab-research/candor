@@ -1286,8 +1286,10 @@ def score_command(
                     "verdicts below don't hold."
                 )
             else:
+                paired = search.kl_gap(score, searched[number])
+                gap = f" (KL {paired[0]:+.4f} paired by prompt, SE {paired[1]:.4f})" if paired else ""
                 console.print(
-                    f"{escape(edit.name)} scores as it did in the search, within noise, so the scores "
+                    f"{escape(edit.name)} scores as it did in the search, within noise{gap}, so the scores "
                     "above can be set beside the search's."
                 )
     if not front:

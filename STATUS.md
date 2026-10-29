@@ -14,7 +14,7 @@ anything else. Every model is scored and shipped as a GGUF in llama-server, and 
 | Phase | What | State |
 | --- | --- | --- |
 | 0-5 | LoRA scoring in llama.cpp, the core maths and `inspect`; rude-llama, Qwen3.5-9B, K2-Horizon-7B and Qwen3.8-27B searched, measured as used and released | Done 2026-10-27 (history; `results/phase-2` to `phase-5`, the milestones) |
-| 6 | Qwen3.8-Flash-Next, the first MoE: Qwen's newest, with hyper-connections and n-gram embeddings (the user, 2026-10-27) | Support built and reviewed; the pilot waits for the user's go |
+| 6 | The first MoE: Qwen3.8-Flash-Next chosen (the user, 2026-10-27); support built and reviewed | To be chosen again with the user: $27 of credit, no top-up (2026-10-29), against Flash-Next's pilot alone at $27-50 |
 
 ## How we work
 
@@ -36,12 +36,14 @@ anything else. Every model is scored and shipped as a GGUF in llama-server, and 
 - Anything visual (README, docs, diagrams, model cards, pages, charts) follows `docs/brand.md` (the
   user, 2026-10-23).
 
-## Now: waiting for the user
+## Now: the small fixes on the Mac, then the first MoE with the user
 
-- Phase 6's pilot (`runs/flash/pilot-plan.md`, outside git), about $27-50: four RTX PRO 6000 with
-  240 GB of RAM or more for the build and the directions, then one for timing as the search would
-  score (`evidence-2026-10-27/flash-next.md`, section 5). The user also confirms the reasoning effort
-  (medium, as the 27B). No pods are running.
+- The user has $27 of Runpod credit and won't top up (2026-10-29). Flash-Next's pilot
+  (`runs/flash/pilot-plan.md`, outside git) is $27-50 on its own, and its search scores on a card
+  4.2 times an A40 an hour, so the model is chosen again with the user. candor recommends
+  Qwen3-30B-A3B-Instruct-2507 (`evidence-2026-10-23/first-moe.md`): A40-sized, no thinking, a
+  published edit to measure against. No pods are running.
+- Meanwhile the Mac's small fixes (Next, 3), each reviewed.
 
 ## Next
 
@@ -63,9 +65,9 @@ anything else. Every model is scored and shipped as a GGUF in llama-server, and 
      and layer-14 KL didn't hold on rude-llama's held-out prompts);
    - llama-server's chat endpoint may count prompt tokens against the thinking budget (seen on a
      tiny model only); K2's budget message was written for a close that starts with a newline;
-   - the directions stage keeps the embedding output it never reads and pads residual batches
-     unsorted (F80, F132): fixed at the next directions change, as it rebuilds every run's directions;
-   - small fixes: `candor score`'s 3% KL repeat tolerance (findings); an interrupted `candor
+   - measurements have no DEPENDS entry, so a change to the directions or adapters code answers even
+     the unedited model's sets again (seen at the 2026-10-29 directions change);
+   - small fixes: an interrupted `candor
      proxy` scores the unedited model again; an `inspect` warning when weights were quantised
      before; the export's file name when some tensors are Q8_0 or F32; a local model copied to a pod
      rebuilds every stage; the unedited reads a search keeps are keyed on the GGUF's recipe, not its

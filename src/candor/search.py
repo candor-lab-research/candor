@@ -86,8 +86,9 @@ ROUNDING = 1e-9
 # KL is shown to this many decimals; edits closer than that are not told apart.
 KL_DIGITS = 4
 # How far a trial scored again may stray from its score in the search through batching noise alone:
-# its refusals by this many, its KL by this share.
-REPEAT_REFUSALS, REPEAT_KL = 1, 0.03
+# its refusals by this many, and its KL by no more than a tie paired by prompt (see TIE_SE) and this
+# share, the most a measured repeat moved (results/findings.md).
+REPEAT_REFUSALS, REPEAT_KL = 1, 0.255
 # Two trials' KL is a tie when their gap, paired by prompt, is within this many standard errors: on 100
 # test prompts that error was an estimated 9-32% of the KL (results/evidence-2026-10-19/method-evidence.md,
 # F117).
@@ -429,9 +430,13 @@ def differences(score: Score, searched: Score) -> list[str]:
     ):
         if abs(now - before) > REPEAT_REFUSALS:
             found.append(f"{what} {now}, not {before}")
-    # Nor by a gap too small to show in KL_DIGITS.
-    if not math.isclose(score.kl, searched.kl, rel_tol=REPEAT_KL, abs_tol=0.5 * 10**-KL_DIGITS):
-        found.append(f"KL {score.kl:.4f}, not {searched.kl:.4f}")
+    # The paired test alone misses a few prompts reading far apart, and a share alone misreads a
+    # trial's own noise. A gap too small to show doesn't count.
+    paired = kl_gap(score, searched)
+    near = abs(score.kl - searched.kl) <= REPEAT_KL * searched.kl
+    if round(score.kl, KL_DIGITS) != round(searched.kl, KL_DIGITS) and not (paired and paired[2] and near):
+        gap = f" ({paired[0]:+.4f} paired by prompt, SE {paired[1]:.4f})" if paired else ""
+        found.append(f"KL {score.kl:.4f}, not {searched.kl:.4f}{gap}")
     return found
 
 

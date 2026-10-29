@@ -75,12 +75,12 @@ TOKENIZING_SLOT = 2048
 STAGES = {
     "gguf": 1,
     "prompts.json": 1,
-    "directions.pt": 1,
+    "directions.pt": 2,
     "adapters": 1,
     "measurements": 2,
     "scores": 1,
     "exports": 3,
-    "directions_answering.pt": 1,
+    "directions_answering.pt": 2,
     "thinking": 2,
 }
 # The stages an edit is built from.
@@ -896,10 +896,11 @@ class Run:
 
     def check_residuals(self) -> None:
         """Whether this machine can read the model's residuals, checked up front so a model it can't
-        isn't downloaded and converted first. Directions already read, as on a pod, need nothing, but
-        directions lost after they were read are refused (see _check_directions_kept)."""
+        isn't downloaded and converted first. Directions already read by this code, as on a pod, need
+        nothing, but directions lost after they were read are refused (see _check_directions_kept)."""
         self._check_directions_kept()
-        if not self.path("directions.pt").exists():
+        record = read_record(record_of(self.path("directions.pt"))) or {}
+        if record.get("code", {}).get("directions.pt") != STAGES["directions.pt"]:
             self.check_memory()
 
     def _check_directions_kept(self) -> None:
@@ -913,7 +914,7 @@ class Run:
                 )
 
     def directions(self, answering: bool = False) -> torch.Tensor:
-        """One refusal direction per residual index, from transformers fed the run's exact prompt ids:
+        """One refusal direction per layer, read after it, from transformers fed the run's exact prompt ids:
         read at the end of each prompt or, with answering, where a thinking model's answer starts after
         an empty thinking block. A thinking model's are read at both in one pass."""
         if answering not in self.positions:
@@ -984,7 +985,7 @@ class Run:
         found = self.directions(answering)
         _, layers, _, _ = self.shape
         if layer is None:
-            return found[1:]
+            return found
         if 0 <= layer <= layers - 1:
             return directions.after_layer(found, layer).expand(layers, -1)
         raise RunError(f"{name} reads its direction at layer {layer:g}; this model has {layers}")
@@ -992,14 +993,12 @@ class Run:
     # Adapters
 
     def direction_sets(self, found: torch.Tensor, layers: int) -> dict[str, torch.Tensor]:
-        """The candidate directions: each layer's own, or one layer's for every layer.
-
-        found[0] is the embedding output and found[i + 1] the output of layer i.
-        """
+        """The candidate directions: each layer's own, or one layer's for every layer, found[i] being
+        the one read after layer i."""
         low, high = self.settings.search.direction_layers(layers)
-        sets = {"per-layer": found[1:]}
+        sets = {"per-layer": found}
         for layer in range(low, high + 1):
-            sets[f"layer-{layer}"] = found[layer + 1].expand(layers, -1)
+            sets[f"layer-{layer}"] = found[layer].expand(layers, -1)
         return sets
 
     @cached_property

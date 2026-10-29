@@ -221,8 +221,8 @@ uv run candor score runs/rude --trial 37                          # one of the s
 - The search's best trial is scored again beside it, as a check. `--trial N` alone scores one of the
   search's trials.
 - A trial the search scored in full should repeat its score within noise (a refusal either way, and
-  3% of its KL), or `score` says how it differs. The unedited model is scored again only when no such
-  trial is among those scored.
+  a KL that ties with the search's paired by prompt, as trials are compared), or `score` says how it
+  differs. The unedited model is scored again only when no such trial is among those scored.
 - Like the search, it is refused before anything is rebuilt when the search was made from other
   inputs.
 

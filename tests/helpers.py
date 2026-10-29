@@ -124,7 +124,8 @@ class Loaded(torch.nn.Module):
 def residuals_of(prompts: list[list[int]]) -> torch.Tensor:
     """The residuals fake_residuals gives for these prompts."""
     generator = torch.Generator().manual_seed(zlib.crc32(json.dumps(prompts).encode()))
-    return torch.randn(len(prompts), LAYERS + 1, HIDDEN, generator=generator)
+    # A row more is drawn and the first dropped, so the records pinned from these draws hold.
+    return torch.randn(len(prompts), LAYERS + 1, HIDDEN, generator=generator)[:, 1:]
 
 
 def fake_residuals(monkeypatch) -> SimpleNamespace:

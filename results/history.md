@@ -1367,3 +1367,19 @@ out of memory, and an unchecked 205 GB of RAM while loading. It also found the p
 needed: four, not five. The second confirmed the fixes and asked for a margin on the RAM check. On a
 tiny random Qwen4-Exp through b11524, the adapters answer as the merged edit (KL 4.55e-9). 981 tests
 pass, plus the e2e ones touched. (findings, "Mixture-of-experts models")
+
+### Small fixes on the Mac while the first MoE is chosen again (the user, 2026-10-29)
+
+The user has $27 of Runpod credit and won't top up. Flash-Next's pilot alone is $27-50 and its search
+scores on a card 4.2 times an A40 an hour, so the first MoE is chosen again with the user; first, the
+fixes the Mac makes for free.
+- **F80 and F132, now rather than at the next directions change:** no directions are read before the
+  next model's. `directions.pt` holds one row per layer, without the embedding output nothing read,
+  and residuals are read longest prompts first. Both directions stages are at version 2, so no search
+  in `runs/` can be carried on, scored beside, or have its trials exported or measured again; their
+  released files and measurements stand. An export built from older directions is refused before any
+  residual is read.
+- **`candor score`'s repeat check:** a repeat's KL is the same when it ties paired by prompt and moves
+  no more than 25.5%, the most a measured repeat moved. 9 of 18 measured repeats moved more than the
+  3% it allowed (findings).
+- The repository moved on the Mac to `~/Documents/Projects/LLM/candor`; its venv was reinstalled.

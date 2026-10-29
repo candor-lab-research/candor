@@ -108,7 +108,8 @@ def fixed_directions(self, answering=False):
     """Made-up directions, different where the answer starts, instead of reading residuals."""
     fixed_plan(self)
     seed = torch.Generator().manual_seed(1 if answering else 0)
-    return F.normalize(torch.randn(LAYERS + 1, HIDDEN, generator=seed), dim=-1)
+    # A row more is drawn and the first dropped, so the records pinned from these draws hold.
+    return F.normalize(torch.randn(LAYERS + 1, HIDDEN, generator=seed), dim=-1)[1:]
 
 
 def tiny_run(tmp_path, monkeypatch, moe: bool = False, fused: bool = False) -> Run:

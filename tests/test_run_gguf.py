@@ -91,7 +91,7 @@ def test_the_disk_check_counts_only_the_files_it_will_write(
 def test_qwen35_adapters_are_built_in_the_gguf_layout(tmp_path, monkeypatch, row_norm):
     this = make_run(tmp_path, qwen35(), TINY_QWEN35, torch.bfloat16)
     this.settings.edit.row_norm = row_norm.value
-    found = F.normalize(torch.randn(LAYERS + 1, HIDDEN), dim=-1)
+    found = F.normalize(torch.randn(LAYERS, HIDDEN), dim=-1)
 
     def fake_directions(self, answering=False):
         self.inputs["directions"] = "fixed"
@@ -103,19 +103,19 @@ def test_qwen35_adapters_are_built_in_the_gguf_layout(tmp_path, monkeypatch, row
 
     weight = files.tensor(OUT_PROJ).float()
     b, a = adapter_factors(made["blk.0.ssm_out.weight"])
-    hf_b, hf_a = rank_one(weight, found[1], row_norm)
+    hf_b, hf_a = rank_one(weight, found[0], row_norm)
     merged_then_converted = (weight + hf_b @ hf_a)[:, CONVERTER_ORDER]
     torch.testing.assert_close(weight[:, CONVERTER_ORDER] + b @ a, merged_then_converted)
 
     unchanged = files.tensor("model.language_model.layers.1.self_attn.o_proj.weight")
     b, a = adapter_factors(made["blk.1.attn_output.weight"])
-    torch.testing.assert_close((b, a), rank_one(unchanged, found[2], row_norm))
+    torch.testing.assert_close((b, a), rank_one(unchanged, found[1], row_norm))
 
 
 def test_a_full_qwen35_edits_adapter_is_built_in_the_gguf_layout(tmp_path, monkeypatch):
     this = make_run(tmp_path, qwen35(), TINY_QWEN35, torch.bfloat16)
     this.settings.edit.row_norm = "full"
-    found = F.normalize(torch.randn(LAYERS + 1, HIDDEN), dim=-1)
+    found = F.normalize(torch.randn(LAYERS, HIDDEN), dim=-1)
 
     def fake_directions(self, answering=False):
         self.inputs["directions"] = "fixed"
@@ -126,14 +126,14 @@ def test_a_full_qwen35_edits_adapter_is_built_in_the_gguf_layout(tmp_path, monke
     path, _ = this.edit_adapter(this.path("scores", "edits", "e"), edit)
     b, a = adapter_factors(path, "blk.0.ssm_out.weight")
     weight = ModelFiles(this.model_folder).tensor(OUT_PROJ).float()
-    hf_b, hf_a = edit_factors(weight, found[1], 1.2, RowNorm.FULL)
+    hf_b, hf_a = edit_factors(weight, found[0], 1.2, RowNorm.FULL)
     torch.testing.assert_close(weight[:, CONVERTER_ORDER] + b @ a, (weight + hf_b @ hf_a)[:, CONVERTER_ORDER])
 
 
 def test_a_qwen35_export_writes_and_reads_its_edit_in_the_converters_order(tmp_path, monkeypatch):
     this = make_run(tmp_path, qwen35(), TINY_QWEN35, torch.bfloat16)
     this.settings.edit.row_norm = "full"
-    found = F.normalize(torch.randn(LAYERS + 1, HIDDEN), dim=-1)
+    found = F.normalize(torch.randn(LAYERS, HIDDEN), dim=-1)
 
     def fake_directions(self, answering=False):
         self.inputs["directions"] = "fixed"

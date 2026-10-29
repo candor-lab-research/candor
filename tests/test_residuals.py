@@ -131,7 +131,7 @@ def test_the_memory_free_here_is_the_kernels_or_the_containers_limit(tmp_path, m
 
 def test_shape(tiny_llama):
     residuals = last_token_residuals(tiny_llama, [SHORT, LONG], pad_id=0)
-    assert residuals.shape == (2, 4, 32)
+    assert residuals.shape == (2, 3, 32)
     assert residuals.dtype == torch.float32
 
 
@@ -145,7 +145,7 @@ def test_only_the_last_tokens_are_kept_while_the_model_runs(tiny_llama, monkeypa
     monkeypatch.setattr(torch, "stack", stacked)
     last_token_residuals(tiny_llama, [SHORT, LONG], pad_id=0)
     # Each layer's capture holds its 2 prompts' last tokens alone, not the layer's whole output.
-    assert kept == [2 * 32 * 4] * 4
+    assert kept == [2 * 32 * 4] * 3
 
 
 def test_left_padding_does_not_change_residuals(tiny_llama):
@@ -154,12 +154,27 @@ def test_left_padding_does_not_change_residuals(tiny_llama):
     torch.testing.assert_close(padded, alone, atol=1e-5, rtol=1e-4)
 
 
+def test_prompts_are_batched_longest_first_and_come_back_in_their_order(tiny_llama, monkeypatch):
+    widths, pad = [], residuals.left_pad
+    monkeypatch.setattr(
+        residuals, "left_pad", lambda batch, pad_id: widths.append(len(batch[0])) or pad(batch, pad_id)
+    )
+    prompts = [SHORT, LONG, SHORT[:2], LONG[:7]]
+    found = last_token_residuals(tiny_llama, prompts, pad_id=0, batch_size=2)
+    assert widths == [9, 4]
+    for prompt, each in zip(prompts, found, strict=True):
+        torch.testing.assert_close(
+            each, last_token_residuals(tiny_llama, [prompt], pad_id=0)[0], atol=1e-5, rtol=1e-4
+        )
+
+
 def test_matches_hidden_states_before_the_final_norm(tiny_llama):
     residuals = last_token_residuals(tiny_llama, [LONG], pad_id=0)[0]
     with torch.no_grad():
         hidden = tiny_llama(torch.tensor([LONG]), output_hidden_states=True).hidden_states
-    for index in range(len(hidden) - 1):
-        torch.testing.assert_close(residuals[index], hidden[index][0, -1])
+    # hidden_states starts with the embedding output, which candor doesn't read.
+    for index in range(len(hidden) - 2):
+        torch.testing.assert_close(residuals[index], hidden[index + 1][0, -1])
     # The last layer's output, which hidden_states only gives after the final norm.
     with torch.no_grad():
         torch.testing.assert_close(tiny_llama.model.norm(residuals[-1]), hidden[-1][0, -1])
@@ -170,7 +185,7 @@ def test_prompts_go_where_the_embedding_is(tiny_llama, monkeypatch):
     """On several GPUs the model's first parameter needn't be where its embedding is."""
     elsewhere = torch.nn.Parameter(torch.zeros(1, device="meta"))
     monkeypatch.setattr(LlamaForCausalLM, "parameters", lambda self, recurse=True: iter([elsewhere]))
-    assert last_token_residuals(tiny_llama, [SHORT], pad_id=0).shape == (1, 4, 32)
+    assert last_token_residuals(tiny_llama, [SHORT], pad_id=0).shape == (1, 3, 32)
 
 
 GPU = "cuda" if torch.cuda.is_available() else "mps" if torch.backends.mps.is_available() else None
@@ -195,11 +210,12 @@ def test_a_model_spread_across_devices_reads_as_on_one(tiny_llama):
 def test_a_model_with_hyper_connections_reads_the_mean_of_its_streams():
     model = tiny_qwen4exp()
     found = last_token_residuals(model, [LONG, SHORT], pad_id=0)
-    assert found.shape == (2, 5, HIDDEN)
+    assert found.shape == (2, 4, HIDDEN)
     alone = last_token_residuals(model, [SHORT], pad_id=0)[0]
     torch.testing.assert_close(found[1], alone, atol=1e-5, rtol=1e-4)
     with torch.no_grad():
         hidden = model(torch.tensor([LONG]), output_hidden_states=True).hidden_states
-    # Each layer's input, its 4 streams side by side, and then the streams mixed for the head.
-    means = torch.stack([states[0, -1].unflatten(-1, (4, HIDDEN)).mean(0) for states in hidden[:-1]])
+    # The embedding output, then each layer's with its 4 streams side by side, then the streams mixed
+    # for the head.
+    means = torch.stack([states[0, -1].unflatten(-1, (4, HIDDEN)).mean(0) for states in hidden[1:-1]])
     torch.testing.assert_close(found[0, :-1], means)

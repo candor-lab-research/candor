@@ -274,7 +274,8 @@ entry is corrected, dropped or overturned is in CLAUDE.md ("Finished, dropped an
   trial 435 read 0.0188-0.0249 in four sessions. Two reads of the unedited model were apart by a
   mean KL of 0.0020, a median of 0.00002: a few prompts read differently each session. So the least
   of 600 noisy reads is partly luck, and gaps under about 0.005 on 100 prompts aren't real.
-  (`phase-5-qwen3.8-27b.md`, step 4)
+  (`phase-5-qwen3.8-27b.md`, step 4) Since 2026-10-29 `candor score` takes a repeat's KL as the same
+  when it ties paired by prompt and moves no more than 25.5%, the most measured.
 - **Small KL gaps between trials are noise.**
   [Measured: K2-Horizon-7B and Qwen3.5-9B, 10 pairs of measured finalists, about 300 held-out
   prompts] At 100 test prompts the SE of a KL difference is an estimated 9-32% of the KL (scaled by

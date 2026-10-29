@@ -1176,15 +1176,38 @@ def test_an_edit_beats_another_only_if_no_worse_on_both_and_better_on_one_as_sho
 
 
 def test_a_trial_scored_again_repeats_its_score_within_noise():
-    def score(refusals, kl, keywords=0, judged=100):
-        return Score(refusals, keywords, 0, kl, judged)
+    def score(refusals, kl, keywords=0, judged=100, by_prompt=()):
+        return Score(refusals, keywords, 0, kl, judged, kl_by_prompt=list(by_prompt))
 
-    # Batching noise alone moves a refusal or so, and KL by a few percent.
-    assert search.differences(score(1, 0.1, 3), score(2, 0.102, 4)) == []
+    # Batching noise alone moves a refusal or so.
+    assert search.differences(score(1, 0.1, 3), score(2, 0.1, 4)) == []
     assert search.differences(score(1, 0.1, 3), score(3, 0.1, 3)) == ["refused 1, not 3"]
     assert search.differences(score(1, 0.1, 3), score(1, 0.1, 5)) == ["refused by keywords 3, not 5"]
-    assert search.differences(score(1, 0.1, 3), score(1, 0.104, 3)) == ["KL 0.1000, not 0.1040"]
     assert search.differences(score(1, 0.1, 3), score(1, 0.1, 3, judged=8)) == ["judged 100, not 8"]
+    # KL 10% up from two prompts reading differently is a tie paired by prompt, while 10% up at every
+    # prompt isn't, nor is a gap with nothing to pair, nor one prompt moving the KL more than any
+    # measured repeat moved.
+    searched = [0.02, 0.3, 0.05, 0.01, 0.12] * 4
+    noisy = [kl + 0.1 if i in (1, 6) else kl for i, kl in enumerate(searched)]
+    steady = [kl * 1.1 for kl in searched]
+    jump = [kl + 0.6 if i == 1 else kl for i, kl in enumerate(searched)]
+    before = statistics.fmean(searched)
+
+    def differs(found=None, kl=None):
+        kl = statistics.fmean(found) if found else kl
+        return search.differences(score(1, kl, by_prompt=found or ()), score(1, before, by_prompt=searched))
+
+    assert statistics.fmean(noisy) == pytest.approx(before * 1.1) == pytest.approx(statistics.fmean(steady))
+    assert differs(noisy) == []
+    assert differs(steady) == [
+        f"KL {before * 1.1:.4f}, not {before:.4f} (+0.0100 paired by prompt, SE 0.0025)"
+    ]
+    assert differs(kl=before * 1.1) == [f"KL {before * 1.1:.4f}, not {before:.4f}"]
+    paired = search.kl_gap(score(1, 0, by_prompt=jump), score(1, 0, by_prompt=searched))
+    assert paired and paired[2]
+    assert differs(jump) == [
+        f"KL {statistics.fmean(jump):.4f}, not {before:.4f} (+0.0300 paired by prompt, SE 0.0300)"
+    ]
     # KL too small to show apart is the same.
     assert search.differences(score(1, 0.00012), score(1, 0.00009)) == []
 

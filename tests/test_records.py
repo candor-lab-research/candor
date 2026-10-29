@@ -53,7 +53,7 @@ def test_the_directions_record_of_a_model_that_doesnt_think_is_as_it_was(tmp_pat
     fake_residuals(monkeypatch)
     this.directions()
     assert json.loads(record_of(this.path("directions.pt")).read_text()) == {
-        "code": {"directions.pt": 1, "gguf": 1, "prompts.json": 1},
+        "code": {"directions.pt": 2, "gguf": 1, "prompts.json": 1},
         "ids": "dee4368a269e90de",
         "model": "20f561cf5e630ad8",
         "remote_code": False,
