@@ -9,11 +9,12 @@ from candor.checks import (
     reasoning_efforts,
     remote_code,
     think_close,
+    thinking_off_closes_an_empty_block,
     turns_thinking_off,
     writes_the_date,
 )
 
-from .helpers import MESSAGE_WHEN_THINKING, OPENS_ITS_OWN, THINKING
+from .helpers import CLOSES_UNOPENED, MESSAGE_WHEN_THINKING, OPENS_ITS_OWN, THINKING
 from .tiny_run import ALWAYS_THINKING_TEMPLATE
 from .tiny_tokenizer import DATED, WITH_BOS, WITHOUT_BOS, tokenizer
 
@@ -98,7 +99,22 @@ def test_a_close_is_what_turning_thinking_off_writes_after_the_tag_that_opens_it
     assert think_close(tokenizer(MESSAGE_WHEN_THINKING, False)) == "</think>\n\n"
 
 
-@pytest.mark.parametrize("template", [WITHOUT_BOS, OPENS_ITS_OWN])
+def test_a_template_that_closes_the_thinking_in_place_of_opening_it_is_closed_by_that_tag():
+    closes = tokenizer(CLOSES_UNOPENED, False)
+    assert turns_thinking_off(closes) and think_close(closes) == "</think>"
+    assert not thinking_off_closes_an_empty_block(closes)
+    assert thinking_off_closes_an_empty_block(tokenizer(THINKING, False))
+
+
+# Turning thinking off writes another end tag in place of the one that opens it, or changes the prompt
+# before it too.
+OTHER_END = CLOSES_UNOPENED.replace("</think>", "</thinking>")
+CHANGES_BEFORE = CLOSES_UNOPENED.replace(
+    "A:{% if", "{% if enable_thinking is defined and not enable_thinking %}B{% endif %}A:{% if"
+)
+
+
+@pytest.mark.parametrize("template", [WITHOUT_BOS, OPENS_ITS_OWN, OTHER_END, CHANGES_BEFORE])
 def test_models_that_dont_think_or_dont_open_their_thinking_have_no_close(template):
     assert think_close(tokenizer(template, False)) is None
 

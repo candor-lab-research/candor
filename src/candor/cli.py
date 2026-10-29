@@ -247,6 +247,8 @@ def _tokenizer_rows(model: str, revision: str | None) -> list[Row]:
         detail = f"thinks before answering, and its thinking ends with {close!r}; it is scored thinking"
         if not checks.turns_thinking_off(tokenizer):
             detail += ", as its template can't turn thinking off"
+        elif not checks.thinking_off_closes_an_empty_block(tokenizer):
+            detail += ", as its template changes more than the end of a prompt when it turns thinking off"
         rows.append(("Thinking", "ok", detail))
     elif checks.turns_thinking_off(tokenizer):
         detail = (

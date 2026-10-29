@@ -56,6 +56,8 @@ scored thinking, as you run it.
   measured at the deployment's.
 - A template that can't turn thinking off, as K2-Horizon's can't, is closed by the end tag of the tag
   its prompts open with (`</ifm|think>`).
+- A template that turns thinking off by writing the end tag in place of the tag that opens it, as
+  Spark-X's does, is closed by that end tag (`</think>`), and scored with thinking on only.
 
 ### Templates candor refuses or warns about
 

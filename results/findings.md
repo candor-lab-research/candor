@@ -13,6 +13,10 @@ entry is corrected, dropped or overturned is in CLAUDE.md ("Finished, dropped an
 
 ## Thinking models
 
+- **Spark-X's answer-start directions are read where its template never writes.** [Hypothesis]
+  candor reads them after `<think></think>`, the prompt closed where its answer starts in use; its
+  template writes an empty thinking as `</think>` alone. Test: in its pilot, the cosine per layer of
+  directions read at both; if they differ, a few trials scored at each.
 - **Thinking off ranks edits as thinking on does, across the whole range.** [Measured: Qwen3.5-9B,
   24 edits refusing 1-100, 100 test prompts] Spearman 0.98, but only 0.24 among step 6's 12
   near-best edits. Thinking off costs about 90 s a trial against 10-20 min for an edit that complies

@@ -14,7 +14,7 @@ anything else. Every model is scored and shipped as a GGUF in llama-server, and 
 | Phase | What | State |
 | --- | --- | --- |
 | 0-5 | LoRA scoring in llama.cpp, the core maths and `inspect`; rude-llama, Qwen3.5-9B, K2-Horizon-7B and Qwen3.8-27B searched, measured as used and released | Done 2026-10-27 (history; `results/phase-2` to `phase-5`, the milestones) |
-| 6 | The first MoE: Qwen3.8-Flash-Next chosen (the user, 2026-10-27); support built and reviewed | To be chosen again with the user: $27 of credit, no top-up (2026-10-29), against Flash-Next's pilot alone at $27-50 |
+| 6 | Spark-X2.5-4B, smaller and newer, the largest recent gap (the user, 2026-10-29); Flash-Next's support kept for when there is credit | Support built; the pilot waits for the user's go |
 
 ## How we work
 
@@ -36,14 +36,10 @@ anything else. Every model is scored and shipped as a GGUF in llama-server, and 
 - Anything visual (README, docs, diagrams, model cards, pages, charts) follows `docs/brand.md` (the
   user, 2026-10-23).
 
-## Now: waiting for the user on the first MoE
+## Now: waiting for the user's go on Spark-X2.5-4B's pilot
 
-- The user has $27 of Runpod credit and won't top up (2026-10-29). Flash-Next's pilot
-  (`runs/flash/pilot-plan.md`, outside git) is $27-50 on its own, and its search scores on a card
-  4.2 times an A40 an hour, so the model is chosen again with the user. candor recommends
-  Qwen3-30B-A3B-Instruct-2507 (`evidence-2026-10-23/first-moe.md`): A40-sized, no thinking, a
-  published edit to measure against. No pods are running.
-- The Mac's small fixes are done and reviewed (history, 2026-10-29).
+- The pilot (`runs/spark/pilot-plan.md`, outside git): one A40 for 3-5 h, about $2-3, against $27 of
+  credit with no top-up (the user, 2026-10-29). No pods are running.
 
 ## Next
 

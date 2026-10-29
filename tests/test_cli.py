@@ -23,6 +23,7 @@ from candor.toolchain import ToolchainError
 
 from .custom_code import write_custom_code_model
 from .helpers import (
+    CLOSES_UNOPENED,
     FLASH_NEXT,
     HIDDEN,
     LLAMA_3B,
@@ -309,6 +310,12 @@ DROPS_PAST_THINKING = (
     ("template", "status", "shown"),
     [
         (OPENS_ITS_OWN, "fail", "its template turns thinking off, but its prompts don't open the"),
+        (
+            CLOSES_UNOPENED,
+            "ok",
+            "thinks before answering, and its thinking ends with '</think>'; it is scored thinking, as its "
+            "template changes more than the end of a prompt when it turns thinking off",
+        ),
         (DROPS_PAST_THINKING, "warn", "its template names a think tag, but its prompts neither open"),
         # Qwen3.5's small models: prompts close an empty thinking block unless asked to think.
         (

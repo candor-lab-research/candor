@@ -75,6 +75,13 @@ OPENS_ITS_OWN = WITHOUT_BOS + (
 )
 
 
+# Spark-X's: turning thinking off writes the end tag in place of the tag that opens the thinking.
+CLOSES_UNOPENED = WITHOUT_BOS + (
+    "{% if add_generation_prompt %}A:{% if enable_thinking is defined and not enable_thinking %}</think>"
+    "{% else %}<think>{% endif %}{% endif %}"
+)
+
+
 # Qwen3.8's: thinking adds a system message, at every reasoning effort but medium, that turning it
 # off leaves out.
 MESSAGE_WHEN_THINKING = (

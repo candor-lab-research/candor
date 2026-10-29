@@ -128,8 +128,12 @@ def think_close(tokenizer: PreTrainedTokenizerBase, **settings: Any) -> str | No
     message it adds at every reasoning effort but medium). For one without that switch whose prompts end by
     opening the thinking with a tag, as K2-Horizon's do with <ifm|think>: that tag's end tag alone, which
     is what K2-Horizon's template writes after an empty thinking block and how llama-server closes the
-    thinking when a budget runs out. None for a model that doesn't think, or a template that writes
-    thinking off some other way, such as one whose prompts don't open the thinking themselves.
+    thinking when a budget runs out. For one that turns thinking off by writing that end tag in place of
+    the tag that opens it, as Spark-X's does: the end tag, which closes the thinking the prompt opens
+    where its answer starts in use, though its template writes an empty thinking as the end tag alone.
+    None for a model that doesn't think, or a
+    template that writes thinking off some other way, such as one whose prompts don't open the thinking
+    themselves.
     """
     thinking = _ready(tokenizer, **settings)
     answering = _ready(tokenizer, **{**settings, "enable_thinking": False})
@@ -140,9 +144,19 @@ def think_close(tokenizer: PreTrainedTokenizerBase, **settings: Any) -> str | No
         close = answering[len(thinking) :]
     elif opened and opened[0] in answering:
         close = answering[answering.rindex(opened[0]) + len(opened[0]) :]
+    elif opened and answering[: opened.start()] == thinking[: opened.start()]:
+        close = answering[opened.start() :]
+        close = close if close.strip() == f"</{opened[1]}>" else ""
     else:
         close = ""
     return close if END_TAG.fullmatch(close) else None
+
+
+def thinking_off_closes_an_empty_block(tokenizer: PreTrainedTokenizerBase, **settings: Any) -> bool:
+    """Whether turning thinking off only writes, after the prompt, what closes the thinking it opens, as
+    Qwen's template does, so answers after an empty thinking block are the model with its thinking off."""
+    thinking = _ready(tokenizer, **settings)
+    return _ready(tokenizer, **{**settings, "enable_thinking": False}).startswith(thinking)
 
 
 def may_write_its_own_thinking(tokenizer: PreTrainedTokenizerBase, template: str) -> bool:

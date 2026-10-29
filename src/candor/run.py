@@ -644,8 +644,9 @@ class Run:
             raise RunError(
                 "this model's chat template changes more than the end of a prompt when it turns thinking "
                 "off at these settings, as Qwen3.8's leaves out the system message of every reasoning "
-                "effort but medium, so answers after an empty thinking block wouldn't be the model with "
-                'its thinking off: keep scoring.thinking = "on"'
+                "effort but medium and Spark-X's closes the thinking in place of opening it, so answers "
+                "after an empty thinking block wouldn't be the model with its thinking off: keep "
+                'scoring.thinking = "on"'
             )
         if off != on + (self.settings.deployment.think_close or ""):
             raise RunError(

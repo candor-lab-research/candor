@@ -28,6 +28,12 @@ from .tiny_moe import random_moe_weights, write_moe_folder, write_moe_model
 MESSAGE_WHEN_THINKING_TEMPLATE = (
     "{% if enable_thinking is not defined or enable_thinking %}Think hard.\n{% endif %}" + THINKING_TEMPLATE
 )
+# Spark-X's: turning thinking off writes the end tag in place of the tag that opens the thinking.
+OFF = "{% if enable_thinking is defined and not enable_thinking %}"
+CLOSES_UNOPENED_TEMPLATE = THINKING_TEMPLATE.replace(
+    "assistant:<think>\n" + OFF + "{{ '\\n</think>\\n\\n' }}{% endif %}",
+    "assistant:" + OFF + "</think>{% else %}<think>{% endif %}",
+)
 # One that always opens the thinking, as K2-Horizon's does, with a tag that depends on the reasoning
 # effort: "high" when none is given, and refused unless it is one the template knows.
 ALWAYS_THINKING_TEMPLATE = TEMPLATE.replace(

@@ -1391,3 +1391,20 @@ fixes the Mac makes for free.
   out; a stopped `candor proxy` keeps the unedited model's score; `inspect` warns on weights
   quantised to 4 bits before (`evidence-2026-10-29/quantised-before.md`); `measure --set` measures
   sets alone. Left: `serve` on a pod with the Mac's tools, whose config went with the move.
+
+### Phase 6: Spark-X2.5-4B (the user, 2026-10-29)
+
+The user wanted a smaller, newer model than Qwen3-30B-A3B-Instruct-2507. Of the general chat models
+of 26B or less released since March, Spark-X2.5-4B (2026-08-24) has the largest gap without its top
+repo, 39,750 against Agents-A1-4B's 11,505, and real uncensored demand: 17 repos with 296,301
+downloads in 30 days, 19% of its GGUF downloads (`evidence-2026-10-27/gaps.tsv`). Its successor
+X2.6-4B (2026-10-19) has 11 uncensored repos already. Flash-Next's support stays for when there is
+credit.
+- **What candor needed:** its template turns thinking off by writing `</think>` in place of
+  `<think>`, which `think_close` now reads as that end tag; it is scored thinking on only, as an
+  answer after an empty block isn't how its template turns thinking off. Its remote code imports only
+  math, torch and transformers. llama.cpp b11524 converts and runs `spark2_5`.
+- **Run settings:** the card's thinking sampling (temperature 1.0, top_p 0.95, top_k off, which runs
+  as 1,000 as on K2), budget 8192, and the search as K2's and the 27B's.
+- **Upstream:** heretic master efb1be6e (default edit ARA), #525 (hyper-connections) merged since
+  2026-10-27, #487 still open, no Spark issues; no llama.cpp issues on `spark2_5`.

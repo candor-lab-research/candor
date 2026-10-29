@@ -35,6 +35,7 @@ from .tiny_run import (
     ALWAYS_THINKING_TEMPLATE,
     ANSWERED,
     CHECK_JUDGE,
+    CLOSES_UNOPENED_TEMPLATE,
     MESSAGE_WHEN_THINKING_TEMPLATE,
     PLANNED_DIRECTIONS,
     READ_DIRECTIONS,
@@ -2366,15 +2367,23 @@ def test_a_model_whose_template_cant_turn_thinking_off_is_scored_thinking_and_ne
     assert sum(search._score(trial).thinking for trial in finished(tiny)) > 0
 
 
+@pytest.mark.parametrize(
+    ("template", "close"),
+    [(MESSAGE_WHEN_THINKING_TEMPLATE, "\n</think>\n\n"), (CLOSES_UNOPENED_TEMPLATE, "</think>")],
+    ids=["system message", "closed unopened"],
+)
 def test_a_model_whose_template_changes_more_than_the_close_is_never_scored_with_thinking_off(
-    tiny, monkeypatch
+    tiny, monkeypatch, template, close
 ):
     thinks_through(monkeypatch)
-    small(thinking(tiny, budget=8, template=MESSAGE_WHEN_THINKING_TEMPLATE))
+    small(thinking(tiny, budget=8, template=template, close=close))
     tiny.settings.scoring.thinking = "off"
     with pytest.raises(RunError, match="changes more than the end of a prompt when it turns thinking off"):
         Search(tiny).search(2)
     assert not tiny.path("search").exists()
+    tiny.settings.scoring.thinking = "on"
+    Search(tiny).search(2)
+    assert sum(search._score(trial).thinking for trial in finished(tiny)) > 0
 
 
 def test_a_search_already_scored_with_thinking_off_starts_no_server_to_check_it(tiny, monkeypatch):
