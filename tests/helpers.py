@@ -6,6 +6,7 @@ import shutil
 import zlib
 from pathlib import Path
 from types import SimpleNamespace
+from typing import Any
 
 import gguf
 import torch
@@ -319,9 +320,9 @@ TINY_QWEN4EXP = {
 }  # fmt: skip
 
 
-def tiny_qwen4exp(vocab_size: int = 128) -> Qwen4ExpForCausalLM:
+def tiny_qwen4exp(vocab_size: int = 128, **changed: Any) -> Qwen4ExpForCausalLM:
     torch.manual_seed(0)
-    return Qwen4ExpForCausalLM(Qwen4ExpTextConfig(vocab_size=vocab_size, **TINY_QWEN4EXP)).eval()
+    return Qwen4ExpForCausalLM(Qwen4ExpTextConfig(vocab_size=vocab_size, **TINY_QWEN4EXP | changed)).eval()
 
 
 def write_qwen4exp(folder: Path, model: Qwen4ExpForCausalLM) -> Path:

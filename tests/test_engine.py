@@ -594,6 +594,35 @@ def test_a_failed_batch_of_first_tokens_stops_every_request_of_it(monkeypatch):
     assert given[0] is not None and all(requests is given[0] for requests in given) and given[0].stopped
 
 
+def test_first_tokens_are_read_once_no_slot_is_busy_and_never_empty(monkeypatch):
+    s = LlamaServer(LLAMA_SERVER, Path("model.gguf"), Path("server.log"), parallel=2)
+    busy = [True, True, False]
+    calls = []
+
+    def call(method, endpoint, timeout=None, **request):
+        calls.append(endpoint)
+        return [{"is_processing": busy.pop(0)}, {"is_processing": False}]
+
+    def complete(payload, requests=None):
+        calls.append("first token")
+        return {"completion_probabilities": probabilities}
+
+    probabilities = [{"top_logprobs": [{"id": 7, "logprob": -0.1}]}]
+    monkeypatch.setattr(s, "_call", call)
+    monkeypatch.setattr(s, "_complete", complete)
+    assert s.top_logprobs([[1, 2]], 5) == [{7: -0.1}]
+    assert calls == ["/slots"] * 3 + ["first token"]
+    busy[:] = [False]
+    probabilities[0]["top_logprobs"] = []
+    with pytest.raises(ServerError, match="came back empty for a prompt of 2 tokens"):
+        s.top_logprobs([[1, 2]], 5)
+    monkeypatch.setattr(
+        s, "_call", lambda method, endpoint, timeout=None, **request: [{"is_processing": True}]
+    )
+    with pytest.raises(ServerError, match=r"still busy 0\.1 s after"):
+        s.wait_idle(0.1)
+
+
 def waited(condition, seconds: float = 5, every: float = 0.05) -> None:
     """Wait until condition holds, checking it every so many seconds, and fail if it doesn't within
     seconds."""

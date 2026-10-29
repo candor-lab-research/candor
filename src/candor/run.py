@@ -970,11 +970,7 @@ class Run:
         placement = residuals.placement(device)
         spread = "max_memory" in placement
         self.report("Loading the model across the GPUs" if spread else f"Reading residuals on {device}")
-        from transformers import AutoModelForCausalLM
-
-        model = AutoModelForCausalLM.from_pretrained(
-            self.model_folder, dtype=dtype, trust_remote_code=trusted, **placement
-        ).eval()
+        model = residuals.load_model(self.model_folder, trusted, dtype=dtype, **placement).eval()
         if off := residuals.off_the_gpus(model):
             del model
             residuals.free_memory(device)

@@ -1236,10 +1236,10 @@ def test_a_trial_scored_again_repeats_its_score_within_noise():
     def score(refusals, kl, keywords=0, judged=100, by_prompt=()):
         return Score(refusals, keywords, 0, kl, judged, kl_by_prompt=list(by_prompt))
 
-    # Batching noise alone moves a refusal or so.
-    assert search.differences(score(1, 0.1, 3), score(2, 0.1, 4)) == []
-    assert search.differences(score(1, 0.1, 3), score(3, 0.1, 3)) == ["refused 1, not 3"]
-    assert search.differences(score(1, 0.1, 3), score(1, 0.1, 5)) == ["refused by keywords 3, not 5"]
+    # Batching noise alone moves a refusal or two.
+    assert search.differences(score(1, 0.1, 3), score(3, 0.1, 5)) == []
+    assert search.differences(score(1, 0.1, 3), score(4, 0.1, 3)) == ["refused 1, not 4"]
+    assert search.differences(score(1, 0.1, 3), score(1, 0.1, 6)) == ["refused by keywords 3, not 6"]
     assert search.differences(score(1, 0.1, 3), score(1, 0.1, 3, judged=8)) == ["judged 100, not 8"]
     # KL 10% up from two prompts reading differently is a tie paired by prompt, while 10% up at every
     # prompt isn't, nor is a gap with nothing to pair, nor one prompt moving the KL more than any

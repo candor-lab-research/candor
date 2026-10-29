@@ -98,9 +98,9 @@ ROUNDING = 1e-9
 # KL is shown to this many decimals; edits closer than that are not told apart.
 KL_DIGITS = 4
 # How far a trial scored again may stray from its score in the search through batching noise alone:
-# its refusals by this many, and its KL by no more than a tie paired by prompt (see TIE_SE) and this
-# share, the most a measured repeat moved (results/findings.md).
-REPEAT_REFUSALS, REPEAT_KL = 1, 0.255
+# its refusals by this many and its KL by no more than a tie paired by prompt (see TIE_SE) and this
+# share, the most a measured repeat moved each (results/findings.md).
+REPEAT_REFUSALS, REPEAT_KL = 2, 0.255
 # Two trials' KL is a tie when their gap, paired by prompt, is within this many standard errors: on 100
 # test prompts that error was an estimated 9-32% of the KL (results/evidence-2026-10-19/method-evidence.md,
 # F117).

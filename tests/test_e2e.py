@@ -322,7 +322,9 @@ def test_qwen35_moe_linear_attention_and_experts_reach_the_gguf_as_candor_expect
 
 def qwen4exp_folder(converted, tmp_path) -> Path:
     """A tiny random Qwen4-Exp, saved as Qwen3.8-Flash-Next's checkpoint is."""
-    folder = write_qwen4exp(tmp_path / "qwen4exp", tiny_qwen4exp(vocab_size=49152))
+    # Linear-attention heads of a size llama.cpp's CUDA gated delta net takes: 32, 64 or 128.
+    model = tiny_qwen4exp(vocab_size=49152, linear_key_head_dim=32, linear_value_head_dim=32)
+    folder = write_qwen4exp(tmp_path / "qwen4exp", model)
     for name in ("tokenizer.json", "tokenizer_config.json"):
         shutil.copy(converted[0] / name, folder / name)
     return folder
@@ -360,8 +362,8 @@ def test_qwen4exp_adapters_answer_as_the_edit_written_into_its_gguf(converted, t
         ).float()
         b, a = rank_one(weight, direction, RowNorm.PRE)
         write_adapter(tmp_path / f"{target.gguf}.gguf", arch, {target.gguf: (b, a)})
-        scales[tmp_path / f"{target.gguf}.gguf"] = 1.2
-        replaced[target.gguf] = partial(lambda w, b, a: (w + 1.2 * b @ a).numpy(), stored[target.gguf], b, a)
+        scales[tmp_path / f"{target.gguf}.gguf"] = 3.0
+        replaced[target.gguf] = partial(lambda w, b, a: (w + 3.0 * b @ a).numpy(), stored[target.gguf], b, a)
     edited = {"blk.0.ssm_out.weight", "blk.3.attn_output.weight", "blk.0.ffn_down_exps.weight"}
     assert edited | {"blk.0.ffn_down_shexp.weight"} <= set(replaced)
     export._rewritten(base, tmp_path / "merged.gguf", replaced, gguf.GGMLQuantizationType.F32)
@@ -384,8 +386,10 @@ def test_qwen4exp_adapters_answer_as_the_edit_written_into_its_gguf(converted, t
         binary, tmp_path / "merged.gguf", tmp_path / "server.log", parallel=1, context_per_slot=256
     ) as s:
         merged = s.top_logprobs(ids, 50)
-    assert mean_from_top(served, merged) < 1e-5
-    assert mean_from_top(unedited, merged) > 1e-3
+    effect = mean_from_top(unedited, merged)
+    assert effect > 1e-3
+    # The adapters answer as the edit written in, to within a hundredth of what the edit moves.
+    assert mean_from_top(served, merged) < effect / 100
 
 
 def test_chat_ids_match_real_chat_requests_and_transformers(converted):

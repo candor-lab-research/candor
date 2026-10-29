@@ -14,7 +14,7 @@ anything else. Every model is scored and shipped as a GGUF in llama-server, and 
 | Phase | What | State |
 | --- | --- | --- |
 | 0-5 | LoRA scoring in llama.cpp, the core maths and `inspect`; rude-llama, Qwen3.5-9B, K2-Horizon-7B and Qwen3.8-27B searched, measured as used and released | Done 2026-10-27 (history; `results/phase-2` to `phase-5`, the milestones) |
-| 6 | Spark-X2.5-4B, smaller and newer, the largest recent gap (the user, 2026-10-29); Flash-Next's support kept for when there is credit | Support built; the pilot waits for the user's go |
+| 6 | Spark-X2.5-4B, smaller and newer, the largest recent gap (the user, 2026-10-29); Flash-Next's support kept for when there is credit | Pilot done (`results/phase-6-spark-x2.5-4b.md`, step 1); the search's plan waits for the user |
 
 ## How we work
 
@@ -36,10 +36,12 @@ anything else. Every model is scored and shipped as a GGUF in llama-server, and 
 - Anything visual (README, docs, diagrams, model cards, pages, charts) follows `docs/brand.md` (the
   user, 2026-10-23).
 
-## Now: waiting for the user's go on Spark-X2.5-4B's pilot
+## Now: the search's plan with the user
 
-- The pilot (`runs/spark/pilot-plan.md`, outside git): one A40 for 3-5 h, about $2-3, against $27 of
-  credit with no top-up (the user, 2026-10-29). No pods are running.
+- The pilot ran Spark-X correctly as used; trials take 251 s at 32 slots, so 600 on an A40 are
+  41.8 h, $24.70, against about $25.70 of credit with no top-up (results, step 1). 64 slots are
+  slower a trial. To settle with the user: a cheaper card (an RTX 4090 at $0.34/h, timed first), or
+  fewer trials. No pods are running.
 
 ## Next
 
@@ -51,7 +53,7 @@ anything else. Every model is scored and shipped as a GGUF in llama-server, and 
    (`search.max_budget_hits`, on K2 from trial 138) costs no measurable hits on the simulator and
    stays on (`phase-4-k2-horizon-7b.md`, step 5).
 3. Not blocking, each when there is a reason:
-   - speed: 64 slots (15% faster than 32), weights cached on the GPU for "full" trials, the proxy's
+   - speed: weights cached on the GPU for "full" trials, the proxy's
      adapters loaded into one server, package 11 (the answer reusing its thinking's cache, untimed;
      skipped for the 27B);
    - a reference measured before 2026-10-19 is measured again before a new measurement is compared
@@ -71,8 +73,10 @@ anything else. Every model is scored and shipped as a GGUF in llama-server, and 
    - heretic 2.x journals aren't read (they record no refusals for a trial);
    - llama-server b11524 can deadlock when stopped mid-answer (about 1 stop in 500; history): `stop`
      then waits 60 s and kills it, losing nothing;
-   - a KL read after a trial stops on its budget may come back empty with GPU sampling (seen on
-     Metal only; findings): wait until no slot is busy, and fail clearly on an empty read.
+   - `candor score`'s refusals of a repeat paired by prompt, as its KL is, in place of the band of 2
+     (one real repeat moved 2; findings), keeping each trial's refusal labels;
+   - the Qwen4-Exp e2e test's tiny model needed heads of 32 for CUDA's gated delta net; a Flash-Next
+     pilot re-runs it.
 
 ## In force
 

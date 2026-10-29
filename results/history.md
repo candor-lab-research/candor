@@ -1408,3 +1408,15 @@ credit.
   as 1,000 as on K2), budget 8192, and the search as K2's and the 27B's.
 - **Upstream:** heretic master efb1be6e (default edit ARA), #525 (hyper-connections) merged since
   2026-10-27, #487 still open, no Spark issues; no llama.cpp issues on `spark2_5`.
+
+### Phase 6, step 1: the Spark-X2.5-4B pilot (2026-10-29)
+
+On one A40 for 2.2 h, about $1.30. candor runs it correctly as used: refusals 62 of 64 harmful, none
+of 64 harmless, maths 63 of 64; transformers' forward matches llama.cpp's; its two answer-start
+positions give nearly the same directions. It found three faults, each fixed with tests and
+reviewed: remote code written for transformers 4 (tied weights as a list, old mask arguments) now
+runs under 5; first tokens are read once no slot is busy, as a read after a trial stopped on its
+budget came back empty on CUDA; and `candor score`'s refusal band is 2, the most a real repeat moved,
+until repeats are paired by prompt. The e2e tests pass on CUDA, the Qwen4-Exp model given heads its
+CUDA kernel takes. Trials take 251 s, so 600 on an A40 would take nearly all the credit; 64 slots
+are slower a trial. Numbers in `phase-6-spark-x2.5-4b.md`, step 1.

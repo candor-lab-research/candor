@@ -12,10 +12,10 @@ import pytest
 import torch
 import torch.nn.functional as F
 from datasets.exceptions import DatasetNotFoundError
-from transformers import Qwen4ExpForCausalLM, Qwen4ExpTextConfig
+from transformers import AutoModelForCausalLM, Qwen4ExpForCausalLM, Qwen4ExpTextConfig
 from transformers.integrations.accelerate import _get_device_map, expand_device_map
 
-from candor import config, directions, files, run, targets
+from candor import config, directions, files, residuals, run, targets
 from candor.edit import RowNorm, edit_factors, rank_one
 from candor.engine import LlamaServer
 from candor.kernel import Kernel
@@ -786,6 +786,28 @@ def test_a_model_with_its_own_code_is_read_only_when_trusted(tmp_path, monkeypat
     found = this.directions()
     assert found.shape == (LAYERS, HIDDEN)
     assert torch.isfinite(found).all()
+
+
+def test_a_model_whose_code_was_written_for_transformers_4_is_read(tmp_path, monkeypatch):
+    folder = write_custom_code_model(tmp_path / "custom", transformers_4=True)
+    with pytest.raises(AttributeError):
+        AutoModelForCausalLM.from_pretrained(folder, trust_remote_code=True)
+    settings = config.RunConfig(model=config.Model(source=str(folder), trust_remote_code=True))
+    this = Run(tmp_path, settings, report=lambda _: None)
+    monkeypatch.setattr(
+        Run, "prompt_ids", lambda self: {"harmful": [[1, 2, 3], [1, 4]], "harmless": [[1, 5]]}
+    )
+    found = this.directions()
+    assert found.shape == (LAYERS, HIDDEN) and torch.isfinite(found).all()
+    loaded = residuals.load_model(folder, True)
+    assert loaded.lm_head.weight is loaded.model.embedding.weight
+    # Left padding changes no residual, so the mask it makes the way transformers 4 did is right.
+    torch.testing.assert_close(
+        residuals.last_token_residuals(loaded, [[1, 2, 3, 4], [1, 5]], pad_id=0)[1],
+        residuals.last_token_residuals(loaded, [[1, 5]], pad_id=0)[0],
+        atol=1e-5,
+        rtol=1e-4,
+    )
 
 
 def test_directions_follow_the_prompts_they_read_and_nothing_else(tmp_path, model, monkeypatch):

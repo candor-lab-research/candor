@@ -13,10 +13,13 @@ entry is corrected, dropped or overturned is in CLAUDE.md ("Finished, dropped an
 
 ## Thinking models
 
-- **Spark-X's answer-start directions are read where its template never writes.** [Hypothesis]
-  candor reads them after `<think></think>`, the prompt closed where its answer starts in use; its
-  template writes an empty thinking as `</think>` alone. Test: in its pilot, the cosine per layer of
-  directions read at both; if they differ, a few trials scored at each.
+- **Spark-X's answer-start directions are the same after `<think></think>` and `</think>` alone.**
+  [Measured: Spark-X2.5-4B, 400 + 400 prompts] Its template writes an empty thinking as `</think>`
+  alone; read at both, they agree at cosine 0.83-0.96 (0.92-0.96 at layers 12-30), against 0.36-0.71
+  with the prompt-end directions. (`phase-6-spark-x2.5-4b.md`, step 1)
+- **Remote code written for transformers 4 reads its residuals right under 5.** [Measured:
+  Spark-X2.5-4B, 32 prompts] With its tied weights mapped and its mask makers given their old
+  arguments, its first answer token matched llama.cpp's on all 32, at KL 8.3e-5 on average.
 - **Thinking off ranks edits as thinking on does, across the whole range.** [Measured: Qwen3.5-9B,
   24 edits refusing 1-100, 100 test prompts] Spearman 0.98, but only 0.24 among step 6's 12
   near-best edits. Thinking off costs about 90 s a trial against 10-20 min for an edit that complies
@@ -369,12 +372,14 @@ entry is corrected, dropped or overturned is in CLAUDE.md ("Finished, dropped an
   On complying edits, whose thinking runs about 2,000 tokens, it saves 5-10% of a trial; test: time
   one as-used trial both ways before adopting it (package 11).
 - **With GPU sampling, a first-token read beside other slots' sampling can come back empty.**
-  [Measured on Metal, Qwen3.5-0.8B: 7 of 8 reads] [Hypothesis on CUDA] llama.cpp's source allows it
-  whenever another slot is still sampling, as after a trial stops on its budget, and candor then
-  fails loudly at `min()`; but all 121 KL reads made straight after a stop on CUDA came back whole
-  (120 in K2's search, 7 of them on the budget; 1 in the 27B pilot). Test: on CUDA, read first
-  tokens while 31 slots still sample.
-  (`phase-5-qwen3.8-27b.md`, step 1)
+  [Measured on Metal, Qwen3.5-0.8B: 7 of 8 reads; on CUDA, Spark-X2.5-4B: the KL read after the one
+  of 4 trials that stopped on its budget] K2's 121 reads after a stop came back whole. Since
+  2026-10-29 first tokens are read once no slot is busy, and an empty read fails clearly.
+  (`phase-5-qwen3.8-27b.md`, step 1; `phase-6-spark-x2.5-4b.md`, step 1)
+- **More slots raise throughput but slow a trial.** [Measured: Spark-X2.5-4B, A40, one trial at 32
+  and 64 slots] 64 slots gave 19% more tokens a second, but the trial took 240 s against 198 s: each
+  answer runs 25.7 tokens a second against 43.3, and a trial waits on its longest answers.
+  (`phase-6-spark-x2.5-4b.md`, step 1)
 
 ## Export
 

@@ -4,13 +4,15 @@ import gc
 import math
 import os
 import re
+import sys
 from pathlib import Path
 from typing import Any, cast
 
 import torch
 import transformers
 from torch import Tensor, nn
-from transformers import AutoTokenizer, PreTrainedModel
+from transformers import AutoConfig, AutoModelForCausalLM, AutoTokenizer, PreTrainedModel, masking_utils
+from transformers.dynamic_module_utils import get_class_from_dynamic_module
 from transformers.models.auto.modeling_auto import MODEL_FOR_CAUSAL_LM_MAPPING_NAMES
 
 from . import source
@@ -72,6 +74,46 @@ def placement(device: str) -> dict[str, Any]:
     if len(free) < 2:
         return {"device_map": device}
     return {"device_map": "auto", "max_memory": {gpu: int(room / 1.1) for gpu, room in free.items()}}
+
+
+def load_model(model_folder: Path, trust_remote_code: bool, **settings: Any) -> PreTrainedModel:
+    """The model as transformers loads it with these settings, its remote code made to run as transformers
+    4 ran it where it was written for that, as Spark-X's was: the weights it lists as tied given as the
+    mapping transformers 5 takes, from its output embedding to its input one, both named by the class
+    built on the meta device, which holds no weights; and the mask makers it calls taking the arguments
+    transformers 4 gave them."""
+    reference = source.read_config(str(model_folder)).get("auto_map", {}).get("AutoModelForCausalLM")
+    if not trust_remote_code or reference is None:
+        return AutoModelForCausalLM.from_pretrained(
+            model_folder, trust_remote_code=trust_remote_code, **settings
+        )
+    model_config = AutoConfig.from_pretrained(model_folder, trust_remote_code=True)
+    loaded = get_class_from_dynamic_module(reference, model_folder)
+    if isinstance(loaded._tied_weights_keys, list) and getattr(model_config, "tie_word_embeddings", False):
+        with torch.device("meta"):
+            shell = type(loaded.__name__, (loaded,), {"_tied_weights_keys": None})(model_config)
+        names = {weight: name for name, weight in shell.named_parameters(remove_duplicate=False)}
+        output, embedding = shell.get_output_embeddings(), shell.get_input_embeddings()
+        loaded._tied_weights_keys = {names[output.weight]: names[embedding.weight]} if output else None
+    module = sys.modules[loaded.__module__]
+    for maker in ("create_causal_mask", "create_sliding_window_causal_mask"):
+        if getattr(module, maker, None) is getattr(masking_utils, maker):
+            setattr(module, maker, _as_transformers_4(getattr(masking_utils, maker)))
+    return loaded.from_pretrained(model_folder, config=model_config, trust_remote_code=True, **settings)
+
+
+def _as_transformers_4(make: Any) -> Any:
+    """A mask maker that also takes what transformers 4 passed it: input_embeds, since renamed, and
+    cache_position, which transformers 5 reads from the positions."""
+
+    def made(
+        *args: Any, input_embeds: Tensor | None = None, cache_position: Tensor | None = None, **kwargs: Any
+    ):
+        if input_embeds is not None:
+            kwargs["inputs_embeds"] = input_embeds
+        return make(*args, **kwargs)
+
+    return made
 
 
 def off_the_gpus(model: PreTrainedModel) -> list[str]:
