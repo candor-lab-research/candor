@@ -25,7 +25,8 @@ for model in MODELS:
         hidden, layers = text["hidden_size"], text["num_hidden_layers"]
         found = targets.find_targets(source.tensor_shapes(model, sha), hidden, layers)
         writers = found.writers
-        picked = [writers[i * (len(writers) - 1) // (cli.SAMPLED_WEIGHTS - 1)].name for i in range(cli.SAMPLED_WEIGHTS)]
+        last = len(writers) - 1
+        picked = [writers[i * last // (cli.SAMPLED_WEIGHTS - 1)].name for i in range(cli.SAMPLED_WEIGHTS)]
         headers = source.tensor_headers(model, sha)
         read = source.first_rows(model, list(dict.fromkeys(picked)), cli.SAMPLED_VALUES, sha)
         for name in dict.fromkeys(picked):
@@ -35,6 +36,8 @@ for model in MODELS:
                 continue
             told = distinct(read[name])
             flagged = source.quantised_before(read[name])
-            print(f"{model}\t{sha[:8]}\t{name}\t{dtype}\t{len(told)}\t{np.median(told):g}\t{told.min()}\t{flagged}")
+            print(
+                f"{model}\t{sha[:8]}\t{name}\t{dtype}\t{len(told)}\t{np.median(told):g}\t{told.min()}\t{flagged}"
+            )
     except Exception as error:
         print(f"{model}\terror\t{type(error).__name__}: {str(error)[:120]}")

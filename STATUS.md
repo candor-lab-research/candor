@@ -52,7 +52,9 @@ anything else. Every model is scored and shipped as a GGUF in llama-server, and 
    (`search.max_budget_hits`, on K2 from trial 138) costs no measurable hits on the simulator and
    stays on (`phase-4-k2-horizon-7b.md`, step 5).
 3. Not blocking, each when there is a reason:
-   - speed: weights cached on the GPU for "full" trials, the proxy's
+   - speed: weights cached on the GPU for "full" trials, a "full" trial stopped early restarted
+     once rather than twice (fdfa995 restarts it with its own adapter, then the next trial's: about
+     25 wasted starts on Spark-X's 93 trials), the proxy's
      adapters loaded into one server, package 11 (the answer reusing its thinking's cache, untimed;
      skipped for the 27B);
    - a reference measured before 2026-10-19 is measured again before a new measurement is compared

@@ -1433,7 +1433,7 @@ the search carries on from its journal if the bests are still moving.
 
 At 92 trials both kinds' bests within the cap had held, per layer's since trial 18 and one layer's
 since trial 53, each at KL 0.0154 on the test prompts, under the 27B's final 0.0188. The user
-stopped the search there, against the 300 staged, to measure them. candor names three finalists:
+stopped the search there (93 scored by the stop), against the 300 staged, to measure them. candor names three finalists:
 53, 70 and 18. On the same pod, the unedited model is measured in full, trial 18, which presses MLP
 strength's floor, is scored with it moved past (STATUS, phase 6), and each finalist is exported and
 measured. The 27B's decision rule, ranked on unsafe answers (2026-10-19 and 2026-10-23), applies,
