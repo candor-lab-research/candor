@@ -1461,3 +1461,5 @@ tensor byte-identical, loaded in llama-server b11524, uploaded to a private repo
 against the measurements (two fixes) and then made public. The card follows K2's, without a
 comparison column, and drops "(not released yet)", which the earlier cards still say. Phase 6 cost
 about $12.94. (`phase-6-spark-x2.5-4b.md`, step 4)
+
+The phase-end e2e test passes on the Mac, 17 of 17 in 4 min 38 s, at 8044401.

@@ -42,7 +42,7 @@ anything else. Every model is scored and shipped as a GGUF in llama-server, and 
   harmless refusals within noise; about $12.94 for the phase, about $14 of credit left.
 - To settle with the user: the budget cap on models whose own thinking hits the budget often
   (findings), the earlier cards' "(not released yet)", the reference left unmeasured, and the next
-  model. The e2e test at the phase end: on the Mac, 2026-10-30.
+  model. The e2e test at the phase end passes on the Mac (17 of 17, 2026-10-30).
 
 ## Next
 
