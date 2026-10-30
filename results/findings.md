@@ -194,7 +194,9 @@ entry is corrected, dropped or overturned is in CLAUDE.md ("Finished, dropped an
   0.085-0.100 on the test prompts. (steps 6 and 7) [Measured: K2-Horizon-7B, 4 finalists] Again:
   held-out KL 0.052-0.064 one layer, 0.082 per layer. [Measured: Qwen3.8-27B, 4 finalists] Again:
   0.025-0.027 one layer, 0.043 for the one per-layer edit (read at the thinking start, the others
-  at the answer start). (`phase-5-qwen3.8-27b.md`, step 5)
+  at the answer start). (`phase-5-qwen3.8-27b.md`, step 5) [Measured: Spark-X2.5-4B, 3 finalists]
+  Again: 0.046 one layer, 0.052 and 0.058 per layer, each about 3 times its search KL.
+  (`phase-6-spark-x2.5-4b.md`, step 3)
 - **The search's best can fail the full measurement on maths, which the search doesn't score.**
   [Measured: K2-Horizon-7B, 4 finalists, every held-out prompt and maths question] Trial 207,
   first by the search's KL with 0 refused, lost 26 maths correct (p 0.019; 24 with adapters, so not
@@ -203,7 +205,8 @@ entry is corrected, dropped or overturned is in CLAUDE.md ("Finished, dropped an
   of not missing, and its cost belongs in a 27B quote. (`phase-4-k2-horizon-7b.md`, step 5)
   [Measured: Qwen3.8-27B at medium, 4 finalists] Not here: all four kept maths (1,279-1,284
   against 1,281, the worst bound -0.8 points) and budget hits (0-1). (`phase-5-qwen3.8-27b.md`,
-  step 5)
+  step 5) [Measured: Spark-X2.5-4B, 3 finalists] Again: trial 18, tied first by the search's KL,
+  hit the budget on 96 maths questions against 66 (p 0.0016). (`phase-6-spark-x2.5-4b.md`, step 3)
 - **Edits level on refusals can differ in how often their answers are judged unsafe.** [Measured:
   Qwen3.8-27B, 4 finalists, 288 held-out, answers read to 256 tokens] Per-layer trial 532 refused
   0 and was judged unsafe on 279, against 263 for one-layer 251 and 477 (1 refused each, within
@@ -232,6 +235,10 @@ entry is corrected, dropped or overturned is in CLAUDE.md ("Finished, dropped an
   prompts and 22 of 300 held out (K2: 0 and 1), 25 of its 93 trials went over the cap, and its
   finalists sit at 5-7. Test: the finalists' held-out budget hits against the unedited model's, and
   on the simulator, a cap set from the model's own rate. (`phase-6-spark-x2.5-4b.md`, step 2)
+  [Measured: Spark-X2.5-4B, 3 finalists held out] The one nearest the cap (trial 18: 7, 10 on a
+  repeat) failed the rule on maths thinking (96 against 66, p 0.0016), while 6 and 5 passed (67 and
+  44), so here the cap let through an edit that fails rather than shutting out ones that pass. The
+  simulator check is still owed. (step 3)
 - **"full" row normalisation against "pre" rests on one pair of searches.** [Measured: Qwen3.5-9B,
   69 and 70 trials from the same 40 Sobol starts, thinking off] "pre" was at 50 of 100 (KL 0.059),
   "full" at 32 (KL 0.069), both still falling. K2 used "full" untested; init still defaults to

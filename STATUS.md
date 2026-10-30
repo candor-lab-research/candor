@@ -14,7 +14,7 @@ anything else. Every model is scored and shipped as a GGUF in llama-server, and 
 | Phase | What | State |
 | --- | --- | --- |
 | 0-5 | LoRA scoring in llama.cpp, the core maths and `inspect`; rude-llama, Qwen3.5-9B, K2-Horizon-7B and Qwen3.8-27B searched, measured as used and released | Done 2026-10-27 (history; `results/phase-2` to `phase-5`, the milestones) |
-| 6 | Spark-X2.5-4B, smaller and newer, the largest recent gap (the user, 2026-10-29); Flash-Next's support kept for when there is credit | Pilot done (`results/phase-6-spark-x2.5-4b.md`, step 1); search stopped at 93 trials (step 2); its three finalists being measured |
+| 6 | Spark-X2.5-4B, smaller and newer, the largest recent gap (the user, 2026-10-29); Flash-Next's support kept for when there is credit | Released 2026-10-30 as `candor-lab/Spark-X2.5-4B-Candor-Uncensored-GGUF` (`results/phase-6-spark-x2.5-4b.md`); the phase close waits for the user |
 
 ## How we work
 
@@ -36,19 +36,18 @@ anything else. Every model is scored and shipped as a GGUF in llama-server, and 
 - Anything visual (README, docs, diagrams, model cards, pages, charts) follows `docs/brand.md` (the
   user, 2026-10-23).
 
-## Now: Spark-X2.5-4B's finalists measured
+## Now: Phase 6's close, for the user
 
-- The same A40 (`sk7e6bm640dlrt`), from 21:57 UTC on 2026-10-29, runs `/root/finalists.sh`: the
-  unedited model measured in full, trial 18 scored past its MLP floor, then trials 53, 70 and 18
-  exported and measured; about 9-11 h, $5.50-6.50. The watchdog deletes it at 19:44 GMT on
-  2026-10-30; `pod.sh wait finalists` pulls every 30 minutes.
-- The decision rule is the 27B's, ranked on unsafe answers (history, 2026-10-19 and 2026-10-23),
-  put to the user before any finalist's measurement is read.
+- Released 2026-10-30: trial 53, one layer, 0 of 288 refused (1 under the 8B), KL 0.046, maths and
+  harmless refusals within noise; about $12.94 for the phase, about $14 of credit left.
+- To settle with the user: the budget cap on models whose own thinking hits the budget often
+  (findings), the earlier cards' "(not released yet)", the reference left unmeasured, and the next
+  model. The e2e test at the phase end: on the Mac, 2026-10-30.
 
 ## Next
 
-1. Phase 6: the reference, the best public edit, measured with `--outside` as candor ships its own,
-   on the user's go (the most downloaded uncensored GGUF is soyaakinohara's Heretic-jp, 317,078).
+1. Phase 6, if wanted: the reference, soyaakinohara's Heretic-jp (the most downloaded uncensored
+   GGUF, 317,078; a BF16 file), measured with `--outside` as candor ships its own, about 3 h, $1.70.
 2. Phase 4, later: low effort's two closes; Uno not now. The budget limit
    (`search.max_budget_hits`, on K2 from trial 138) costs no measurable hits on the simulator and
    stays on (`phase-4-k2-horizon-7b.md`, step 5).

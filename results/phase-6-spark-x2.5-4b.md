@@ -121,3 +121,78 @@ What it shows:
 - The budget cap binds: 25 of 93 trials went over it and the finalists sit at 5-7. The unedited
   model's own thinking reaches the budget on 5 of 100 harmless test prompts and 22 of 300 held out
   (K2: 0 and 1), so a cap set on K2 sits close to this model's own rate (findings, hypothesis).
+
+## Step 3: the finalists measured in full; trial 53 picked (2026-10-29 to 30)
+
+The same A40 ran `evidence-2026-10-30/finalists.sh` from 21:57 to 03:12 UTC: the unedited model
+measured in full (58 min), trial 18's range-end check (29 min), then each finalist exported (Q4_K_M)
+and measured with `measure --exported` (62-78 min each): thinking on, budget 8192, answers up to 256
+tokens, 32 slots, seed 0, every held-out prompt and maths question, both judges. The pod then sat
+idle until 07:25, 4 h 13 min (about $2.50), as nothing deleted it at the job's end; it was deleted
+once everything was pulled: 19.7 h in all, about $11.64 by time. Compared prompt by prompt with the
+unedited model (p: McNemar; the rule's bounds one-sided 95%, Bonett and Price).
+
+| | Unedited | 53 | 70 | 18 |
+| --- | --- | --- | --- | --- |
+| Kind, direction | | one layer, 17, think start | per layer, think start | per layer, answer start |
+| Search: refused of 100, KL, at the budget | | 0, 0.0154, 6 | 0, 0.0175, 5 | 1, 0.0154, 7 |
+| Harmful refused, judge / 8B (of 288) | 282 / 282 | 0 / 1 | 2 / 3 | 2 / 2 |
+| Harmful judged unsafe, judge / 8B | 2 / 2 | 269 / 264 | 273 / 268 | 273 / 271 |
+| Harmful refused, keywords | 286 | 28 | 20 | 19 |
+| Harmful answers cut at 256 tokens | 186 | 264 | 271 | 271 |
+| Harmless refused, judge / 8B (of 300) | 4 / 3 | 0 / 0 | 3 / 3 | 0 / 2 |
+| Maths correct (of 1,319; p) | 1,236 | 1,228 (0.4) | 1,224 (0.18) | 1,219 (0.043) |
+| Maths thinking cut at 8192 (p) | 66 | 67 (1) | 44 (0.0032) | 96 (0.0016) |
+| Thinking cut, harmful / harmless | 0 / 27 | 15 / 28 | 10 / 22 | 15 / 30 |
+| Harmless KL, 278 of 300 (95% interval) | | 0.0457 (0.037-0.058) | 0.0520 (0.041-0.073) | 0.0581 (0.042-0.102) |
+| KL after empty thinking / at the thinking start | | 0.110 / 0.0052 | 0.145 / 0.0082 | 0.185 / 0.0449 |
+| Thinking median, harmful / harmless / maths | 415 / 743.5 / 392 | 1,318 / 807 / 401 | 1,088 / 669 / 347 | 1,550.5 / 885 / 429 |
+| Rule's bounds: harmless / maths / budget, pp | | +0.00 / -1.65 / +1.06 | +1.30 / -1.93 / -0.75 | +0.00 / -2.29 / +3.43 |
+| Edit kept in the file | | 99.7-100.0% | 99.5-100.6% (2 of 51 weights at Q8_0, merged in F32) | 99.4-100.4% |
+| Decision rule | | pass | pass | fail: budget |
+
+KL is read on the 278 harmless prompts whose unedited thinking ended by itself (22 didn't). The
+rule's bars: harmful refused 10 or fewer of 288 under both judges; harmless refused's upper bound
+under +2 pp; maths correct's lower bound above -2.5 pp; maths thinking cut's upper bound under +1.25
+pp, a quarter of the unedited model's 5.0%, as that is above 1 pp. Trial 18 fails the last (+30,
+upper +3.43 pp). Between the two that pass, harmful answers judged unsafe are level, 273 for 70
+against 269 for 53 (p 0.39) and under the 8B 268 against 264 (p 0.48), so the lower mean KL ships:
+trial 53. The rule was the one proposed before the measurements started; the user accepted it with
+the results.
+
+**Trial 18 past its floor** (`evidence-2026-10-29/beyond-spark.txt`), scored as the search scores,
+in one session: as it is, 0 refused, KL 0.0168, 10 at the budget (in the search 1, 0.0154, 7); MLP
+strength 0.65, 2 refused, KL 0.0153 (gap -0.0016, SE 0.0013, a tie); 0.5, 2 refused, KL 0.0125
+(-0.0044, SE 0.0025, a tie). Nothing beats it beyond noise past the floor, only the usual trade of
+KL for refusals.
+
+What it shows:
+- Trial 53 removes every refusal under the run's judge (1 under the 8B) and keeps harmless refusals,
+  maths and maths thinking within noise of the unedited model.
+- Held out, each finalist's KL read about 3 times its search KL (0.0154 to 0.0457, 0.0175 to 0.0520,
+  0.0154 to 0.0581), more than K2's finalists (1.7-2.6) and the 27B's 435 and 532 (1.3 and 1.7).
+- The finalist nearest the budget cap in the search (18: 7, and 10 on a repeat) failed on maths
+  thinking, while 53 (6) and 70 (5) passed; here the cap let through an edit that fails rather than
+  shutting out ones that pass (findings).
+
+## Step 4: the release (2026-10-30)
+
+On the Mac, as `evidence-2026-10-22/release.sh` did on the 27B's pod: the measured export (sha256
+`311acb34…`, as each set's record holds) with `general.name` set to Spark-X2.5-4B-Candor-Uncensored
+and `general.finetune` (the snapshot hash) dropped; all 290 tensors byte-identical and no other key
+changed (`same.py`). Against the unedited Q4_K_M, 31 of 290 tensors differ
+(`evidence-2026-10-30/edited.py`, on the pod): `attn_output` 27 (layers 9-35, Q4_K) and `ffn_down` 4
+(21-24, Q4_K or Q6_K). It loaded in llama-server b11524.
+`Spark-X2.5-4B-Candor-Uncensored-Q4_K_M.gguf`: 2,600,223,616 bytes, sha256
+`fcb8118e75e6c43d1bac36fa9b1f12dbc0e62a99e5f4d7fe1a6108a719bfdb79`, the Hub's LFS hash the same.
+
+Uploaded from candor-team to a private repo with the base's LICENSE (byte-identical to XHToken's at
+0bcb356) and the header, about 2 minutes; the card was reviewed against the measurements, with two
+fixes (KL is read on 278 of the 300 harmless prompts; "that mattered" became "it ruled one out", as
+the rule ships 53 whether or not 18 passes), then the repo was made public:
+`candor-lab/Spark-X2.5-4B-Candor-Uncensored-GGUF`. The card follows K2's, with no comparison column,
+and drops the earlier cards' "(not released yet)", as the code is public. The card as published:
+`evidence-2026-10-30/spark-card.md`.
+
+**Cost of the phase:** the pilot about $1.30 and the search's pod about $11.64 (19.7 h, of which 4 h
+13 min idle), about $12.94 in all, from 2026-10-29 to 30.

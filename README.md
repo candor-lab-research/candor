@@ -122,6 +122,7 @@ Each is the export candor measured.
 | Qwen3.5-9B | Yes | 175 | [GGUF](https://huggingface.co/candor-lab/Qwen3.5-9B-Candor-Uncensored-GGUF) | [phase 3](results/milestone-qwen3.5-9b-vs-heretic.md) |
 | K2-Horizon-7B | Yes | 205 | [GGUF](https://huggingface.co/candor-lab/K2-Horizon-7B-Candor-Uncensored-GGUF) | [phase 4](results/phase-4-k2-horizon-7b.md) |
 | Qwen3.8-27B | Yes | 532 | [GGUF](https://huggingface.co/candor-lab/Qwen3.8-27B-Candor-Uncensored-GGUF) | [phase 5](results/phase-5-qwen3.8-27b.md) |
+| Spark-X2.5-4B | Yes | 53 | [GGUF](https://huggingface.co/candor-lab/Spark-X2.5-4B-Candor-Uncensored-GGUF) | [phase 6](results/phase-6-spark-x2.5-4b.md) |
 
 ## Docs
 

@@ -1439,3 +1439,25 @@ strength's floor, is scored with it moved past (STATUS, phase 6), and each final
 measured. The 27B's decision rule, ranked on unsafe answers (2026-10-19 and 2026-10-23), applies,
 put to the user before any finalist's measurement is read; if none passes, the search carries on
 from its journal. Numbers in `phase-6-spark-x2.5-4b.md`, step 2.
+
+### Phase 6, step 3: Spark-X's finalists measured; trial 53 picked by the rule (2026-10-30)
+
+The rule proposed before the measurements started, the 27B's ranked on unsafe answers, was put to
+the user with the results, who accepted it and asked for the release. Trials 53 and 70 pass; 18
+fails on maths thinking reaching the budget (96 against 66). 53 and 70 are level on unsafe answers
+under both judges, so the lower mean KL ships: trial 53, one layer (17, read where the thinking
+starts), 0 of 288 refused (1 under the 8B), KL 0.0457, maths and harmless refusals within noise.
+Trial 18 past its MLP floor scored no better beyond noise. No public reference was measured: the
+user went to the release without one, so the card has no comparison column, as K2's. The pod sat
+idle 4 h 13 min after the job (about $2.50), as the queue didn't delete it; it was deleted once
+everything was pulled. Numbers in `phase-6-spark-x2.5-4b.md`, step 3.
+
+### Phase 6, step 4: Spark-X2.5-4B released (the user, 2026-10-30)
+
+The user asked for it to go up on Hugging Face as the earlier ones did, once happy with the results,
+without a chat test of their own first (the 27B had one). Published from candor-team as
+`candor-lab/Spark-X2.5-4B-Candor-Uncensored-GGUF`: the measured export renamed on the Mac, every
+tensor byte-identical, loaded in llama-server b11524, uploaded to a private repo, the card reviewed
+against the measurements (two fixes) and then made public. The card follows K2's, without a
+comparison column, and drops "(not released yet)", which the earlier cards still say. Phase 6 cost
+about $12.94. (`phase-6-spark-x2.5-4b.md`, step 4)

@@ -1,0 +1,4 @@
+Scored as the search scores its trials, on its 100 test prompts.
+trial 18 as it is: refused 0, keywords 10, KL 0.0168, at the budget 10 (in the search: 1, KL 0.0154, at the budget 7)
+  mlp.strength 0.65: refused 2, keywords 12, KL 0.0153, at the budget 7, KL gap -0.0016 (SE 0.0013, a tie)
+  mlp.strength 0.5: refused 2, keywords 12, KL 0.0125, at the budget 6, KL gap -0.0044 (SE 0.0025, a tie)
