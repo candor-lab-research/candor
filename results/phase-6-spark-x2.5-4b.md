@@ -171,6 +171,8 @@ What it shows:
   maths and maths thinking within noise of the unedited model.
 - Held out, each finalist's KL read about 3 times its search KL (0.0154 to 0.0457, 0.0175 to 0.0520,
   0.0154 to 0.0581), more than K2's finalists (1.7-2.6) and the 27B's 435 and 532 (1.3 and 1.7).
+  Read again on 2026-11-02, the gap is the export's 4-bit rounding done afresh, not the edit (findings,
+  Export).
 - The finalist nearest the budget cap in the search (18: 7, and 10 on a repeat) failed on maths
   thinking, while 53 (6) and 70 (5) passed; here the cap let through an edit that fails rather than
   shutting out ones that pass (findings).

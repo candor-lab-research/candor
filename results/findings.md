@@ -410,6 +410,18 @@ entry is corrected, dropped or overturned is in CLAUDE.md ("Finished, dropped an
   36 weights; gpt-oss-20b-BF16, 4 weights] Never-quantised weights hold a median 32 distinct values
   in blocks of 32 (lowest 27); gpt-oss's MXFP4-origin experts 8-13, its attention 32. `inspect` warns
   at 16 or fewer, as rude-llama's MLX-origin layers held. (`evidence-2026-10-29/quantised-before.md`)
+- **The export's KL gap is 4-bit rounding done afresh, not a worse edit.** [Measured: Spark-X2.5-4B
+  trial 53 on the Mac, 278 held-out prompts, the 95 test prompts alike;
+  `evidence-2026-11-02/kl-reference.txt`] Against the unedited BF16 the edit applied exactly reads
+  0.0160 and the unedited Q4_K_M 0.0415: 4-bit rounding alone costs 2.6 times the edit. The adapter
+  on the Q4_K_M reads 0.0183 against the Q4_K_M, so the search's KL measures the edit. The export
+  reads 0.0437 there because it rounds its 31 edited weights afresh from 16 bits, so their rounding
+  no longer matches the reference's; against the BF16 it reads 0.0780 to the adapter's 0.0664, and
+  against the exact edit 0.0476 to 0.0438, about as far from the true model. With the 31 at Q8_0
+  (180 MB more) it is the nearest, 0.0553 and 0.0279. So KL against the Q4_K_M counts the
+  re-rounding of any file quantised from 16 bits, ours or another's, as drift, and the search, which
+  keeps the Q4_K_M's rounding, can't see it. [Hypothesis] The edited weights written as the Q4_K_M's
+  own values plus the exact edit, at Q8_0, ship the file the search scored.
 - **`export --outside` takes only candor's targets.** [Measured: candor's code; Published: two
   public 27B edits] orcarouter's and RANA's `embed_tokens` edits would be left out
   (`evidence-2026-10-21/public-27b.md`); from huihui it took all 70 edited weights

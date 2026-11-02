@@ -1,0 +1,33 @@
+Trial 53, read on the Mac, KL over the top 200 tokens: mean (SE), median.
+harmless_test, 95 prompts:
+  against the unedited BF16:
+    unedited Q4_K_M: 0.0397 (SE 0.0078), median 0.0097
+    adapter on the BF16: 0.0136 (SE 0.0068), median 0.0023
+    adapter on the Q4_K_M: 0.0644 (SE 0.0132), median 0.0136
+    export: 0.0675 (SE 0.0140), median 0.0189
+    export, edited at Q8_0: 0.0512 (SE 0.0126), median 0.0128
+  against the unedited Q4_K_M:
+    adapter on the BF16: 0.0470 (SE 0.0107), median 0.0128
+    adapter on the Q4_K_M: 0.0138 (SE 0.0079), median 0.0020
+    export: 0.0365 (SE 0.0106), median 0.0070
+    export, edited at Q8_0: 0.0284 (SE 0.0110), median 0.0041
+  against the adapter on the BF16 (the edit, exact):
+    adapter on the Q4_K_M: 0.0415 (SE 0.0084), median 0.0110
+    export: 0.0379 (SE 0.0063), median 0.0129
+    export, edited at Q8_0: 0.0253 (SE 0.0046), median 0.0072
+harmless_held_out, 278 prompts:
+  against the unedited BF16:
+    unedited Q4_K_M: 0.0415 (SE 0.0047), median 0.0125
+    adapter on the BF16: 0.0160 (SE 0.0032), median 0.0033
+    adapter on the Q4_K_M: 0.0664 (SE 0.0076), median 0.0174
+    export: 0.0780 (SE 0.0079), median 0.0248
+    export, edited at Q8_0: 0.0553 (SE 0.0070), median 0.0163
+  against the unedited Q4_K_M:
+    adapter on the BF16: 0.0572 (SE 0.0074), median 0.0150
+    adapter on the Q4_K_M: 0.0183 (SE 0.0042), median 0.0034
+    export: 0.0437 (SE 0.0052), median 0.0145
+    export, edited at Q8_0: 0.0332 (SE 0.0050), median 0.0091
+  against the adapter on the BF16 (the edit, exact):
+    adapter on the Q4_K_M: 0.0438 (SE 0.0049), median 0.0130
+    export: 0.0476 (SE 0.0045), median 0.0167
+    export, edited at Q8_0: 0.0279 (SE 0.0027), median 0.0102
