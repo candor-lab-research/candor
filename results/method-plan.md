@@ -42,15 +42,22 @@ own, [Hypothesis] ours.
    overlap with what to protect, such as maths. *Fit:* rank 1, with prompts for each thing
    protected. Aimed at a known weak spot: twice the search's best lost on maths or its thinking's
    budget (K2's 207, Spark-X's 18).
-5. **Arbitrary-Rank Ablation (ARA), heretic's new default.** [Published] No direction: each
-   module's matrix is optimised (L-BFGS, a few iterations) so harmless outputs stay, harmful ones
-   move to them and away from their old values, with fewer settings to search. *Fit:* its change may
-   be full rank, which a per-request adapter can't hold, so each trial would be merged and quantised
-   unless the change is low rank in practice (to measure first: one change's singular values).
-   heretic is AGPL-3.0, so candor measures heretic's own ARA saves with `--outside` or writes it
-   afresh from the description. *Needed either way:* from 2026-11-01 "against heretic" means
-   against ARA. [Published, third party] trohrbaugh's 27B ARA edit complied on 76.3% of DreamFast's
-   harmful set, huihui's on 98.0% (`evidence-2026-10-21/public-27b.md`).
+5. **Arbitrary-Rank Ablation (ARA), heretic's new default.** [Published, read in heretic 2.0.0's
+   code] No direction: for each attention and MLP output matrix in a range of layers, its inputs
+   and outputs at the prompt's last token, for 400 harmless and 400 harmful prompts, set a small
+   optimisation (L-BFGS) of a rank-50 change: harmless outputs kept, harmful ones pulled to their
+   nearest harmless outputs and pushed from their old ones, rows kept at their norms. A trial sets
+   6 values (the layer range, the three goals' weights, the neighbours counted) and optimises
+   afresh. *Fit:* the change is a rank-50 adapter on candor's own targets, so it takes the path
+   "full" trials take (an adapter built per trial, the server restarted), and `--outside` rebuilds
+   a public ARA edit exactly. heretic is AGPL-3.0, so candor measures heretic's ARA saves or writes
+   it afresh from the description. [Hypothesis] Fitted at one token, while reasoning models decide in
+   the thinking (the refusal cliff), and with 50 dimensions a matrix to fit 400 prompts, it may
+   read better on the search's prompts than held out. *Needed either way:* from 2026-11-01
+   "against heretic" means against ARA. [Published] rockerBOO's Qwen3.5-9B ARA edit (heretic
+   2.0.0.dev0, 2026-10-20) reports 2/100 at KL 0.0744 by heretic's own measure, not comparable with
+   candor's. trohrbaugh's 27B ARA edit, made 2026-08-14 before ARA was finished, complied on 76.3%
+   of DreamFast's harmful set, huihui's on 98.0% (`evidence-2026-10-21/public-27b.md`).
 6. **Per-category directions.** [Published] They change how a model refuses more than whether:
    low priority.
 7. **Conditional steering (CAST).** Applied at inference only, so it can't ship as one GGUF in
