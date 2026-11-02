@@ -1,0 +1,12 @@
+Trial 53, read on the Mac at 4 slots, KL over the top 200 tokens.
+harmless_test, 95 prompts:
+  adapter against the unedited: mean 0.0137 (SE 0.0079), median 0.0021
+  export against the unedited: mean 0.0365 (SE 0.0106), median 0.0070
+  unedited again against the unedited: mean 0.0000 (SE 0.0000), median 0.0000
+  export against the adapter: mean 0.0164 (SE 0.0027), median 0.0058
+harmless_held_out, 278 prompts:
+  adapter against the unedited: mean 0.0183 (SE 0.0042), median 0.0034
+  export against the unedited: mean 0.0438 (SE 0.0052), median 0.0146
+  unedited again against the unedited: mean 0.0000 (SE 0.0000), median 0.0000
+  export against the adapter: mean 0.0196 (SE 0.0020), median 0.0062
+In the search, on the A40: KL 0.0154
