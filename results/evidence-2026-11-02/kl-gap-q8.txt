@@ -1,0 +1,4 @@
+Trial 53, read on the Mac at 4 slots, KL over the top 200 tokens.
+spark-q8-53-Q4_K_M.gguf: 2,780,693,472 bytes
+harmless_test, 95 prompts: the export, edited weights at Q8_0: mean 0.0284 (SE 0.0110), median 0.0041
+harmless_held_out, 278 prompts: the export, edited weights at Q8_0: mean 0.0333 (SE 0.0050), median 0.0091
