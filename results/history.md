@@ -1463,3 +1463,14 @@ comparison column, and drops "(not released yet)", which the earlier cards still
 about $12.94. (`phase-6-spark-x2.5-4b.md`, step 4)
 
 The phase-end e2e test passes on the Mac, 17 of 17 in 4 min 38 s, at 8044401.
+
+### After phase 6: the yardstick, then the method (the user, 2026-11-02)
+
+Asked what candor has built, the user heard that the edit is borrowed and candor's own part is how it
+scores and measures. A literature check, its sources checked, found that only the whole of that is
+new: heretic-gguf scored on quantised GGUFs in llama.cpp first (2026-08-09), and parts of the
+thinking and measurement work exist elsewhere (`evidence-2026-11-02/prior-work.md`). No public text
+of candor's claims otherwise. The user chose: first, the search made to predict the full
+measurement; public releases measured as downloaded in the background; then the method made more
+sophisticated, planned in `results/method-plan.md`. heretic 2.0.0 (2026-11-01) made ARA its
+default, so comparisons with heretic from now on are with ARA.

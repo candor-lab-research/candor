@@ -36,22 +36,27 @@ anything else. Every model is scored and shipped as a GGUF in llama-server, and 
 - Anything visual (README, docs, diagrams, model cards, pages, charts) follows `docs/brand.md` (the
   user, 2026-10-23).
 
-## Now: Phase 6's close, for the user
+## Now: the search made to predict the full measurement (the user, 2026-11-02)
 
-- Released 2026-10-30: trial 53, one layer, 0 of 288 refused (1 under the 8B), KL 0.046, maths and
-  harmless refusals within noise; about $12.94 for the phase, about $14 of credit left.
-- To settle with the user: the budget cap on models whose own thinking hits the budget often
-  (findings), the earlier cards' "(not released yet)", the reference left unmeasured, and the next
-  model. The e2e test at the phase end passes on the Mac (17 of 17, 2026-10-30).
+- Phase 6 released 2026-10-30 (trial 53, 0 of 288 refused, KL 0.046; about $12.94, about $14 of
+  credit left). Still open with the user: the earlier cards' "(not released yet)" and the next model.
+- Spark-X's held-out KL read about 3 times its search KL (5 times on the median prompt), and twice a
+  search's best failed the full measurement on maths or budget hits (K2's 207, Spark-X's 18). First,
+  why: `evidence-2026-11-02/kl-gap.py` reads trial 53 on the Mac as adapter and export, on the test
+  and held-out prompts. The budget cap's simulator check belongs here.
 
 ## Next
 
-1. Phase 6, if wanted: the reference, soyaakinohara's Heretic-jp (the most downloaded uncensored
-   GGUF, 317,078; a BF16 file), measured with `--outside` as candor ships its own, about 3 h, $1.70.
-2. Phase 4, later: low effort's two closes; Uno not now. The budget limit
+1. In the background, quoted to the user first: public releases measured as downloaded, the one
+   combination no one else publishes (`evidence-2026-11-02/prior-work.md`). Our edits' kind goes
+   through `--outside`; fine-tunes need the GGUF measured as it is, which candor can't yet. Spark-X's
+   first: soyaakinohara's Heretic-jp (403,280 downloads in 30 days; a BF16 file), about 3 h, $1.70.
+2. The method made more sophisticated (the user, 2026-11-02): `results/method-plan.md`, after the
+   yardstick (Now): a bench on the Mac, heretic 2.x read, then candidates in order.
+3. Phase 4, later: low effort's two closes; Uno not now. The budget limit
    (`search.max_budget_hits`, on K2 from trial 138) costs no measurable hits on the simulator and
    stays on (`phase-4-k2-horizon-7b.md`, step 5).
-3. Not blocking, each when there is a reason:
+4. Not blocking, each when there is a reason:
    - speed: weights cached on the GPU for "full" trials, a "full" trial stopped early restarted
      once rather than twice (fdfa995 restarts it with its own adapter, then the next trial's: about
      25 wasted starts on Spark-X's 93 trials), the proxy's
