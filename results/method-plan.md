@@ -37,7 +37,12 @@ own, [Hypothesis] ours.
    and won on K2 and Spark-X (findings)] Directions read where the decision is made, such as the thinking's
    last tokens, or edits to the heads that carry it. *Fit:* directions are read at two places
    already, a third is a setting; heads are a new target. [Hypothesis] Judging this needs scoring
-   as used, which no one else searches with: the likeliest place for something new.
+   as used, which no one else searches with: the likeliest place for something new. One form:
+   ARA's kind of objective (5), fitted on module inputs and outputs read inside the thinking or
+   at its end rather than at the prompt's last token. ARA's own lineage, as we read it (its paper
+   isn't out): per-matrix edits fitted to keep some outputs and change others, as ROME and MEMIT
+   edit facts (arXiv 2202.05262, 2210.07229), and harmful representations rerouted beside a
+   retain loss, as circuit breakers do (arXiv 2406.04313), turned to removing refusals.
 4. **Cleaned directions.** [Published: Surgical Refusal Ablation] The direction cleared of its
    overlap with what to protect, such as maths. *Fit:* rank 1, with prompts for each thing
    protected. Aimed at a known weak spot: twice the search's best lost on maths or its thinking's
