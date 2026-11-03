@@ -41,12 +41,13 @@ anything else. Every model is scored and shipped as a GGUF in llama-server, and 
 - Phase 6 released 2026-10-30 (trial 53, 0 of 288 refused, KL 0.046; about $12.94, about $14 of
   credit left). Still open with the user: the earlier cards' "(not released yet)" and the next model.
 - Spark-X's held-out KL read about 3 times its search KL (5 times on the median prompt), and twice a
-  search's best failed the full measurement on maths or budget hits (K2's 207, Spark-X's 18). Why,
-  measured (findings, Export): the search's KL measures the edit; the export's extra is its 4-bit
-  rounding done afresh, which KL against the Q4_K_M counts as drift. Proposed to the user: export the
-  edit added to the Q4_K_M's own weights, at Q8_0, so the file shipped is the one scored, with KL
-  against the BF16 beside it wherever releases are compared. The budget cap's simulator check
-  belongs here.
+  search's best failed the full measurement on maths or budget hits (K2's 207, Spark-X's 18).
+- KL, done (findings, Export): the search's KL measures the edit; the export's extra was its 4-bit
+  rounding done afresh, which KL against the Q4_K_M counts as drift. With the user's go, new runs
+  export onto the Q4_K_M (`deployment.export_onto`), and Spark-X's trial 53 so exported reads as its
+  adapter (0.0187 held out to 0.0183). Left: KL against the BF16 beside it wherever releases are
+  compared, as theirs are rounded afresh.
+- Next here: the budget cap's simulator check.
 
 ## Next
 

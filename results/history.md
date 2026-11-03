@@ -1474,3 +1474,14 @@ of candor's claims otherwise. The user chose: first, the search made to predict 
 measurement; public releases measured as downloaded in the background; then the method made more
 sophisticated, planned in `results/method-plan.md`. heretic 2.0.0 (2026-11-01) made ARA its
 default, so comparisons with heretic from now on are with ARA.
+
+### Exports onto the quantised GGUF (the user, 2026-11-03)
+
+Read on the Mac against the unedited BF16, Spark-X's trial 53 showed the search's KL measuring the
+edit (0.0183 against the Q4_K_M, the exact edit 0.0160 against the BF16) and the export's extra
+(0.0438) as its 31 edited weights rounded to 4 bits afresh, no further from the true model than the
+adapter. The user agreed to export the edit onto the Q4_K_M itself, so the file shipped is the one
+scored: `deployment.export_onto = "quantized"`, set by init for new runs, older runs keeping
+"float" so their exports stand. Trial 53 so exported read 0.0187 held out to its adapter's 0.0183,
+at 180 MB more (`evidence-2026-11-03/kl-onto.txt`). Rounding afresh is the same for anyone's release
+quantised from 16 bits, so a comparison with other releases also wants KL against the BF16.

@@ -234,6 +234,7 @@ def test_init_writes_settings_that_load(tmp_path):
     settings = config.load(tmp_path / "runs" / "first")
     assert settings.model.source == str(folder.resolve())
     assert settings.model.date is None
+    assert settings.deployment.export_onto == "quantized"
     assert (tmp_path / "runs" / "first" / "inspect.json").exists()
 
 

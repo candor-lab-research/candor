@@ -47,8 +47,8 @@ refusals came back. So candor never scores a stand-in.
    strengths per request, so nothing is re-converted between trials. A "full" edit
    (`edit.row_norm`) isn't linear in strength, so each candidate instead gets an adapter of its own
    and the server restarts.
-4. **Export and measure.** Write the chosen edit into a copy of the model's GGUF, every other tensor
-   untouched, quantise it as you run it, and measure that exact file.
+4. **Export and measure.** Add the chosen edit to the GGUF you run, the file the search scored it
+   on, every other tensor untouched, and measure that exact file.
 
 ## Quick start
 

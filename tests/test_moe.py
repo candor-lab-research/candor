@@ -172,6 +172,16 @@ def test_the_export_answers_as_the_model_with_the_edits_adapters(tiny_moe, row_n
     assert EXPERTS_1 in held and all(share == pytest.approx(1, abs=1e-4) for share in held.values())
 
 
+def test_experts_exported_onto_the_quantised_gguf_answer_as_their_adapters_there(tiny_moe):
+    tiny_moe.settings.deployment.export_onto = "quantized"
+    shipped = export.export(tiny_moe, EDIT)
+    adapters = Measurement(tiny_moe, EDIT, "adapters").measure()
+    merged = Measurement(tiny_moe, EDIT, "merged", exported=True).measure()
+    assert kl_between(adapters, merged) < 1e-5
+    held = export.kept(tiny_moe, shipped, export.deltas(tiny_moe, EDIT), tiny_moe.gguf()[1])
+    assert EXPERTS_1 in held and all(share == pytest.approx(1, abs=1e-4) for share in held.values())
+
+
 def test_the_least_any_expert_keeps_is_its_layers_share(tiny_moe, tmp_path):
     shipped = export.export(tiny_moe, EDIT)
     deltas = export.deltas(tiny_moe, EDIT)

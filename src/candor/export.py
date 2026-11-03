@@ -13,6 +13,14 @@ F32 where Q8_0 still loses too much (straight away for a run deploying Q8_0 or f
 tensor keeps the type the plain quantisation gave it. The file is refused if a weight still falls
 short, and is then measured before it ships.
 
+A run whose deployment.export_onto is "quantized" adds the edit to its quantised GGUF instead, the
+file the search scores edits on: each edited weight as that file holds it plus its change, stored at
+Q8_0 where the file holds it at Q8_0 or coarser and Q8_0 keeps the change, else at F32, and every
+other tensor copied as it is. Quantising afresh from 16 bits rounds each edited weight differently
+from the unedited file, which KL against that file counts besides the edit: on Spark-X2.5-4B's trial
+53, 0.044 where its adapter read 0.018 and the export onto the quantised GGUF 0.019
+(results/findings.md, Export).
+
 A model edited elsewhere, such as heretic's own save of one of its trials, is exported the same way:
 the run's model with each edited weight taken from it, quantised and checked exactly as candor's own
 edits are. It can be given as a folder of safetensors or as one unquantised GGUF, as some edits are
@@ -61,6 +69,8 @@ Change = tuple[Tensor, Tensor] | Callable[[Tensor], Tensor]
 # Where an outside export's record lists the tensors of the copy, outside the edit targets, that it
 # leaves as the run's model has them: those that differ from the run's model and those missing from it.
 LEFT_OUT = "left_out"
+# Where an export's record says what it added the edit to, unless the unquantised weights.
+ONTO = "onto"
 
 
 def edited(weight: Tensor, change: Change) -> Tensor:
@@ -102,12 +112,20 @@ def _planned(run: Run, edit: "Edit", read: bool = True) -> tuple[Path, dict[str,
         "edit": edit.record(),
         "quantization": run.settings.deployment.quantization,
     }
-    return _path(run, edit.name), inputs
+    return _path(run, edit.name), inputs | _onto(run)
+
+
+def _onto(run: Run) -> dict[str, str]:
+    """What an export's record holds of what it adds the edit to: nothing for the unquantised weights,
+    so exports made before candor could add it to anything else still match."""
+    onto = run.settings.deployment.export_onto
+    return {} if onto == config.ExportOnto.FLOAT else {ONTO: onto}
 
 
 def export(run: Run, edit: "Edit") -> Path:
-    """The edit written into a copy of the run's GGUF and quantised as the run deploys; reused while
-    it matches. Nothing is left behind but the GGUF and llama-quantize's log, convert.log."""
+    """The edit written into a copy of the run's GGUF and quantised as the run deploys, or added to
+    its quantised GGUF; reused while it matches. Nothing is left behind but the GGUF and, quantising,
+    llama-quantize's log, convert.log."""
     with run.locked():
         run.check_remote_code()
         shipped, inputs = _planned(run, edit)
@@ -121,9 +139,10 @@ def export(run: Run, edit: "Edit") -> Path:
 def export_outside(run: Run, name: str, given: Path) -> Path:
     """A copy of the run's model edited elsewhere, such as heretic's save of one of its trials, as a
     folder or an unquantised GGUF, exported as name: the run's model with each edit target's weight
-    taken from that copy, written into a copy of the run's GGUF and quantised as the run deploys, and
-    checked as candor's own edits are. The tensors of the copy outside the edit targets that the export
-    leaves as the run's model has them are listed in its record (left_out). Reused while it matches."""
+    taken from that copy, written into a copy of the run's GGUF and quantised as the run deploys, or
+    added to its quantised GGUF, and checked as candor's own edits are. The tensors of the copy outside
+    the edit targets that the export leaves as the run's model has them are listed in its record
+    (left_out). Reused while it matches."""
     if RESERVED.fullmatch(name):
         raise RunError(f"{name} is how candor names its own edits and measurements; pick another name")
     given = given.expanduser().absolute()
@@ -320,14 +339,17 @@ def _planned_outside(run: Run, name: str, given: Path) -> tuple[Path, dict[str, 
         "weights": digest(sorted((p.name, p.stat().st_size, p.stat().st_mtime_ns) for p in weights)),
         "quantization": run.settings.deployment.quantization,
     }
-    return _path(run, name), inputs
+    return _path(run, name), inputs | _onto(run)
 
 
 def _ship(run: Run, shipped: Path, inputs: dict[str, Any], changes: Mapping[str, Change]) -> Path:
     """The run's model with these weights changed, written into a copy of its unquantised GGUF and
     quantised as the run deploys, any weight that keeps too little of its change kept apart, committed
     as shipped. The GGUF's edit targets are the model's as the converter writes them (run.gguf checks
-    each), so each changed weight is written as the converter would write it."""
+    each), so each changed weight is written as the converter would write it. A run exporting onto its
+    quantised GGUF writes the changes there instead."""
+    if ONTO in inputs:
+        return _ship_onto_quantized(run, shipped, inputs, changes)
     _sweep(run, shipped)
     quantization = inputs["quantization"]
     base, _ = run.gguf()
@@ -366,6 +388,104 @@ def _ship(run: Run, shipped: Path, inputs: dict[str, Any], changes: Mapping[str,
         run.report(f"Each edited weight keeps {_span(held)} of its edit")
         run.commit(built, shipped, record)
     return shipped
+
+
+def _ship_onto_quantized(
+    run: Run, shipped: Path, inputs: dict[str, Any], changes: Mapping[str, Change]
+) -> Path:
+    """The run's quantised GGUF with each changed weight replaced by its values there plus its change,
+    and every other tensor copied as it is, committed as shipped. A changed weight is stored at Q8_0
+    where the GGUF holds it at Q8_0 or coarser and Q8_0 keeps enough of the change, else at F32. Each
+    type is chosen before the file is written, so it is written once."""
+    _sweep(run, shipped)
+    _, quantized = run.gguf()
+    tensors = {tensor.name: tensor for tensor in gguf.GGUFReader(quantized).tensors}
+    named = {run.edit_targets[name].gguf: name for name in changes}
+    kinds: dict[str, str] = {}
+    lost: dict[str, float] = {}
+    for gguf_name, name in named.items():
+        tensor = tensors[gguf_name]
+        kinds[gguf_name] = _at_least(tensor.tensor_type)
+        if kinds[gguf_name] != "F32":
+            before, change = convert.stored(tensor), _change(run, name, changes[name])
+            if (share := _share(_moved(before, change, kinds[gguf_name]), change)) < LEAST_KEPT:
+                kinds[gguf_name], lost[gguf_name] = "F32", share
+    if lost:
+        run.report(
+            f"Q8_0 keeps {_span(lost)} of the edit in {len(lost)} of {len(kinds)} edited weights; "
+            "storing those as F32"
+        )
+    stored = ", ".join(f"{count} as {kind}" for kind, count in Counter(kinds.values()).most_common())
+    run.report(f"Adding the edit to {quantized.name}, storing its edited weights {stored}")
+    grown = sum(
+        tensors[name].n_elements * _bits(kind) / 8 - tensors[name].n_bytes for name, kind in kinds.items()
+    )
+    replaced = shipped.stat().st_size if shipped.exists() else 0
+    run.check_disk(0, False, quantized.stat().st_size + int(grown) + replaced)
+    folder = shipped.parent
+    folder.mkdir(parents=True, exist_ok=True)
+    with tempfile.TemporaryDirectory(dir=folder) as work:
+        built = Path(work) / f"{shipped.name}.building"
+        _rewritten(
+            quantized,
+            built,
+            {
+                gguf_name: partial(_added, run, name, changes[name], tensors[gguf_name])
+                for gguf_name, name in named.items()
+            },
+            {name: gguf.GGMLQuantizationType[kind] for name, kind in kinds.items()},
+        )
+        held = kept(run, built, changes, quantized)
+        if short := _short(held):
+            raise RunError(
+                f"{len(short)} of {len(held)} edited weights keep less than {LEAST_KEPT:.0%} of the edit as "
+                f"written onto {quantized.name}, e.g. {_worst(short)}"
+            )
+        run.report(f"Each edited weight keeps {_span(held)} of its edit")
+        apart = _apart(run, built)
+        run.commit(built, shipped, inputs | ({"apart": apart} if apart else {}))
+    return shipped
+
+
+def _at_least(kind: gguf.GGMLQuantizationType) -> str:
+    """The first of KEEPING_TYPES at least as fine as a tensor's type."""
+    return next((keeping for keeping in KEEPING_TYPES if _bits(keeping) >= _bits(kind.name)), "F32")
+
+
+def _bits(kind: str) -> float:
+    block, size = gguf.GGML_QUANT_SIZES[gguf.GGMLQuantizationType[kind]]
+    return 8 * size / block
+
+
+def _moved(before: Tensor, change: Tensor, kind: str) -> Tensor:
+    """How far a weight moves from before once its change is added and it is stored as kind."""
+    quantization = gguf.GGMLQuantizationType[kind]
+    stored = gguf.quants.dequantize(
+        gguf.quants.quantize((before + change).numpy(), quantization), quantization
+    )
+    return torch.from_numpy(np.array(stored, dtype=np.float32)) - before
+
+
+def _share(moved: Tensor, change: Tensor) -> float:
+    """The part of moved along change, over change: for a layer's experts, the least any expert holds;
+    an expert the change leaves alone has none."""
+    along, size = (moved * change).sum((-2, -1)), (change * change).sum((-2, -1))
+    has = size > 0
+    return float((along[has] / size[has]).min()) if has.any() else 1.0
+
+
+def _added(run: Run, name: str, change: Change, tensor: gguf.ReaderTensor) -> np.ndarray:
+    """The edit target's weight as a quantised GGUF's tensor holds it, plus its change, in float32."""
+    return (convert.stored(tensor) + _change(run, name, change)).contiguous().numpy()
+
+
+def _change(run: Run, name: str, change: Change) -> Tensor:
+    """The edit target's change in float32, laid out as the converter writes the weight."""
+    _, _, arch, _ = run.shape
+    target = run.edit_targets[name]
+    weight = ModelFiles(run.model_folder).read(target.names, target.stacked)
+    model_config = source.read_config(str(run.model_folder))
+    return convert.as_converted(edited(weight, change) - weight.float(), name, arch, model_config)
 
 
 def _kept_apart(
@@ -455,11 +575,12 @@ def _rewritten(
     model_gguf: Path,
     destination: Path,
     replaced: Mapping[str, Callable[[], np.ndarray]],
-    kind: gguf.GGMLQuantizationType | None = None,
+    kind: gguf.GGMLQuantizationType | Mapping[str, gguf.GGMLQuantizationType] | None = None,
 ) -> None:
     """A copy of a GGUF with these tensors, by name, holding the values their functions give in float32,
-    stored as kind or, without one, at the type each had, rounded as llama.cpp's converter rounds; and
-    everything else as it was, copied as gguf-py's gguf_new_metadata copies a GGUF."""
+    stored as kind, or as kind gives each by name, or without one at the type each had, rounded as
+    llama.cpp's converter rounds; and everything else as it was, copied as gguf-py's gguf_new_metadata
+    copies a GGUF."""
     reader = gguf.GGUFReader(model_gguf)
     arch = reader.get_field(gguf.Keys.General.ARCHITECTURE)
     if arch is None:
@@ -472,7 +593,12 @@ def _rewritten(
             writer.data_alignment = field.contents()
         item = field.types[-1] if field.types[0] == gguf.GGUFValueType.ARRAY else None
         writer.add_key_value(field.name, field.contents(), field.types[0], sub_type=item)
-    kinds = {t.name: t.tensor_type if kind is None else kind for t in reader.tensors if t.name in replaced}
+    if isinstance(kind, Mapping):
+        kinds = dict(kind)
+    else:
+        kinds = {
+            t.name: t.tensor_type if kind is None else kind for t in reader.tensors if t.name in replaced
+        }
     for tensor in reader.tensors:
         if tensor.name in replaced:
             shape, dtype = _laid_out(list(reversed(tensor.shape.tolist())), kinds[tensor.name])
@@ -515,8 +641,8 @@ def _report_apart(run: Run, shipped: Path) -> None:
         held = ", ".join(f"{count} as {kind}" for kind, count in Counter(apart.values()).most_common())
         quantization = run.settings.deployment.quantization
         run.report(
-            f"{shipped.name} holds {len(apart)} tensors finer than its name's {quantization}, as that would "
-            f"round the edit away from them: {held}"
+            f"{shipped.name} holds {len(apart)} tensors finer than its name's {quantization}, to keep the "
+            f"edit in them: {held}"
         )
 
 
@@ -565,14 +691,17 @@ def _worst(shares: dict[str, float]) -> str:
     return ", ".join(f"{name} {share:.1%}" for name, share in worst)
 
 
-def kept(run: Run, model_gguf: Path, made: Mapping[str, Change]) -> dict[str, float]:
+def kept(
+    run: Run, model_gguf: Path, made: Mapping[str, Change], onto: Path | None = None
+) -> dict[str, float]:
     """For each edited weight, by its GGUF name, the share of its edit model_gguf holds: the part of
-    its change from the original weight that lies along the edit, over the edit; for a layer's
-    experts, the least any expert holds. 1 when the file holds the edit exactly; less when quantising
-    rounded part of it away."""
+    its change from the original weight, or from the weight as the GGUF onto holds it, that lies along
+    the edit, over the edit; for a layer's experts, the least any expert holds. 1 when the file holds
+    the edit exactly; less when quantising rounded part of it away."""
     _, _, arch, _ = run.shape
     model_config = source.read_config(str(run.model_folder))
     tensors = {tensor.name: tensor for tensor in gguf.GGUFReader(model_gguf).tensors}
+    before = {tensor.name: tensor for tensor in gguf.GGUFReader(onto).tensors} if onto else {}
     files = ModelFiles(run.model_folder)
     shares = {}
     for name, change in made.items():
@@ -580,12 +709,12 @@ def kept(run: Run, model_gguf: Path, made: Mapping[str, Change]) -> dict[str, fl
         stored = convert.stored(tensor)
         target = run.edit_targets[name]
         weight = files.read(target.names, target.stacked)
-        original = convert.as_converted(weight, name, arch, model_config).float()
+        if onto:
+            original = convert.stored(before[tensor.name])
+        else:
+            original = convert.as_converted(weight, name, arch, model_config).float()
         edit = convert.as_converted(edited(weight, change) - weight.float(), name, arch, model_config)
-        # A share for each expert, or one for a single weight; an expert the edit leaves alone has none.
-        along, size = ((stored - original) * edit).sum((-2, -1)), (edit * edit).sum((-2, -1))
-        moved = size > 0
-        shares[tensor.name] = float((along[moved] / size[moved]).min()) if moved.any() else 1.0
+        shares[tensor.name] = _share(stored - original, edit)
     return shares
 
 
@@ -642,7 +771,8 @@ def built(run: Run, edit: "Edit") -> Path:
     if not (path.exists() and record.exists()):
         raise RunError(f"{edit.name} has no export; run candor export first")
     made = json.loads(record.read_text())
-    wanted = json.loads(json.dumps({"edit": edit.record(), "row_norm": run.settings.edit.row_norm}))
+    settings = {"edit": edit.record(), "row_norm": run.settings.edit.row_norm, ONTO: _onto(run).get(ONTO)}
+    wanted = json.loads(json.dumps(settings))
     if {key: made.get(key) for key in wanted} != wanted:
         raise RunError(f"{edit.name}'s export was made from another edit; run candor export again")
     return path

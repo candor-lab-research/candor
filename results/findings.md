@@ -420,8 +420,13 @@ entry is corrected, dropped or overturned is in CLAUDE.md ("Finished, dropped an
   against the exact edit 0.0476 to 0.0438, about as far from the true model. With the 31 at Q8_0
   (180 MB more) it is the nearest, 0.0553 and 0.0279. So KL against the Q4_K_M counts the
   re-rounding of any file quantised from 16 bits, ours or another's, as drift, and the search, which
-  keeps the Q4_K_M's rounding, can't see it. [Hypothesis] The edited weights written as the Q4_K_M's
-  own values plus the exact edit, at Q8_0, ship the file the search scored.
+  keeps the Q4_K_M's rounding, can't see it.
+- **An export onto the Q4_K_M ships the model the search scored.** [Measured: the same trial and
+  prompts; `evidence-2026-11-03/kl-onto.txt`] Its 31 edited weights written as the Q4_K_M's own
+  values plus the edit, at Q8_0, kept 100.0% of the edit, and the file read 0.0187 held out against
+  the Q4_K_M to the adapter's 0.0183 (paired by prompt 0.0004, SE 0.0001), and 0.0001 against the
+  adapter; the export as shipped 0.0438. It is 180 MB (7%) larger. `deployment.export_onto =
+  "quantized"` builds it, and init sets it from 2026-11-03; older runs keep "float".
 - **`export --outside` takes only candor's targets.** [Measured: candor's code; Published: two
   public 27B edits] orcarouter's and RANA's `embed_tokens` edits would be left out
   (`evidence-2026-10-21/public-27b.md`); from huihui it took all 70 edited weights

@@ -101,8 +101,22 @@ class Model(Section):
     )
 
 
+class ExportOnto(StrEnum):
+    FLOAT = "float"
+    QUANTIZED = "quantized"
+
+
 class Deployment(Section):
     quantization: str = Field(default="Q4_K_M", description="The GGUF type you run.")
+    export_onto: str = Field(
+        default="float",
+        description='What candor export adds an edit to. "quantized": the run\'s GGUF in the type you '
+        "run, which the search scores edits on, each edited weight stored at Q8_0 (F32 where that file "
+        "holds it finer, or Q8_0 loses too much of the edit) and every other tensor copied as it is, so "
+        'the file shipped is the one scored. "float": the unquantised weights, then quantised as you '
+        "run, which rounds the edited weights afresh, so KL against the unedited model in the type you "
+        'run counts that rounding besides the edit. init sets "quantized".',
+    )
     kv_cache: str = Field(
         default="f16", description="The KV cache type you run with (llama.cpp's --cache-type-k and -v)."
     )
@@ -148,6 +162,13 @@ class Deployment(Section):
     def _known_quantization(cls, value: str) -> str:
         if value not in QUANTIZATIONS:
             raise ValueError(f"must be one of {', '.join(sorted(QUANTIZATIONS))}")
+        return value
+
+    @field_validator("export_onto")
+    @classmethod
+    def _known_onto(cls, value: str) -> str:
+        if value not in set(ExportOnto):
+            raise ValueError(f'must be "{ExportOnto.FLOAT}" or "{ExportOnto.QUANTIZED}"')
         return value
 
     @field_validator("kv_cache")

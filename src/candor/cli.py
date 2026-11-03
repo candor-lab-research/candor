@@ -449,6 +449,7 @@ def init(
             date=pinned_date,
         )
         deployment = config.Deployment(
+            export_onto=config.ExportOnto.QUANTIZED,
             chat_template_kwargs=template_settings,
             think_close=close,
             thinking_budget=config.THINKING_BUDGET if close else None,

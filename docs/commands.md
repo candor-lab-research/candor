@@ -351,6 +351,22 @@ Every other tensor keeps its plain type. The file's name still gives the run's q
 export says how many tensors it holds as Q8_0 or F32 instead, built or reused. Its record lists them
 (`apart`), unless it was built before candor listed them.
 
+**Onto the file you run.** With `deployment.export_onto = "quantized"`, which `init` sets (older runs
+keep `"float"`, the steps above), export adds the edit to the run's GGUF in the type it deploys, the
+file the search scores edits on:
+
+- Each edited weight is that file's weight plus its change, stored at Q8_0 where the file holds it
+  at Q8_0 or coarser, else in F32, and in F32 too where Q8_0 keeps less than 98% of the change.
+- Every other tensor is copied byte for byte, and the file is written once.
+
+Quantising again from 16 bits rounds each edited weight differently from the unedited file, and KL
+against that file counts the difference besides the edit. Spark-X2.5-4B's trial 53 read 0.044 held
+out exported from 16 bits, 0.019 exported onto its Q4_K_M, and 0.018 as its adapter
+(`results/findings.md`, Export). The file grows by its edited weights' extra bits: 7% there, where
+they were Q4_K and Q6_K. Where a quantisation holds edited weights at Q8_0 or finer (a run
+deploying Q8_0 or a float type, or a Q4_K_M whose rows don't split into blocks of 256), those Q8_0
+can't keep go to F32, and a 16-bit one always does.
+
 **What it keeps.** Only `exports/EDIT/RUN-EDIT-QUANTISATION.gguf`. `measure --exported` measures that
 exact file, and `compare` sets it against the unedited model and against the trial measured with
 adapters.

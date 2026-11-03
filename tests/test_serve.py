@@ -158,6 +158,9 @@ def test_serve_runs_a_trials_export_and_only_that_edits(tiny, converting, monkey
     record.write_text(json.dumps({**made, "row_norm": "pre" if made["row_norm"] != "pre" else "none"}))
     other = runner.invoke(app, ["serve", str(folder), *picked])
     assert other.exit_code == 1 and "heretic-1's export was made from another edit" in other.output
+    record.write_text(json.dumps({**made, "onto": "quantized"}))
+    onto = runner.invoke(app, ["serve", str(folder), *picked])
+    assert onto.exit_code == 1 and "heretic-1's export was made from another edit" in onto.output
 
 
 def test_serve_runs_a_search_trial_without_the_weights(tiny, converting, monkeypatch, stopped_by_ctrl_c):

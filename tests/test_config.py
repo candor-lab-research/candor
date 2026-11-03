@@ -101,6 +101,7 @@ def test_a_missing_setting_is_an_error_not_a_default(tmp_path, line, name):
         ('source = "org/model"', 'source = ""', "at least 1 character"),
         ('quantization = "Q4_K_M"', 'quantization = "Q3"', "must be one of"),
         ('kv_cache = "f16"', 'kv_cache = "fp16"', "must be one of"),
+        ('export_onto = "float"', 'export_onto = "q4"', '"float" or "quantized"'),
         ("startup_per_scope = 20", "startup_per_scope = 600", "startup_per_scope"),
         ("answer_tokens = 100", "answer_tokens = true", "valid integer"),
         ("kl_tokens = 20", 'kl_tokens = "20"', "valid integer"),
